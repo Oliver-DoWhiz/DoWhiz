@@ -1,2 +1,2 @@
 # IceBrew
-IceBrew: Your digital employee, Email me any task.
+IceBrew: Your digital employee. Email any task.
