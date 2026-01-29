@@ -1,0 +1,5 @@
+.env
+.vscode/settings.json
+mvp/email_pipeline/workspaces/
+mvp/email_pipeline/outbox/
+*.pyc
