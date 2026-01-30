@@ -10,9 +10,9 @@ from .config import REPO_ROOT
 
 
 CODEX_CONFIG_BLOCK_TEMPLATE = """# IMPORTANT: Use your Azure *deployment name* here (e.g., \"gpt5codex-prod\")
-model = \"{model_name}\"
+model = \"gpt-5.2-codex\"
 model_provider = \"azure\"
-model_reasoning_effort = \"high\"
+model_reasoning_effort = \"xhigh\"
 
 [model_providers.azure]
 name = \"Azure OpenAI\"
