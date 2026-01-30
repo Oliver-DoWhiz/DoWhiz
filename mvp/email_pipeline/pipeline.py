@@ -26,6 +26,7 @@ def process_email(raw_bytes: bytes, settings: Settings, store: Optional[MongoSto
     message_id = msg.get("Message-ID") or make_msgid()
     subject = msg.get("Subject", "")
     from_addr = extract_addresses(msg.get("From"))
+    reply_to_addr = extract_addresses(msg.get("Reply-To"))
     to_addr = extract_addresses(msg.get("To"))
     references = msg.get("References")
     in_reply_to = msg.get("In-Reply-To")
@@ -71,9 +72,11 @@ def process_email(raw_bytes: bytes, settings: Settings, store: Optional[MongoSto
     else:
         reply_references = message_id
 
+    reply_recipient = reply_to_addr[0] if reply_to_addr else (from_addr[0] if from_addr else "")
+
     reply_message = build_reply_message(
         settings=settings,
-        to_address=from_addr[0] if from_addr else "",
+        to_address=reply_recipient,
         subject=subject,
         body_text=reply_text,
         in_reply_to=message_id,
@@ -81,10 +84,20 @@ def process_email(raw_bytes: bytes, settings: Settings, store: Optional[MongoSto
         attachments_dir=reply_attachments_dir,
     )
 
-    if settings.outbound_mode == "postmark":
-        send_via_postmark(reply_message, reply_attachments_dir, settings)
-    else:
-        send_via_smtp(reply_message, settings.outbound_host, settings.outbound_port)
+    outbound_error: str | None = None
+    try:
+        if settings.outbound_mode == "postmark":
+            send_via_postmark(reply_message, reply_attachments_dir, settings)
+        else:
+            send_via_smtp(reply_message, settings.outbound_host, settings.outbound_port)
+    except Exception as exc:
+        outbound_error = str(exc)
+        (workspace / "outbound_error.txt").write_text(outbound_error, encoding="utf-8")
+        # If Postmark blocks a recipient (4xx), don't retry the webhook endlessly.
+        if settings.outbound_mode == "postmark" and outbound_error.startswith("Postmark error 4"):
+            pass
+        else:
+            raise
 
     if store:
         store.record_inbound(

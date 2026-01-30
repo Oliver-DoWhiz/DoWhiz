@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -157,8 +158,15 @@ def poll_outbound(token: str, recipient: str, subject_hint: str, timeout_s: int 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run real-email end-to-end test via Postmark inbound webhook")
     parser.add_argument("--from", dest="from_addr", default="deep-tutor@deep-tutor.com")
+    parser.add_argument("--to", dest="to_addr", default=None, help="Recipient address (e.g. mini-mouse@deep-tutor.com)")
     parser.add_argument("--subject", default="Real email MVP test")
     parser.add_argument("--webhook-port", type=int, default=9000)
+    parser.add_argument(
+        "--send-method",
+        choices=["smtp-inbound", "postmark-api"],
+        default="smtp-inbound",
+        help="smtp-inbound sends directly to Postmark inbound hash address; postmark-api sends via Postmark outbound API.",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -216,27 +224,52 @@ def main() -> None:
             build_sample_pdf(pdf_path, "IceBrew PDF attachment")
             build_sample_docx(docx_path, "IceBrew DOCX attachment")
 
-            msg = EmailMessage()
-            msg["From"] = args.from_addr
-            msg["To"] = inbound_address
-            msg["Subject"] = args.subject
-            msg.set_content("Please process these attachments and reply in the same thread.")
+            if args.send_method == "postmark-api":
+                to_addr = args.to_addr
+                if not to_addr:
+                    raise RuntimeError("--to is required for postmark-api sending.")
+                attachments = [
+                    {
+                        "Name": pdf_path.name,
+                        "Content": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
+                        "ContentType": "application/pdf",
+                    },
+                    {
+                        "Name": docx_path.name,
+                        "Content": base64.b64encode(docx_path.read_bytes()).decode("ascii"),
+                        "ContentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    },
+                ]
+                payload = {
+                    "From": args.from_addr,
+                    "To": to_addr,
+                    "Subject": args.subject,
+                    "TextBody": "Please process these attachments and reply in the same thread.",
+                    "Attachments": attachments,
+                }
+                postmark_request("https://api.postmarkapp.com/email", token, payload=payload, method="POST")
+            else:
+                msg = EmailMessage()
+                msg["From"] = args.from_addr
+                msg["To"] = inbound_address
+                msg["Subject"] = args.subject
+                msg.set_content("Please process these attachments and reply in the same thread.")
 
-            msg.add_attachment(
-                pdf_path.read_bytes(),
-                maintype="application",
-                subtype="pdf",
-                filename=pdf_path.name,
-            )
-            msg.add_attachment(
-                docx_path.read_bytes(),
-                maintype="application",
-                subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
-                filename=docx_path.name,
-            )
+                msg.add_attachment(
+                    pdf_path.read_bytes(),
+                    maintype="application",
+                    subtype="pdf",
+                    filename=pdf_path.name,
+                )
+                msg.add_attachment(
+                    docx_path.read_bytes(),
+                    maintype="application",
+                    subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    filename=docx_path.name,
+                )
 
-            with smtplib.SMTP("inbound.postmarkapp.com", 25, timeout=20) as smtp:
-                smtp.send_message(msg)
+                with smtplib.SMTP("inbound.postmarkapp.com", 25, timeout=20) as smtp:
+                    smtp.send_message(msg)
 
         workspace = poll_workspace(workspace_root)
         reply_path = workspace / "email_reply.md"
