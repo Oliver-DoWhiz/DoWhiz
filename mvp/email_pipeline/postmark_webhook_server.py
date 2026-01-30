@@ -39,7 +39,15 @@ def _email_from_postmark(payload: dict) -> EmailMessage:
     if subject:
         msg["Subject"] = subject
 
-    message_id = payload.get("MessageID") or payload.get("MessageId") or ""
+    # Prefer the original Message-ID header (best for threading) if present.
+    header_message_id = ""
+    for header in payload.get("Headers", []) or []:
+        name = (header.get("Name") or "").lower()
+        if name == "message-id":
+            header_message_id = (header.get("Value") or "").strip()
+            break
+
+    message_id = header_message_id or payload.get("MessageID") or payload.get("MessageId") or ""
     if message_id:
         msg_id = message_id.strip()
         if not msg_id.startswith("<"):
