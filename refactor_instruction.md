@@ -2,7 +2,7 @@
 
 ## Overview
 
-The current implementation is too messy. Refactor the code into 4 well-defined, modular components with clear responsibilities and comprehensive CLI tests.
+The current implementation is too messy. Refactor the code into 5 well-defined modules (sender, responder, workspace, monitor, task_store) with clear responsibilities and comprehensive CLI tooling + tests.
 
 ## Target File Structure
 
@@ -55,6 +55,7 @@ def send_email(
 
     Returns:
         dict with keys: success (bool), message_id (str), error (str|None)
+        - message_id is the RFC 5322 Message-ID used in the outbound headers
     """
 ```
 
@@ -64,13 +65,14 @@ def send_email(
 2. Convert markdown to HTML for email body, also include plain text version
 3. Attach all files from `attachments_dir_path` if provided
 4. Support proper email threading via `In-Reply-To` and `References` headers
-5. Return the generated `Message-ID` on success
+5. Generate a RFC 5322 Message-ID (e.g., `email.utils.make_msgid()`), include it as `Message-ID`, and return it
 
 ### CLI Tests (`cli/test_sender.py`)
 
 ```bash
 # Test 1: Send simple email (real delivery)
 python -m mvp.email_pipeline.cli.test_sender \
+    --real \
     --from "mini-mouse@deep-tutor.com" \
     --to "deep-tutor@deep-tutor.com" \
     --subject "Test Email" \
@@ -78,6 +80,7 @@ python -m mvp.email_pipeline.cli.test_sender \
 
 # Test 2: Send email with attachments
 python -m mvp.email_pipeline.cli.test_sender \
+    --real \
     --from "mini-mouse@deep-tutor.com" \
     --to "deep-tutor@deep-tutor.com" \
     --subject "Test with Attachments" \
@@ -86,6 +89,7 @@ python -m mvp.email_pipeline.cli.test_sender \
 
 # Test 3: Send reply (with threading)
 python -m mvp.email_pipeline.cli.test_sender \
+    --real \
     --from "mini-mouse@deep-tutor.com" \
     --to "deep-tutor@deep-tutor.com" \
     --subject "Re: Original Subject" \
@@ -94,13 +98,15 @@ python -m mvp.email_pipeline.cli.test_sender \
 
 # Test 4: Send to multiple recipients
 python -m mvp.email_pipeline.cli.test_sender \
+    --real \
     --from "mini-mouse@deep-tutor.com" \
     --to "deep-tutor@deep-tutor.com,another@example.com" \
     --subject "Multi-recipient Test" \
     --markdown-file "/path/to/test.md"
 ```
 
-All tests should send REAL emails via Postmark. Use `deep-tutor@deep-tutor.com` as the test recipient.
+All tests should support real delivery via Postmark; require an explicit `--real` flag to actually send.
+Use `deep-tutor@deep-tutor.com` as the test recipient for real sends.
 
 ---
 
@@ -150,10 +156,12 @@ def generate_response(
 ```bash
 # Test 1: Generate response for a prepared workspace
 python -m mvp.email_pipeline.cli.test_responder \
+    --real \
     --workspace "/path/to/workspace/"
 
 # Test 2: Generate response with verbose output
 python -m mvp.email_pipeline.cli.test_responder \
+    --real \
     --workspace "/path/to/workspace/" \
     --verbose
 
@@ -194,8 +202,11 @@ def prepare_workspace(
             workspace_path (str),
             message_id (str),
             from_address (str),
+            reply_to_addresses (list[str]),
             to_addresses (list[str]),
             subject (str),
+            in_reply_to (str|None),
+            references (str|None),
             success (bool),
             error (str|None)
     """
@@ -223,7 +234,7 @@ def create_workspace_from_files(
 
 ### Requirements
 
-1. Parse email headers: From, To, Subject, Message-ID, In-Reply-To, References
+1. Parse email headers: From, To, Reply-To, Subject, Message-ID, In-Reply-To, References
 2. Extract body as markdown (`email_inbox.md`)
 3. Save all attachments to `email_inbox_attachments/`
 4. Save raw email as `raw_email.eml`
@@ -325,6 +336,7 @@ def process_incoming_email(
    - After exhausting retries, mark as `failed` and do not retry again
 4. **Status Tracking**: See Module 5 for status definitions
 5. **Duplicate Detection**: If same Message-ID arrives again, skip unless user sends a NEW email (different Message-ID)
+6. **Reply Routing**: Prefer `Reply-To` if present; otherwise use `From`
 
 ### CLI Tests (`cli/test_monitor.py`)
 
@@ -334,9 +346,10 @@ python -m mvp.email_pipeline.cli.test_monitor \
     --start \
     --port 9000
 
-# Test 2: Simulate incoming email (for testing pipeline without real email)
+# Test 2: Simulate incoming email (exercise pipeline without webhook)
 python -m mvp.email_pipeline.cli.test_monitor \
     --simulate \
+    --real \
     --eml-file "/path/to/test.eml"
 
 # Test 3: Check processing status of a message
@@ -352,11 +365,13 @@ python -m mvp.email_pipeline.cli.test_monitor \
 # Test 5: Manually retry a failed email
 python -m mvp.email_pipeline.cli.test_monitor \
     --retry \
+    --real \
     --message-id "<some-message-id@example.com>"
 
 # Test 6: Test full pipeline with real email send
 python -m mvp.email_pipeline.cli.test_monitor \
     --e2e-test \
+    --real \
     --from "deep-tutor@deep-tutor.com" \
     --to "mini-mouse@deep-tutor.com"
 ```
@@ -390,9 +405,9 @@ class TaskStatus(Enum):
 @dataclass
 class EmailTask:
     # Identifiers (for deduplication)
-    message_id: str               # Primary key - original email Message-ID
-    postmark_message_id: str      # Postmark's internal ID
-    content_hash: str             # SHA256 of email content (fallback dedup)
+    message_id: str               # RFC 5322 Message-ID; if missing, synthesize `hash:<content_hash>`
+    postmark_message_id: str | None  # Postmark inbound MessageID from webhook payload (optional)
+    content_hash: str             # SHA256 of email content (for diagnostics and fallback ID generation)
 
     # Email metadata
     from_address: str
@@ -406,7 +421,7 @@ class EmailTask:
 
     # Results
     workspace_path: str | None    # Path to workspace directory
-    reply_message_id: str | None  # Message-ID of sent reply
+    reply_message_id: str | None  # RFC 5322 Message-ID of sent reply
 
     # Error tracking
     last_error: str | None        # Last error message
@@ -424,7 +439,8 @@ Collection name: `email_tasks`
 
 ```javascript
 {
-  "_id": "<message-id@mail.gmail.com>",  // Use message_id as _id
+  "_id": "<message-id@mail.gmail.com>",  // Use message_id as _id; if missing, set message_id to "hash:<content_hash>"
+  "message_id": "<message-id@mail.gmail.com>",
   "postmark_message_id": "uuid-from-postmark",
   "content_hash": "sha256-hash",
 
@@ -453,7 +469,7 @@ Collection name: `email_tasks`
 ```javascript
 // Create these indexes for performance
 db.email_tasks.createIndex({ "status": 1 })
-db.email_tasks.createIndex({ "content_hash": 1 }, { unique: true })
+db.email_tasks.createIndex({ "content_hash": 1 })
 db.email_tasks.createIndex({ "from_address": 1 })
 db.email_tasks.createIndex({ "created_at": -1 })
 ```
@@ -471,13 +487,14 @@ class TaskStore:
         """
         Create a new task record.
         Returns False if task already exists (duplicate).
-        Uses message_id as primary key, content_hash as secondary dedup.
+        Uses message_id as primary key; only fall back to content_hash when message_id is missing.
+        If message_id is missing, set message_id to `hash:<content_hash>` and use it as `_id`.
         """
 
-    def is_duplicate(self, message_id: str = None, content_hash: str = None) -> bool:
+    def is_duplicate(self, message_id: str | None = None, content_hash: str | None = None) -> bool:
         """
         Check if email has already been processed.
-        Checks both message_id and content_hash.
+        Prefer message_id; if missing, synthesize it from content_hash.
         """
 
     def get_task(self, message_id: str) -> EmailTask | None:
@@ -551,15 +568,18 @@ class EmailMonitor:
         # 1. Extract identifiers
         message_id = extract_message_id(payload)
         content_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if not message_id:
+            message_id = f"hash:{content_hash}"
 
         # 2. Check for duplicate
-        if self.task_store.is_duplicate(message_id, content_hash):
+        if self.task_store.is_duplicate(message_id=message_id):
             logger.info(f"Duplicate email: {message_id}")
             return {"status": "duplicate"}
 
         # 3. Create task record
         task = EmailTask(
             message_id=message_id,
+            postmark_message_id=payload.get("MessageID") or payload.get("MessageId"),
             content_hash=content_hash,
             from_address=payload.get("From", ""),
             to_addresses=[payload.get("To", "")],
@@ -680,9 +700,9 @@ All modules should read configuration from environment variables (via existing `
 ## Testing Guidelines
 
 1. **Unit Tests**: Each module should have unit tests with mocked dependencies
-2. **CLI Tests**: All CLI tests should work with real services (Postmark, AI)
-3. **Test Email Address**: Use `deep-tutor@deep-tutor.com` for receiving test emails
-4. **Test Sender Address**: Use `mini-mouse@deep-tutor.com` for sending
+2. **CLI Tests**: All CLI tests should work with real services (Postmark, AI), but only when `--real` is explicitly passed
+3. **Test Email Address**: Use `deep-tutor@deep-tutor.com` for receiving real test emails
+4. **Test Sender Address**: Use `mini-mouse@deep-tutor.com` for sending real test emails
 5. **Verbose Mode**: All CLI tools should support `--verbose` flag for debugging
 6. **Dry-Run Mode**: Where applicable, support `--dry-run` to preview without side effects
 
@@ -702,7 +722,7 @@ All modules should read configuration from environment variables (via existing `
 ## Success Criteria
 
 - [ ] All 5 modules implemented with the specified function signatures
-- [ ] All CLI tests pass with real email delivery
+- [ ] All CLI tests pass (use `--real` for integration runs)
 - [ ] MongoDB task store working with proper indexes
 - [ ] Retry logic works correctly (verified with simulated failures)
 - [ ] Idempotency works (same email not processed twice, even after server restart)
