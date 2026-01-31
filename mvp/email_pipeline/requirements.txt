@@ -1,2 +1,0 @@
-aiosmtpd>=1.4.4
-pymongo>=4.6.0
