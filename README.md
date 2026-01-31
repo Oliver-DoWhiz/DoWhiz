@@ -1,5 +1,5 @@
-# IceBrew
-IceBrew: Your digital employee. Email any task.
+# DoWhiz
+DoWhiz: Your digital employee. Email any task.
 
 ## Email Pipeline (MVP)
 See `mvp/email_pipeline/README.md` for the refactored pipeline modules and tests.
