@@ -44,6 +44,43 @@ Reports are written to:
 - `mvp/email_pipeline/monitor/tests/report.json`
 - `mvp/email_pipeline/task_store/tests/report.json`
 
+## Real-world E2E Tests
+Real-world tests send and receive real emails over SMTP/IMAP, run the full pipeline
+(workspace -> Codex -> Postmark send), and verify replies. They are skipped unless
+`ICEBREW_REALWORLD_TESTS=1` is set. These tests send 5 inbound emails and wait for
+replies, so expect a few minutes of runtime.
+
+Run:
+```
+python -m mvp.email_pipeline.e2e.tests
+```
+
+Required environment variables:
+- `ICEBREW_REALWORLD_TESTS=1`
+- `E2E_SMTP_HOST`, `E2E_SMTP_USER`, `E2E_SMTP_PASS` (SMTP send)
+- `E2E_IMAP_HOST`, `E2E_IMAP_USER`, `E2E_IMAP_PASS` (IMAP receive)
+- `POSTMARK_SERVER_TOKEN`, `OUTBOUND_FROM` (reply send)
+- `MONGODB_URI` (task + storage records)
+
+Codex requirements (default):
+- `AZURE_OPENAI_API_KEY_BACKUP`
+- `AZURE_OPENAI_ENDPOINT_BACKUP`
+- `codex` CLI on PATH
+
+Optional knobs:
+- `E2E_SMTP_PORT` (default `587`)
+- `E2E_SMTP_SSL` (set `1` to use SMTPS)
+- `E2E_SMTP_STARTTLS` (default `1`)
+- `E2E_SMTP_FROM` (defaults to `E2E_SMTP_USER`)
+- `E2E_IMAP_PORT` (default `993`)
+- `E2E_IMAP_SSL` (default `1`)
+- `E2E_IMAP_FOLDER` (default `INBOX`)
+- `E2E_REPLY_TO` (defaults to `E2E_IMAP_USER`)
+- `E2E_MONGODB_DB` (test database name)
+- `E2E_REQUIRE_CODEX` (set `0` to allow Codex-disabled runs)
+- `E2E_POLL_INTERVAL`, `E2E_INBOUND_TIMEOUT`, `E2E_REPLY_TIMEOUT` (seconds)
+- `E2E_IMAP_DELETE` (set `1` to delete test emails after the run)
+
 ## Webhook Server
 Start the Postmark inbound webhook listener:
 ```
