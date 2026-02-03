@@ -20,3 +20,4 @@ mvp_python/email_pipeline/state/postmark_processed_ids.txt
 mvp_python/email_pipeline/**/tests/report.json
 /.workspace
 /mvp
+mvp_python/email_pipeline/state/postmark_processed_ids.txt
