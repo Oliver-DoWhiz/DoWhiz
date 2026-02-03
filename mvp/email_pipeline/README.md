@@ -1,6 +1,6 @@
 # Local Email Pipeline MVP
 
-This MVP runs a local SMTP server that receives emails for `mini-mouse@deep-tutor.com`, triggers the Codex CLI, writes `email_reply.md`, and sends a reply in the same thread. Outbound replies are captured by a local SMTP sink for easy inspection.
+This MVP runs a local SMTP server that receives emails for `agent@dowhiz.com`, triggers the Codex CLI, writes `email_reply.md`, and sends a reply in the same thread. Outbound replies are captured by a local SMTP sink for easy inspection.
 
 ## Prereqs
 - Python 3.12
@@ -23,7 +23,7 @@ Terminal 2: send a test email with PDF + DOCX attachments
 ```
 python -m mvp.email_pipeline.send_test_email \
   --from deep-tutor@deep-tutor.com \
-  --to mini-mouse@deep-tutor.com
+  --to agent@dowhiz.com
 ```
 
 Check the reply captured in the outbox:
@@ -55,7 +55,7 @@ Set:
 Then run the server; outbound replies will go through Postmark.
 
 ## Start real email service (manual send → reply)
-Use this when you want to send real email from any inbox to `mini-mouse@deep-tutor.com`.
+Use this when you want to send real email from any inbox to `agent@dowhiz.com`.
 
 Terminal 1: start the inbound webhook service
 ```
@@ -75,7 +75,7 @@ python -m mvp.email_pipeline.set_postmark_inbound_hook \
 
 Send an email manually to:
 ```
-mini-mouse@deep-tutor.com
+agent@dowhiz.com
 ```
 
 The pipeline will run and reply via Postmark to the sender.

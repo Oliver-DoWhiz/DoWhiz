@@ -85,7 +85,7 @@ def main() -> None:
     parser.add_argument("--smtp-host", default="127.0.0.1")
     parser.add_argument("--smtp-port", type=int, default=8025)
     parser.add_argument("--from", dest="from_addr", default="deep-tutor@deep-tutor.com")
-    parser.add_argument("--to", dest="to_addr", default="mini-mouse@deep-tutor.com")
+    parser.add_argument("--to", dest="to_addr", default="agent@dowhiz.com")
     parser.add_argument("--subject", default="MVP pipeline test")
     parser.add_argument("--no-attachments", action="store_true")
     args = parser.parse_args()
