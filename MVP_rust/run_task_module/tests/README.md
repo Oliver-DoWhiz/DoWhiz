@@ -1,9 +1,21 @@
 # Tests for run_task_module
 
-There is no standalone Cargo crate in MVP_rust/run_task_module yet, so tests are
-tracked as manual checks for now.
+This module includes a lightweight Cargo test harness that runs offline using a
+fake Codex CLI script.
 
-## Manual smoke test
+## Run tests
+
+```
+cd MVP_rust/run_task_module
+cargo test
+```
+
+The tests spin up a temporary workspace, inject a fake `codex` executable, and
+verify that `run_codex_task` writes `reply_email_draft.html`, creates the
+attachments directory, and handles error cases (missing env, missing CLI,
+failed CLI, missing output, invalid paths).
+
+## Manual smoke test (real Codex)
 
 1) Prepare a workspace with the required folders:
 
@@ -23,5 +35,4 @@ workspace/
 
 ## Future automated tests
 
-- Add a lightweight Cargo crate under MVP_rust/run_task_module and wire
-  integration tests that mock the Codex CLI via a wrapper script.
+- Add a gated test that uses the real Codex CLI when RUN_CODEX_E2E=1 is set.

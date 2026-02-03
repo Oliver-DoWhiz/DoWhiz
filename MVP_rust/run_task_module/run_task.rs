@@ -99,8 +99,18 @@ pub fn run_codex_task(request: RunTaskRequest<'_>) -> Result<RunTaskOutput, RunT
 
     let api_key = env::var("AZURE_OPENAI_API_KEY_BACKUP")
         .map_err(|_| RunTaskError::MissingEnv { key: "AZURE_OPENAI_API_KEY_BACKUP" })?;
+    if api_key.trim().is_empty() {
+        return Err(RunTaskError::MissingEnv {
+            key: "AZURE_OPENAI_API_KEY_BACKUP",
+        });
+    }
     let azure_endpoint = env::var("AZURE_OPENAI_ENDPOINT_BACKUP")
         .map_err(|_| RunTaskError::MissingEnv { key: "AZURE_OPENAI_ENDPOINT_BACKUP" })?;
+    if azure_endpoint.trim().is_empty() {
+        return Err(RunTaskError::MissingEnv {
+            key: "AZURE_OPENAI_ENDPOINT_BACKUP",
+        });
+    }
 
     let model_name = env::var("CODEX_MODEL").unwrap_or_else(|_| "gpt-5.2-codex".to_string());
 
