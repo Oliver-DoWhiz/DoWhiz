@@ -11,7 +11,7 @@ then schedules a SendEmail job and sends the reply via Postmark.
   - `OUTBOUND_FROM` (optional, defaults to `oliver@dowhiz.com`)
   - `AZURE_OPENAI_API_KEY_BACKUP` and `AZURE_OPENAI_ENDPOINT_BACKUP` (required when Codex is enabled)
 
-## Step-by-step: start the service and send real email
+## Step-by-step: start the Rust service and send real email
 
 1) Start the Rust service (Terminal 1):
 ```
@@ -23,10 +23,10 @@ cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001
 ngrok http 9001
 ```
 
-3) Set the Postmark inbound hook to the ngrok URL (Terminal 3):
+3) Set the Postmark inbound hook to the **new** ngrok URL (Terminal 3):
 ```
 python -m mvp_python.email_pipeline.set_postmark_inbound_hook \
-  --hook-url https://YOUR-NGROK-URL.ngrok-free.dev/postmark/inbound
+  --hook-url https://YOUR-NEW-NGROK-URL.ngrok-free.dev/postmark/inbound
 ```
 
 4) Send an email to:
