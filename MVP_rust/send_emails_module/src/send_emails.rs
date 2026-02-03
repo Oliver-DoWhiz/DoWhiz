@@ -17,7 +17,7 @@ pub struct SendEmailRequest<'a> {
     pub to: &'a [String],
     pub cc: &'a [String],
     pub bcc: &'a [String],
-    pub subject: &'a str,
+    pub subject: Option<&'a str>,
     pub from: Option<&'a str>,
     pub postmark_token: Option<&'a str>,
     pub api_base_url: Option<&'a str>,
@@ -135,7 +135,7 @@ pub fn send_email(request: SendEmailRequest<'_>) -> Result<SendEmailResponse, Se
     let cc_list = normalize_recipients(request.cc);
     let bcc_list = normalize_recipients(request.bcc);
 
-    let subject = request.subject.trim();
+    let subject = request.subject.unwrap_or("").trim();
     let subject = if subject.is_empty() { "(no subject)" } else { subject };
 
     let html_body_raw = fs::read_to_string(request.html_path)?;
