@@ -102,8 +102,8 @@ def main() -> None:
             tmp_path = Path(tmpdir)
             pdf_path = tmp_path / "sample.pdf"
             docx_path = tmp_path / "sample.docx"
-            build_sample_pdf(pdf_path, "IceBrew PDF attachment")
-            build_sample_docx(docx_path, "IceBrew DOCX attachment")
+            build_sample_pdf(pdf_path, "DoWhiz PDF attachment")
+            build_sample_docx(docx_path, "DoWhiz DOCX attachment")
 
             msg.add_attachment(
                 pdf_path.read_bytes(),

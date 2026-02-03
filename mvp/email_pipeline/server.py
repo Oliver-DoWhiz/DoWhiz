@@ -69,7 +69,7 @@ def _start_controller(handler, hostname: str, port: int) -> Controller:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="IceBrew local email pipeline server")
+    parser = argparse.ArgumentParser(description="DoWhiz local email pipeline server")
     parser.add_argument("--inbound-host", default=None)
     parser.add_argument("--inbound-port", type=int, default=None)
     parser.add_argument("--outbound-host", default=None)

@@ -183,7 +183,7 @@ def main() -> None:
 
     previous_hook = server_info.get("InboundHookUrl", "")
 
-    workspace_root = Path(tempfile.mkdtemp(prefix="icebrew_real_workspaces_"))
+    workspace_root = Path(tempfile.mkdtemp(prefix="dowhiz_real_workspaces_"))
 
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
@@ -221,8 +221,8 @@ def main() -> None:
             tmp_path = Path(tmpdir)
             pdf_path = tmp_path / "sample.pdf"
             docx_path = tmp_path / "sample.docx"
-            build_sample_pdf(pdf_path, "IceBrew PDF attachment")
-            build_sample_docx(docx_path, "IceBrew DOCX attachment")
+            build_sample_pdf(pdf_path, "DoWhiz PDF attachment")
+            build_sample_docx(docx_path, "DoWhiz DOCX attachment")
 
             if args.send_method == "postmark-api":
                 to_addr = args.to_addr

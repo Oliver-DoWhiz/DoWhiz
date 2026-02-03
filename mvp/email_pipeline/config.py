@@ -69,7 +69,7 @@ class Settings:
     dt_base_url: str = _env("DT_BASE_URL", "http://localhost:8081")
 
     mongodb_uri: str = _env("MONGODB_URI", "mongodb://localhost:27017")
-    mongodb_db: str = _env("MONGODB_DB", "icebrew_mvp")
+    mongodb_db: str = _env("MONGODB_DB", "dowhiz_mvp")
     use_mongodb: bool = _env_bool("USE_MONGODB", True)
 
     echo_attachments: bool = _env_bool("ECHO_ATTACHMENTS", True)
