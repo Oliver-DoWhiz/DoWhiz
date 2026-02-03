@@ -1,0 +1,123 @@
+From: deep-tutor@deep-tutor.com
+To: "agent@dowhiz.com" <agent@dowhiz.com>
+Bcc: f4539b87b9eb29a0ecce5585895e7a6c@inbound.postmarkapp.com
+Subject: hi
+Message-ID:
+ <CABks2jHx09sXHb3zvMyAn9WSBMYrUuft+UF7Ls7XpF9WtBgr2A@mail.gmail.com>
+Return-Path: =?utf-8?q?=3Cagent+caf=5F=3Df4539b87b9eb29a0ecce5585895e7a6c=3D?=
+ =?utf-8?q?inbound=2Epostmarkapp=2Ecom=40dowhiz=2Ecom=3E?=
+Received: by p-pm-inboundg02a-aws-useast1a.inbound.postmarkapp.com (Postfix,
+ from userid 996)	id 33973453CA2; Tue,  3 Feb 2026 01:47:54 +0000 (UTC)
+X-Spam-Checker-Version:
+ SpamAssassin 3.4.0 (2014-02-07) on	p-pm-inboundg02a-aws-useast1a
+X-Spam-Status: No
+X-Spam-Score: 0.3
+X-Spam-Tests: DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HTML_IMAGE_ONLY_04,
+	HTML_IMAGE_RATIO_02,HTML_MESSAGE,RCVD_IN_DNSWL_BLOCKED,RCVD_IN_MSPIKE_H3,
+	RCVD_IN_MSPIKE_WL,RCVD_IN_VALIDITY_RPBL_BLOCKED,RCVD_IN_ZEN_BLOCKED_OPENDNS,
+	SPF_HELO_NONE,SPF_PASS,URIBL_DBL_BLOCKED_OPENDNS,URIBL_ZEN_BLOCKED_OPENDNS
+Received-SPF: pass (dowhiz.com: Sender is authorized to use =?utf-8?q?=27age?=
+ =?utf-8?q?nt+caf=5F=3Df4539b87b9eb29a0ecce5585895e7a6c=3Dinbound=2Epostmark?=
+ =?utf-8?q?app=2Ecom=40dowhiz=2Ecom=27?= in 'mfrom' identity (mechanism
+ 'include:dc-aa8e722993._spfm.dowhiz.com' matched))
+ receiver=p-pm-inboundg02a-aws-useast1a; identity=mailfrom; =?utf-8?q?envelo?=
+ =?utf-8?q?pe-from=3D=22agent+caf=5F=3Df4539b87b9eb29a0ecce5585895e7a6c=3Din?=
+ =?utf-8?q?bound=2Epostmarkapp=2Ecom=40dowhiz=2Ecom=22=3B?=
+ helo=mail-ot1-f52.google.com; client-ip=209.85.210.52
+ARC-Seal: i=3; a=rsa-sha256; t=1770083273; cv=pass;        d=google.com;
+ s=arc-20240605;       
+ b=MCcuFoLoDSDlwfOFIIuzznBxP58DDG82oA5Jb8b8sJ3dPdoQz0P+7WyThd4UYXlsdc        
+ XAe7tDnmr7bEXJ2+RORYrg7B3a2js2jjWc6DBp688mkIoDQiyzmfgUjBw6naoHF2ghRT        
+ +Q2i1LS0r6zdWaY5Jm2verE+axVtO20EeUDHa5T4y02/mBh/vKdczXIf1zwYl1zK3h7/        
+ hTnf7JFl9v2XGHvo3QKSIHGB2mdifDUQXemgEK4umgfH9V4eJX76q1HX/bCJPF3GQtYt        
+ b2/QworHVAVn80Bz+N7WRTXbGfpbW8ydLpB9lsNMQBXzRmgo3BAtGRchcYKa5uIlnLop        
+ 8k3w==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com;
+ s=arc-20240605;       
+ h=to:subject:message-id:date:from:mime-version:dkim-signature        
+ :delivered-to;        bh=UsrmqBEd1CVn2MfVZrZFhoyPnUccfVq31ZGibmpwnI8=;
+        fh=6K+rFSnFE2hhWXGjWzPoug+dwa6CVISvyHJkvsQfXMk=;       
+ b=F6SAEYLZ68hvDcA0MBTQppv8ux0oavPfN4ghObSSiJxHqaDqP258NK1+9xb+oaQcro        
+ 3CJ3B1T1XqDGh7gGaKUAmgemTYwkY1THrU/EQ2lRo8tlU0bXhpeeBjm/TKcGgM3Qw7kP        
+ b90YUiCUVc2zaQ1htyhjol2izuOjPiYUQdmILp9X3aXh5slMXHolXbxbH8LwaGyIMXBG        
+ bsUqdWf94R4IXaWWM0TB7ZgFuEnJkW5QAyKlolmPIsNOyi6bYsHwkz0A4J5g9fwk+vH3        
+ u1n3aeabOYaCNbKtAJ5LYW7xZgQ2rGsQWK4pqF8P/VFc2O72iHw5MJrz0iJ4ArNSCr36        
+ 4MGQ==;        darn=inbound.postmarkapp.com
+ARC-Authentication-Results: i=3; mx.google.com;       dkim=pass
+ header.i=@deep-tutor.com header.s=google header.b="iCM/LAg9";       arc=pass
+ (i=1);       spf=pass (google.com: domain of deep-tutor@deep-tutor.com
+ designates 209.85.220.41 as permitted sender)
+ smtp.mailfrom=deep-tutor@deep-tutor.com;       dara=neutral
+ header.i=@dowhiz.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;       
+ d=1e100.net; s=20230601; t=1770083273; x=1770688073;       
+ h=to:subject:message-id:date:from:mime-version:x-gm-gg:dkim-signature
+         :delivered-to:x-forwarded-for:x-forwarded-to:x-gm-message-state:from
+         :to:cc:subject:date:message-id:reply-to;       
+ bh=UsrmqBEd1CVn2MfVZrZFhoyPnUccfVq31ZGibmpwnI8=;       
+ b=hrrGc9wg5wr7fcdiN8GZeo4vA//S+abNII8+KLgeFCfK+j39nWCGiwSAteUWIqd/t6        
+ Fn0Ul1Vv/qcVj/DQL84ZcuqE/E/momKgHjUhF+UUbdQnPCnItEsZnzL37wHYGtkmzhpr        
+ llhnLU6rspwy7TMZr3MQyCh5RdyO5O9Gw26FAs4Iy4CHARKHNg0QSDpZ2i/HGxT++gAJ        
+ PMkJ7YlR5IEZbfRysGxLZuxq13pzbImi1JNieaRAY7ZWCVFQfztWD8btSKOATrXqIuDt        
+ AyOvZTLTL7DSVzPP8Zd7IDSaQE5HlmwYt1rSBUfpSaR9sxXReEsPbBVnsw+ChttJ9qq1        
+ AFkA==
+X-Forwarded-Encrypted: i=3; =?utf-8?q?AJvYcCXmOgbyf39POYlqP2rUzAfA9j2HML+AQJ?=
+ =?utf-8?q?8npnc1yiazY4Js2p+RZjS1s3C/7QDcBy7liT5N+ywdkc+fDv/j/rzS5FiE6gGgDY1?=
+ =?utf-8?q?Y19H+reGjMg=3D=3D=40inbound=2Epostmarkapp=2Ecom?=
+X-Gm-Message-State: AOJu0Yy/rtJOpRO2NjAqotyfVMErghptlMMjxOv7QHWymuQQmbaEnHa2
+	gbobEJR9c92rpN7ofQFygPg9IGy5LzTEzxVH0jZ+ZdJweYsxz5IVt14YgVEAkbFUj62ArpvKE9F
+	keosYq328ONnFR7YjMM8gI6O6PTOs6E2edvOshMFOaLiFHoXUXxN5nadAcz9MNHFn9o/0KfJwCl
+	qijPrtVmny
+X-Received: by 2002:a05:6830:82da:b0:7cf:e4a1:8b79 with SMTP id
+ 46e09a7af769-7d1a5232cdemr8128742a34.7.1770083273393;        Mon, 02 Feb 2026
+ 17:47:53 -0800 (PST)
+X-Forwarded-To: f4539b87b9eb29a0ecce5585895e7a6c@inbound.postmarkapp.com
+X-Forwarded-For:
+ agent@dowhiz.com f4539b87b9eb29a0ecce5585895e7a6c@inbound.postmarkapp.com
+Delivered-To: agent@dowhiz.com
+Authentication-Results: mx.google.com;       dkim=pass
+ header.i=@deep-tutor.com header.s=google header.b="iCM/LAg9";       arc=pass
+ (i=1);       spf=pass (google.com: domain of deep-tutor@deep-tutor.com
+ designates 209.85.220.41 as permitted sender)
+ smtp.mailfrom=deep-tutor@deep-tutor.com;       dara=neutral
+ header.i=@dowhiz.com
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;        d=deep-tutor.com;
+ s=google; t=1770083271; x=1770688071; darn=dowhiz.com;       
+ h=to:subject:message-id:date:from:mime-version:from:to:cc:subject        
+ :date:message-id:reply-to;       
+ bh=UsrmqBEd1CVn2MfVZrZFhoyPnUccfVq31ZGibmpwnI8=;       
+ b=iCM/LAg9BhuEtK4ixYckg6ZxYTi3e85/v7g3SzClRI85aMj2AHjzysKlLkB5l+xQBE        
+ ceRoJhcwJCx4tBXAEML1x4iXih5qKz1IdKrA9Uxn5WEtI4I2mnzY+VO6f8WLAMXdxMo7        
+ xp3mnqYIzowEMXBCDEiZuYSAgffsZXgG9ad6K003DPXR4kxzPUHmuv3+vvdT0ZDbQI05        
+ hpKN7pm60lz2VslaMnr9U1VKkR/lP3iZmZ0JtHgmnnfz8DOb0lNmaYg26ruSDqa0Qgus        
+ UmWheT1MC5z07eumehgvZBJ/vekYVk07hGE3ARtYdn2stQp1qC/KKaZO0j1WCI4j3SI4        
+ 9dFw==
+X-Gm-Gg: AZuq6aLE5GmOBzy6txZ4Z3rMXXmFkiyNyf45AdxnRLswXRpQo2hpBUtpJ1SVk9P89aj
+	+u7yreU5+ebeR68NylzGX8lpTpC8Wzf4wXod7vasrGL04Ij4O8yHNqo9j4m3RjmGryQndLl915i
+	A1p/0TksxIPWmiz+Yj2Q0/uIAryReMe+IDaNg2nz+XcHU2ToxjqQFLbjfe8RSTNVOh0WJb07ExO
+	4goWobXcQdCdVyB4nX7JlZd1m5KZ+lr0GUi1iSePIyq+CfWUA7szJ/9ES6/9l+/OQTZJPB6aCY1
+	Q5KnhPnVfXjKuOsjWuM1I1+8eg==
+MIME-Version: 1.0
+X-Gm-Features: AZwV_Qg4jB_6EdNPNXDUW6djSoNsMjOWM3TWbpw0QJvtTmaEdGoRJWhGBrfXtX8
+Content-Type: multipart/alternative;
+ boundary="===============2321605238341338665=="
+
+--===============2321605238341338665==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+hi this is a test
+best
+bingran
+
+--===============2321605238341338665==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<div dir=3D"ltr">hi this is a test<div>best</div><div>bingran<br><br><br><br>=
+</div><img width=3D"0" height=3D"0" class=3D"mailtrack-img" alt=3D"" style=3D=
+"display:flex" src=3D"https://mailtrack.io/trace/mail/185cfc7bd84d27d7ac58229=
+33d33ab9a7edb0768.png?u=3D13450893"></div>
+
+--===============2321605238341338665==--
