@@ -18,7 +18,7 @@ function App() {
             <a href="#roles">Digital Workers</a>
             <a href="#security">Security</a>
           </div>
-          <button className="btn-small">Contact Sales</button>
+          <a className="btn-small" href="mailto:admin@dowhiz.com">Contact Us</a>
         </div>
       </nav>
 
@@ -27,16 +27,16 @@ function App() {
         <div className="halo-effect"></div>
         <div className="container hero-content">
           <h1 className="hero-title">
-            Empower Every User with <br />
-            <span className="text-gradient">A Digital Team via Email</span>
+            Empower Everyone with <br />
+            <span className="text-gradient">A Digital Employee Team</span>
           </h1>
           <p className="hero-subtitle">
-            Seamlessly collaborate with Oliver, Mini-Mouse, and your entire digital workforce—directly from your inbox.
+            Seamlessly collaborate with Oliver, Mini-Mouse, and your entire digital workforce—directly from your email inbox.
           </p>
           <div className="hero-cta">
-            <button className="btn btn-primary">
+            <a className="btn btn-primary" href="mailto:oliver@dowhiz.com">
               Start Free Trial
-            </button>
+            </a>
           </div>
         </div>
       </section>
@@ -74,7 +74,7 @@ function App() {
                 </div>
                 <span className="status-badge status-active">Active</span>
               </div>
-              <p className="role-desc">Specialist in data analysis, comprehensive reporting, and market intelligence.</p>
+              <p className="role-desc">Specialist in daily office tasks like scheduling, summaries, and reporting.</p>
               <div className="role-example">
                 <span className="example-label">Example Task</span>
                 <p>"Analyze the attached sales report and summarize key Q3 trends."</p>
@@ -90,7 +90,7 @@ function App() {
                 </div>
                 <span className="status-badge status-soon">Coming Soon</span>
               </div>
-              <p className="role-desc">Expert in creative writing, PR communications, and content drafting.</p>
+              <p className="role-desc">Expert in creativity like video editing, content drafts, and visual storytelling.</p>
               <div className="role-example">
                 <span className="example-label">Example Task</span>
                 <p>"Draft a press release for our product launch based on these notes."</p>
