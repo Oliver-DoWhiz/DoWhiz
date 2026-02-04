@@ -1,1 +1,0 @@
-"""Local email pipeline MVP."""
