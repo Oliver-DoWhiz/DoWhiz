@@ -1,119 +1,119 @@
-# DoWhiz - 数字员工平台长期愿景（Vision）
+# DoWhiz - Long-term Vision for the Digital Employee Platform
 
-## 1. 北极星愿景
-让每个用户都拥有一支“数字员工团队”，像真实同事一样通过邮件/协作文档/团队工具协作，能独立执行任务、持续跟进、主动同步进展，并在需要时向人类升级（clarify / approval / escalation）。
+## 1. North Star Vision
+Let every user have a "digital employee team" that collaborates like real colleagues via email/collab docs/team tools, can execute tasks independently, keep following up, proactively sync progress, and escalate to humans when needed (clarify / approval / escalation).
 
-核心体验：
-- 用户只需给某个数字员工的邮箱发任务，它就能执行、产出、并在合适的渠道回传结果。
-- 数字员工在后台自主选择最合适的工具链（LLM、代码、文档、剪辑、数据检索），用户不需要关心细节。
-- 每个用户拥有**完全隔离**的记忆与数据管理系统，且可审计、可撤销、可迁移。
+Core experience:
+- The user only needs to send a task to a digital employee's email; it can execute, produce results, and return them via the appropriate channel.
+- Digital employees autonomously choose the best toolchain in the background (LLM, code, docs, editing, data retrieval); the user does not need to care about details.
+- Each user has a **fully isolated** memory and data management system that is auditable, revocable, and portable.
 
-## 2. 产品形态与角色模型
-数字员工不是单一机器人，而是**岗位化角色**：
-- Oliver：日常工作的全能助手。
-- Mini-Mouse：日常工作的全能助手。
-- Alice（研究员）：深度研究、日常论文巡检、综述/简报产出。
-- Bob（TPM）：任务调度、进度追踪、跨团队提醒、会议协调。
-- Eve（Docs/Notion/Overleaf协作者）：文档整理、评论响应、版本更新（被加入某个文档的access之后，根据overleaf留下的评论修改和留下comments）。
+## 2. Product Form and Role Model
+Digital employees are not a single bot, but **role-based positions**:
+- Oliver: all-round assistant for daily work.
+- Mini-Mouse: all-round assistant for daily work.
+- Alice (Researcher): deep research, routine paper monitoring, survey/brief production.
+- Bob (TPM): task scheduling, progress tracking, cross-team reminders, meeting coordination.
+- Eve (Docs/Notion/Overleaf collaborator): document organizing, comment responses, version updates (after being added to a document's access, modify based on Overleaf comments and leave comments).
 
-“角色即策略包”：
-- 每个角色对应一组目标、工具策略、默认模型、风险等级与审批阈值。
-- 角色可以使用用户授予的权限（比如不同Notion workspace or Google workspace的访问/编辑权限），但只在授权范围内行动（最小权限）。
+"Role as a strategy package":
+- Each role corresponds to a set of goals, tool strategies, default models, risk levels, and approval thresholds.
+- Roles can use permissions granted by the user (such as access/edit permissions for different Notion or Google workspaces), but act only within the authorized scope (least privilege).
 
-## 3. 设计原则
-1) **隔离优先**：用户数据、记忆、凭据、执行环境彼此隔离。
-2) **少打扰**：能完成就完成；不清楚就精准追问。
-3) **工具中立**：工具可替换、可升级，用户不需要知道细节。
-4) **长期记忆可控**：记忆是文件/结构化存储（未来，用户可查看、编辑、删除）
+## 3. Design Principles
+1) **Isolation first**: user data, memory, credentials, and execution environments are isolated from each other.
+2) **Minimal interruption**: complete when possible; ask precise questions when unclear.
+3) **Tool neutral**: tools are replaceable and upgradable; users do not need to know the details.
+4) **Controllable long-term memory**: memory is files/structured storage (in the future, users can view, edit, delete).
 
-## 4. 参考 OpenClaw 的核心抽象（可直接复用的设计理念）
-OpenClaw 的架构对“多通道消息 + 代理执行 + 任务队列”有成熟抽象，关键可借鉴点：
+## 4. Core Abstractions Referencing OpenClaw (Reusable Design Ideas)
+OpenClaw's architecture has mature abstractions for "multi-channel messaging + agent execution + task queues." Key borrowable points:
 
-- **Gateway（长驻守护进程）**：统一维护所有消息通道连接，并暴露统一的控制接口。
-- **Agent Loop（任务执行循环）**：标准化“上下文组装 → 推理 → 工具调用 → 产出 → 记录”的执行路径。
-- **命令队列（Queue）**：按会话串行、全局限流，保证并发安全。
-- **Multi-agent Routing**：同一进程内多个 agentId 独立工作区/会话/凭据。
-- **Workspace + Memory 文件化**：记忆来源是可读写文件，便于审计与回滚。
-- **Hooks / Plugins**：在执行前后插入安全/审计/自动化逻辑。
+- **Gateway (long-running daemon)**: maintains all message channel connections and exposes a unified control interface.
+- **Agent Loop (task execution loop)**: standardizes the execution path of "context assembly -> reasoning -> tool calls -> output -> record."
+- **Command Queue (Queue)**: serial per session, global rate limiting, ensures concurrency safety.
+- **Multi-agent Routing**: multiple agentIds in the same process with independent workspaces/sessions/credentials.
+- **Workspace + Memory as files**: memory sources are readable/writable files for audit and rollback.
+- **Hooks / Plugins**: insert security/audit/automation logic before and after execution.
 
-> 这些抽象与“数字员工平台”的核心需求高度一致，作为基础设计参考。
+> These abstractions align highly with the core requirements of the "digital employee platform" and can serve as base design references.
 
-## 5. 目标系统架构（面向多租户 SaaS）
+## 5. Target System Architecture (Multi-tenant SaaS)
 
-### 5.1 逻辑分层
-1) **入口层（Channel Ingress）**
-   - Email（优先）
-   - Docs/Notion 评论事件
-   - 后续：Slack / Zoom / Calendar
-   - 统一事件格式（Inbound Event）
+### 5.1 Logical Layers
+1) **Ingress Layer (Channel Ingress)**
+   - Email (priority)
+   - Docs/Notion comment events
+   - Later: Slack / Zoom / Calendar
+   - Unified event format (Inbound Event)
 
-2) **控制面（Control Plane）**
-   - 用户/组织/订阅管理
-   - 角色目录与权限策略
-   - 连接器配置与凭据托管（Vault）
+2) **Control Plane**
+   - User/org/subscription management
+   - Role catalog and permission policies
+   - Connector configuration and credential vaulting (Vault)
 
-3) **任务编排层（Task Orchestrator）**
-   - 任务分类：注册/欠费/无关/直接回复/需执行
-   - 任务状态机：queued → in-progress → done / archived
-   - 计划任务与周期任务（daily / weekly / monthly / yearly: cron-like）
+3) **Task Orchestrator**
+   - Task categories: sign-up / unpaid / irrelevant / direct reply / needs execution
+   - Task state machine: queued -> in-progress -> done / archived
+   - Scheduled and recurring tasks (daily / weekly / monthly / yearly: cron-like)
 
-4) **执行层（Agent Runtime）**
-   - 任务上下文组装
-   - 角色策略与工具选择
-   - 工具执行、产出与回传
+4) **Execution Layer (Agent Runtime)**
+   - Task context assembly
+   - Role strategy and tool selection
+   - Tool execution, output, and return
 
-5) **存储层（Data & Memory）**
-   - Azure Blob：用户私有的 memory + artifact
-   - DB（Postgres）：元数据、任务、索引、权限、审计日志
+5) **Storage Layer (Data & Memory)**
+   - Azure Blob: user-private memory + artifacts
+   - DB (Postgres): metadata, tasks, index, permissions, audit logs
 
-6) **观察层（Observability）**
-   - 任务日志、成本、失败原因
-   - 外部写操作审计与回放
+6) **Observability Layer (Observability)**
+   - Task logs, cost, failure reasons
+   - Audit and replay for external write operations
 
-### 5.2 执行流（Email 入口为例）
+### 5.2 Execution Flow (Email Ingress Example)
 ```
-Email → Ingress → Triage → Task Queue → Agent Runtime → Output
-Scheduler ↗                                           ↘ Scheduler
+Email -> Ingress -> Triage -> Task Queue -> Agent Runtime -> Output
+Scheduler ^                                           v Scheduler
 ```
 
-- Triage 分类：
-  a) 需要创建账号并回复
-  b) 账号余额不足 → 回复提示充值
-  c) 无关邮件 → 忽略
-  d) 直接本地执行任务 + 回复（e.g.需要更多补充信息，来自用户直接的task request）
-  e) 直接在第三方服务执行任务（比如按照google doc / slides / overleaf 里面的评论修改文档）+ 给评论回复 + 邮件汇报（不是直接回复发送邮件，因为收到的邮件是第三方app的机器邮件通知）
+- Triage categories:
+  a) need to create account and reply
+  b) account balance insufficient -> reply to prompt recharge
+  c) irrelevant email -> ignore
+  d) execute task locally and reply directly (e.g., need more info, from user's direct task request)
+  e) execute task directly in third-party services (e.g., modify documents based on Google Doc/Slides/Overleaf comments) + reply to comments + email report (not direct email reply, because the received email is a machine notification from a third-party app)
 
-- 进入执行层后：
-  1) 载入用户历史 + 当前 thread + 附件
-  2) 角色策略判断：需澄清 or 直接执行
-  3) 执行工具链，生成结果/附件/外部文档修改
-  4) 通过邮件或指定渠道回传
-  5) 若是周期任务，写入 Scheduler
+- After entering the execution layer:
+  1) load user history + current thread + attachments
+  2) role strategy decision: clarify or execute directly
+  3) execute toolchain, generate results/attachments/external document updates
+  4) return via email or specified channel
+  5) if recurring task, write into Scheduler
 
-## 6. 多租户隔离策略（关键问题）
-问题：**如何确保 Alice 只访问当前用户数据？**
+## 6. Multi-tenant Isolation Strategy (Key Issue)
+Question: **How to ensure Alice only accesses current user data?**
 
-硬性边界：
-- **数据隔离**：每个用户独立的 Azure Blob Storage Folder。
-- **执行隔离**：
-  - 单容器多用户，但每次运行只挂载该用户 workspace（临时目录）。
-- **运行时约束**：
-  - 访问存储、搜索、索引时只允许 user_id 对应的 workspace（临时目录）。 范围；
-  - 任何跨用户资源访问直接拒绝并审计。
+Hard boundaries:
+- **Data isolation**: each user has an independent Azure Blob Storage folder.
+- **Execution isolation**:
+  - single container, multiple users, but each run mounts only that user's workspace (temporary directory).
+- **Runtime constraints**:
+  - when accessing storage/search/index, only allow the workspace (temporary directory) for that user_id; scope enforced.
+  - any cross-user resource access is rejected and audited.
 
-借鉴 OpenClaw：
-- 需要更强隔离时启用 sandbox（容器化工具执行）。
+Reference from OpenClaw:
+- enable sandbox (containerized tool execution) when stronger isolation is needed.
 
-## 7. 当 Alice 获得共享权限后的“下一步”设计
-问题：**用户把 Notion / Docs share 给 Alice 后，Alice 如何 move on？**
+## 7. "Next Step" Design After Alice Gets Shared Permissions
+Question: **After the user shares Notion/Docs with Alice, how does Alice move on?**
 
-对于每种access权限，维护一个具有安全防护能力的抽象层工作流，确保在准备工作区的时候只加载对应用户已经开放权限的信息
+For each access permission type, maintain an abstract workflow layer with security protections to ensure only the information the user has granted is loaded when preparing the workspace.
 
-## 8. 周期任务与任务管理
-- 每个用户有独立 Scheduler（支持 CRON-like）
-- 任务实体具备生命周期：
-  - 创建、暂停、取消、失败重试
-- 周期任务产生的新任务，仍需走统一队列和权限校验
-- 支持“自动降噪”：相同任务在短时间内合并或摘要化（短时间连续发送的内容，如果此时agent还处于执行阶段没有发送回复邮件，即可将新信息作为交给agent的新指令，完成之后一起统一回复）
+## 8. Recurring Tasks and Task Management
+- Each user has an independent Scheduler (supports cron-like).
+- Task entities have a lifecycle:
+  - create, pause, cancel, retry on failure
+- New tasks generated by recurring tasks still go through the unified queue and permission checks.
+- Support "automatic de-noising": identical tasks in a short time window are merged or summarized (if the agent is still executing and has not sent a reply, new information can be delivered as new instructions to the agent, then reply once after completion).
 
 ---
