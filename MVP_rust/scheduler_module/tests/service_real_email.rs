@@ -314,6 +314,7 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
         codex_disabled,
         scheduler_poll_interval: Duration::from_secs(1),
         scheduler_max_concurrency: 10,
+        scheduler_user_max_concurrency: 3,
     };
 
     let rt = Runtime::new()?;

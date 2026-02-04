@@ -9,7 +9,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -43,6 +43,7 @@ pub struct ServiceConfig {
     pub codex_disabled: bool,
     pub scheduler_poll_interval: Duration,
     pub scheduler_max_concurrency: usize,
+    pub scheduler_user_max_concurrency: usize,
 }
 
 impl ServiceConfig {
@@ -88,6 +89,11 @@ impl ServiceConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(10);
+        let scheduler_user_max_concurrency = env::var("SCHEDULER_USER_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(3);
 
         Ok(Self {
             host,
@@ -102,6 +108,7 @@ impl ServiceConfig {
             codex_disabled,
             scheduler_poll_interval,
             scheduler_max_concurrency,
+            scheduler_user_max_concurrency,
         })
     }
 }
@@ -117,7 +124,7 @@ struct AppState {
 #[derive(Default)]
 struct SchedulerClaims {
     running_tasks: HashSet<String>,
-    running_users: HashSet<String>,
+    running_users: HashMap<String, usize>,
 }
 
 enum ClaimResult {
@@ -127,20 +134,28 @@ enum ClaimResult {
 }
 
 impl SchedulerClaims {
-    fn try_claim(&mut self, task_ref: &TaskRef) -> ClaimResult {
-        if self.running_users.contains(&task_ref.user_id) {
+    fn try_claim(&mut self, task_ref: &TaskRef, user_limit: usize) -> ClaimResult {
+        let active = self.running_users.get(&task_ref.user_id).copied().unwrap_or(0);
+        if active >= user_limit {
             return ClaimResult::UserBusy;
         }
         if self.running_tasks.contains(&task_ref.task_id) {
             return ClaimResult::TaskBusy;
         }
-        self.running_users.insert(task_ref.user_id.clone());
+        self.running_users
+            .insert(task_ref.user_id.clone(), active + 1);
         self.running_tasks.insert(task_ref.task_id.clone());
         ClaimResult::Claimed
     }
 
     fn release(&mut self, task_ref: &TaskRef) {
-        self.running_users.remove(&task_ref.user_id);
+        if let Some(active) = self.running_users.get_mut(&task_ref.user_id) {
+            if *active <= 1 {
+                self.running_users.remove(&task_ref.user_id);
+            } else {
+                *active -= 1;
+            }
+        }
         self.running_tasks.remove(&task_ref.task_id);
     }
 }
@@ -208,6 +223,7 @@ pub async fn run_server(
     let scheduler_stop = Arc::new(AtomicBool::new(false));
     let scheduler_poll_interval = config.scheduler_poll_interval;
     let scheduler_max_concurrency = config.scheduler_max_concurrency;
+    let scheduler_user_max_concurrency = config.scheduler_user_max_concurrency;
     let claims = Arc::new(Mutex::new(SchedulerClaims::default()));
     let limiter = Arc::new(ConcurrencyLimiter::new(scheduler_max_concurrency));
     {
@@ -219,60 +235,93 @@ pub async fn run_server(
         let limiter = limiter.clone();
         let query_limit = scheduler_max_concurrency.saturating_mul(4).max(1);
         thread::spawn(move || {
+            let mut last_due_tasks: HashSet<String> = HashSet::new();
+            let mut logged_user_busy: HashSet<String> = HashSet::new();
+            let mut logged_task_busy: HashSet<String> = HashSet::new();
+            let mut last_capacity_deferral: Option<usize> = None;
             while !scheduler_stop.load(Ordering::Relaxed) {
                 let now = Utc::now();
                 match index_store.due_task_refs(now, query_limit) {
                     Ok(task_refs) => {
-                        if !task_refs.is_empty() {
-                            let refs = task_refs
-                                .iter()
-                                .map(|task_ref| {
-                                    format!("{}@{}", task_ref.task_id, task_ref.user_id)
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            info!(
-                                "scheduler found {} due task(s): {}",
-                                task_refs.len(),
-                                refs
-                            );
+                        let mut current_due_tasks = HashSet::with_capacity(task_refs.len());
+                        for task_ref in &task_refs {
+                            current_due_tasks.insert(format!(
+                                "{}@{}",
+                                task_ref.task_id, task_ref.user_id
+                            ));
+                        }
+                        if current_due_tasks != last_due_tasks {
+                            if !current_due_tasks.is_empty() {
+                                let refs = task_refs
+                                    .iter()
+                                    .map(|task_ref| {
+                                        format!("{}@{}", task_ref.task_id, task_ref.user_id)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                info!(
+                                    "scheduler found {} due task(s): {}",
+                                    task_refs.len(),
+                                    refs
+                                );
+                            }
+                            last_due_tasks = current_due_tasks.clone();
+                        }
+                        logged_user_busy
+                            .retain(|key| current_due_tasks.contains(key));
+                        logged_task_busy
+                            .retain(|key| current_due_tasks.contains(key));
+                        if current_due_tasks.is_empty() {
+                            last_capacity_deferral = None;
                         }
                         let total_refs = task_refs.len();
                         for (idx, task_ref) in task_refs.into_iter().enumerate() {
                             if !limiter.try_acquire() {
                                 let remaining = total_refs.saturating_sub(idx);
-                                info!(
-                                    "scheduler at capacity; deferring {} due task(s)",
-                                    remaining
-                                );
+                                if last_capacity_deferral != Some(remaining) {
+                                    info!(
+                                        "scheduler at capacity; deferring {} due task(s)",
+                                        remaining
+                                    );
+                                    last_capacity_deferral = Some(remaining);
+                                }
                                 break;
                             }
+                            last_capacity_deferral = None;
+                            let task_key =
+                                format!("{}@{}", task_ref.task_id, task_ref.user_id);
                             let claim_result = {
                                 let mut claims = claims
                                     .lock()
                                     .unwrap_or_else(|poison| poison.into_inner());
-                                claims.try_claim(&task_ref)
+                                claims.try_claim(&task_ref, scheduler_user_max_concurrency)
                             };
                             match claim_result {
                                 ClaimResult::Claimed => {
+                                    logged_user_busy.remove(&task_key);
+                                    logged_task_busy.remove(&task_key);
                                     info!(
                                         "scheduler claimed task {} for user {}",
                                         task_ref.task_id, task_ref.user_id
                                     );
                                 }
                                 ClaimResult::UserBusy => {
-                                    info!(
-                                        "scheduler deferred task {} for user {} (user already running)",
-                                        task_ref.task_id, task_ref.user_id
-                                    );
+                                    if logged_user_busy.insert(task_key) {
+                                        info!(
+                                            "scheduler deferred task {} for user {} (user already running)",
+                                            task_ref.task_id, task_ref.user_id
+                                        );
+                                    }
                                     limiter.release();
                                     continue;
                                 }
                                 ClaimResult::TaskBusy => {
-                                    info!(
-                                        "scheduler deferred task {} for user {} (task already running)",
-                                        task_ref.task_id, task_ref.user_id
-                                    );
+                                    if logged_task_busy.insert(task_key) {
+                                        info!(
+                                            "scheduler deferred task {} for user {} (task already running)",
+                                            task_ref.task_id, task_ref.user_id
+                                        );
+                                    }
                                     limiter.release();
                                     continue;
                                 }
