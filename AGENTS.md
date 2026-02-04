@@ -1,36 +1,29 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `mvp_python/email_pipeline/`: Python MVP for inbound email → Codex → reply flow (SMTP server, Postmark webhook helpers, local outbox).
-- `DoWhiz_service/`: Rust workspace (`scheduler_module`, `run_task_module`, `send_emails_module`) for Postmark webhook intake and scheduled replies.
-- `external/openclaw/`: Vendored upstream project with its own tooling and contributor guide; follow `external/openclaw/AGENTS.md` when working there.
-- `api_reference_documentation/postmark_api/`: Postmark API reference notes used by the email pipeline.
-- `example_files/`: Sample attachments used for local testing.
+- `DoWhiz_service/` Rust workspace for the email service; main crates are `scheduler_module/`, `send_emails_module/`, and `run_task_module/`. Runtime artifacts live under `DoWhiz_service/.workspace/`.
+- `website/` Vite + React site (`src/` for components, `public/` for static assets).
+- `api_reference_documentation/` vendor API docs (Postmark/Gmail) used for reference only.
+- `external/` vendored dependencies (OpenClaw); avoid edits unless intentionally updating upstream code.
+- `example_files/`, `scripts/`, and `vision.md` hold sample inputs, helpers, and product notes.
 
 ## Build, Test, and Development Commands
-- Python deps: `pip install -r mvp_python/email_pipeline/requirements.txt`
-- Run local pipeline server: `python -m mvp_python.email_pipeline.server`
-- Send a local test email: `python -m mvp_python.email_pipeline.send_test_email --from you@… --to you@…`
-- Read captured replies: `python -m mvp_python.email_pipeline.read_outbox`
-- Rust service (from `DoWhiz_service`): `cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001`
-- Rust tests: `cargo test -p scheduler_module` (add `-- --nocapture` for integration logs)
-- For OpenClaw build/test commands, see `external/openclaw/AGENTS.md`.
+- Rust service: `cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001`
+- Update inbound hook when testing email flows: `ngrok http 9001` and then run `cargo run -p scheduler_module --bin set_postmark_inbound_hook -- --hook-url <public-url>/postmark/inbound`
+- Unit tests: `cargo test -p scheduler_module`, `cargo test -p run_task_module`
+- Live email E2E: `RUST_SERVICE_LIVE_TEST=1 POSTMARK_INBOUND_HOOK_URL=... POSTMARK_TEST_FROM=... cargo test -p scheduler_module --test service_real_email -- --nocapture`
+- Website dev/build: `npm run dev`, `npm run build`, `npm run preview`, `npm run lint` (run from `website/`)
 
 ## Coding Style & Naming Conventions
-- Python: 4-space indentation; `snake_case` for modules/functions; `CamelCase` for classes.
-- Rust: `rustfmt` defaults; `snake_case` for modules/functions; `UpperCamelCase` for types.
-- Keep filenames aligned with existing patterns (e.g., `email_pipeline/*.py`, `*_module/src/*.rs`).
-- OpenClaw-specific lint/formatting is defined in `external/openclaw/AGENTS.md`.
+- Rust: follow `rustfmt` defaults (`cargo fmt`); use `snake_case` for modules/functions and `UpperCamelCase` for types.
+- Frontend: 2-space indentation in `.jsx` files, PascalCase React components (e.g., `App.jsx`), and ES module imports.
+- Linting: `website/eslint.config.js` is the source of truth; fix lint errors before opening a PR.
 
 ## Testing Guidelines
-- Rust: prefer crate-scoped runs (`cargo test -p run_task_module`) before full workspace tests.
-- Python: use the provided scripts (`send_test_email`, `real_email_test.py`) for functional checks; no pytest suite is wired up.
-- OpenClaw tests (Vitest, etc.) are documented in `external/openclaw/AGENTS.md`.
+- Tests live under each crate’s `tests/` directory and inline `#[test]` modules; keep test names descriptive.
+- Postmark tests are live and require env vars (`POSTMARK_LIVE_TEST=1`, `POSTMARK_SERVER_TOKEN`); avoid running them without credentials.
+- No JS test runner is configured yet, so rely on lint + manual verification for UI changes.
 
 ## Commit & Pull Request Guidelines
-- Git history shows short, descriptive messages (often concise phrases); keep commits focused and scoped.
-- PRs should describe purpose, list test commands run, and note any new/changed env vars or webhook configuration.
-
-## Security & Configuration Tips
-- Keep secrets in `.env`; never commit `.env`, Postmark tokens, or Gmail credentials (ignored by `.gitignore`).
-- Generated artifacts live in `mvp_python/email_pipeline/workspaces/`, `mvp_python/email_pipeline/outbox/`, and `DoWhiz_service/.workspace`; don’t add them to git.
+- Commit messages are short, imperative, and sentence-case (e.g., `Update service.rs`, `Implement webpage`).
+- PRs should include: a concise summary, how to test, any env/config changes, and screenshots for website/UI updates.

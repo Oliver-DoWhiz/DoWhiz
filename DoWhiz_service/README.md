@@ -26,7 +26,7 @@ ngrok http 9001
 3) Set the Postmark inbound hook to the **new** ngrok URL (Terminal 3):
 ```
 cargo run -p scheduler_module --bin set_postmark_inbound_hook -- \
-  --hook-url https://kameron-viewiest-undignifiedly.ngrok-free.dev/postmark/inbound
+  --hook-url https://YOUR-NGROK-URL.ngrok-free.dev/postmark/inbound
 ```
 
 4) Send an email to:
@@ -49,6 +49,7 @@ oliver@dowhiz.com
 - `TASK_INDEX_PATH` (default: `.workspace/run_task/state/task_index.db`)
 - `SCHEDULER_POLL_INTERVAL_SECS` (default: `1`)
 - `SCHEDULER_MAX_CONCURRENCY` (default: `10`)
+- `SCHEDULER_USER_MAX_CONCURRENCY` (default: `3`)
 - `CODEX_MODEL`
 - `CODEX_DISABLED=1` to bypass Codex CLI
 - Inbound blacklist: `agent@dowhiz.com`, `oliver@dowhiz.com` are ignored (display names and `+tag` aliases are normalized).
