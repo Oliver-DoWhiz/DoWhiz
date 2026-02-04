@@ -6,7 +6,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashSet;
@@ -20,12 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::index_store::{IndexStore, TaskRef};
 use crate::user_store::{extract_emails, UserStore};
-use crate::{ModuleExecutor, RunTaskTask, Scheduler, TaskKind};
+use crate::{ModuleExecutor, RunTaskTask, Schedule, Scheduler, ScheduledTask, TaskKind};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -120,17 +120,23 @@ struct SchedulerClaims {
     running_users: HashSet<String>,
 }
 
+enum ClaimResult {
+    Claimed,
+    UserBusy,
+    TaskBusy,
+}
+
 impl SchedulerClaims {
-    fn try_claim(&mut self, task_ref: &TaskRef) -> bool {
+    fn try_claim(&mut self, task_ref: &TaskRef) -> ClaimResult {
         if self.running_users.contains(&task_ref.user_id) {
-            return false;
+            return ClaimResult::UserBusy;
         }
         if self.running_tasks.contains(&task_ref.task_id) {
-            return false;
+            return ClaimResult::TaskBusy;
         }
         self.running_users.insert(task_ref.user_id.clone());
         self.running_tasks.insert(task_ref.task_id.clone());
-        true
+        ClaimResult::Claimed
     }
 
     fn release(&mut self, task_ref: &TaskRef) {
@@ -217,19 +223,59 @@ pub async fn run_server(
                 let now = Utc::now();
                 match index_store.due_task_refs(now, query_limit) {
                     Ok(task_refs) => {
-                        for task_ref in task_refs {
+                        if !task_refs.is_empty() {
+                            let refs = task_refs
+                                .iter()
+                                .map(|task_ref| {
+                                    format!("{}@{}", task_ref.task_id, task_ref.user_id)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            info!(
+                                "scheduler found {} due task(s): {}",
+                                task_refs.len(),
+                                refs
+                            );
+                        }
+                        let total_refs = task_refs.len();
+                        for (idx, task_ref) in task_refs.into_iter().enumerate() {
                             if !limiter.try_acquire() {
+                                let remaining = total_refs.saturating_sub(idx);
+                                info!(
+                                    "scheduler at capacity; deferring {} due task(s)",
+                                    remaining
+                                );
                                 break;
                             }
-                            let claimed = {
+                            let claim_result = {
                                 let mut claims = claims
                                     .lock()
                                     .unwrap_or_else(|poison| poison.into_inner());
                                 claims.try_claim(&task_ref)
                             };
-                            if !claimed {
-                                limiter.release();
-                                continue;
+                            match claim_result {
+                                ClaimResult::Claimed => {
+                                    info!(
+                                        "scheduler claimed task {} for user {}",
+                                        task_ref.task_id, task_ref.user_id
+                                    );
+                                }
+                                ClaimResult::UserBusy => {
+                                    info!(
+                                        "scheduler deferred task {} for user {} (user already running)",
+                                        task_ref.task_id, task_ref.user_id
+                                    );
+                                    limiter.release();
+                                    continue;
+                                }
+                                ClaimResult::TaskBusy => {
+                                    info!(
+                                        "scheduler deferred task {} for user {} (task already running)",
+                                        task_ref.task_id, task_ref.user_id
+                                    );
+                                    limiter.release();
+                                    continue;
+                                }
                             }
 
                             let config = config.clone();
@@ -303,9 +349,34 @@ fn execute_due_task(
     let user_paths = user_store.user_paths(&config.users_root, &task_ref.user_id);
     let mut scheduler =
         Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
+    let now = Utc::now();
+    let summary = summarize_tasks(scheduler.tasks(), now);
+    log_task_snapshot(&task_ref.user_id, "before_execute", &summary);
+
+    let (kind_label, status_label) = scheduler
+        .tasks()
+        .iter()
+        .find(|task| task.id == task_id)
+        .map(|task| (task_kind_label(&task.kind), task_status(task, now)))
+        .unwrap_or(("unknown", "missing"));
+    info!(
+        "scheduler executing task_id={} user_id={} kind={} status={}",
+        task_ref.task_id, task_ref.user_id, kind_label, status_label
+    );
     let executed = scheduler.execute_task_by_id(task_id)?;
     if executed {
+        info!(
+            "scheduler task completed task_id={} user_id={} status=success",
+            task_ref.task_id, task_ref.user_id
+        );
         index_store.sync_user_tasks(&task_ref.user_id, scheduler.tasks())?;
+        let summary = summarize_tasks(scheduler.tasks(), Utc::now());
+        log_task_snapshot(&task_ref.user_id, "after_execute", &summary);
+    } else {
+        warn!(
+            "scheduler task skipped task_id={} user_id={} status={}",
+            task_ref.task_id, task_ref.user_id, status_label
+        );
     }
     Ok(())
 }
@@ -389,7 +460,11 @@ fn process_payload(
     if let Err(err) = archive_inbound(&user_paths, payload, raw_payload) {
         error!("failed to archive inbound email: {}", err);
     }
-    info!("workspace created at {}", workspace.display());
+    info!(
+        "workspace created at {} for user {}",
+        workspace.display(),
+        user.user_id
+    );
 
     let reply_target = payload
         .reply_to
@@ -416,11 +491,136 @@ fn process_payload(
 
     let mut scheduler =
         Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
-    scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
+    let task_id =
+        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
     index_store.sync_user_tasks(&user.user_id, scheduler.tasks())?;
-    info!("scheduler tasks enqueued");
+    let message_id = payload
+        .header_message_id()
+        .or(payload.message_id.as_deref())
+        .unwrap_or("");
+    info!(
+        "scheduler tasks enqueued user_id={} task_id={} message_id={} workspace={}",
+        user.user_id,
+        task_id,
+        message_id,
+        workspace.display()
+    );
 
     Ok(())
+}
+
+struct TaskSummary {
+    total: usize,
+    enabled: usize,
+    due: usize,
+    completed: usize,
+    disabled: usize,
+    lines: Vec<String>,
+}
+
+fn summarize_tasks(tasks: &[ScheduledTask], now: DateTime<Utc>) -> TaskSummary {
+    let mut summary = TaskSummary {
+        total: tasks.len(),
+        enabled: 0,
+        due: 0,
+        completed: 0,
+        disabled: 0,
+        lines: Vec::new(),
+    };
+
+    for task in tasks {
+        let due = is_task_due(task, now);
+        if task.enabled {
+            summary.enabled += 1;
+            if due {
+                summary.due += 1;
+            }
+        } else if task.last_run.is_some() {
+            summary.completed += 1;
+        } else {
+            summary.disabled += 1;
+        }
+        summary.lines.push(format_task_line(task, now));
+    }
+
+    summary
+}
+
+fn log_task_snapshot(user_id: &str, phase: &str, summary: &TaskSummary) {
+    if summary.total == 0 {
+        info!(
+            "scheduler task snapshot user_id={} phase={} total=0",
+            user_id, phase
+        );
+        return;
+    }
+    let tasks = summary.lines.join(" | ");
+    info!(
+        "scheduler task snapshot user_id={} phase={} total={} enabled={} due={} completed={} disabled={} tasks=[{}]",
+        user_id,
+        phase,
+        summary.total,
+        summary.enabled,
+        summary.due,
+        summary.completed,
+        summary.disabled,
+        tasks
+    );
+}
+
+fn format_task_line(task: &ScheduledTask, now: DateTime<Utc>) -> String {
+    let next_run = schedule_next_run(&task.schedule).to_rfc3339();
+    let last_run = format_datetime_opt(task.last_run.clone());
+    format!(
+        "id={} kind={} status={} next_run={} last_run={}",
+        task.id,
+        task_kind_label(&task.kind),
+        task_status(task, now),
+        next_run,
+        last_run
+    )
+}
+
+fn task_status(task: &ScheduledTask, now: DateTime<Utc>) -> &'static str {
+    if !task.enabled {
+        if task.last_run.is_some() {
+            return "completed";
+        }
+        return "disabled";
+    }
+    if is_task_due(task, now) {
+        "due"
+    } else {
+        "scheduled"
+    }
+}
+
+fn is_task_due(task: &ScheduledTask, now: DateTime<Utc>) -> bool {
+    match &task.schedule {
+        Schedule::Cron { next_run, .. } => *next_run <= now,
+        Schedule::OneShot { run_at } => *run_at <= now,
+    }
+}
+
+fn schedule_next_run(schedule: &Schedule) -> DateTime<Utc> {
+    match schedule {
+        Schedule::Cron { next_run, .. } => next_run.clone(),
+        Schedule::OneShot { run_at } => run_at.clone(),
+    }
+}
+
+fn format_datetime_opt(value: Option<DateTime<Utc>>) -> String {
+    value
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn task_kind_label(kind: &TaskKind) -> &'static str {
+    match kind {
+        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::RunTask(_) => "run_task",
+        TaskKind::Noop => "noop",
+    }
 }
 
 fn is_blacklisted_sender(sender: &str) -> bool {

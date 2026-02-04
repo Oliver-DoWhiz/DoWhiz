@@ -1035,7 +1035,15 @@ fn schedule_auto_reply<E: TaskExecutor>(
         archive_root: task.archive_root.clone(),
     };
 
-    scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendEmail(send_task))?;
+    let task_id = scheduler.add_one_shot_in(
+        Duration::from_secs(0),
+        TaskKind::SendEmail(send_task),
+    )?;
+    info!(
+        "scheduled auto reply task {} from {}",
+        task_id,
+        task.workspace_dir.display()
+    );
     Ok(true)
 }
 
@@ -1115,7 +1123,14 @@ fn schedule_send_email<E: TaskExecutor>(
     if let Some(run_at_raw) = request.run_at.as_deref() {
         match parse_datetime(run_at_raw) {
             Ok(run_at) => {
-                scheduler.add_one_shot_at(run_at, TaskKind::SendEmail(send_task))?;
+                let task_id =
+                    scheduler.add_one_shot_at(run_at, TaskKind::SendEmail(send_task))?;
+                info!(
+                    "scheduled follow-up send_email task {} from {} run_at={}",
+                    task_id,
+                    task.workspace_dir.display(),
+                    run_at.to_rfc3339()
+                );
                 return Ok(true);
             }
             Err(err) => {
@@ -1144,10 +1159,16 @@ fn schedule_send_email<E: TaskExecutor>(
         }
     };
 
-    scheduler.add_one_shot_in(
+    let task_id = scheduler.add_one_shot_in(
         Duration::from_secs(delay_seconds),
         TaskKind::SendEmail(send_task),
     )?;
+    info!(
+        "scheduled follow-up send_email task {} from {} delay_seconds={}",
+        task_id,
+        task.workspace_dir.display(),
+        delay_seconds
+    );
     Ok(true)
 }
 
