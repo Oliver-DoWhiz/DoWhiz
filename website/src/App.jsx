@@ -26,7 +26,7 @@ function App() {
         <div className="container nav-content">
           <a href="#" className="logo">Do<span className="text-gradient">Whiz</span></a>
           <div className="nav-links">
-            <a href="#roles" className="nav-btn">Digital Workers</a>
+            <a href="#roles" className="nav-btn">Team</a>
             <a href="#features" className="nav-btn">Features</a>
             <a href="#security" className="nav-btn">Security</a>
           </div>
@@ -44,14 +44,14 @@ function App() {
                 </svg>
                 <span>Discord</span>
               </a>
+              <a className="btn-small" href="mailto:admin@dowhiz.com" aria-label="Contact">
+                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                  <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                <span>Contact</span>
+              </a>
             </div>
-            <a className="btn-small" href="mailto:admin@dowhiz.com" aria-label="Contact">
-              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                <polyline points="22,6 12,13 2,6"></polyline>
-              </svg>
-              <span>Contact</span>
-            </a>
           </div>
         </div>
       </nav>
@@ -132,7 +132,7 @@ function App() {
       {/* Core Experience */}
       <section id="features" className="section features-section">
         <div className="container">
-          <h2 className="section-title">Core Experience</h2>
+          <h2 className="section-title">Core Features</h2>
           <div className="features-grid">
             {[
               { title: "Task via Email", desc: "Delegate tasks naturally by sending an email. No complex dashboards or new apps to master." },
