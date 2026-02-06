@@ -322,6 +322,7 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
         scheduler_poll_interval: Duration::from_secs(1),
         scheduler_max_concurrency: 10,
         scheduler_user_max_concurrency: 3,
+        skills_source_dir: None,
     };
 
     let rt = Runtime::new()?;

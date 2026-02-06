@@ -141,6 +141,7 @@ fn thread_latest_epoch_end_to_end() {
         scheduler_poll_interval: Duration::from_millis(50),
         scheduler_max_concurrency: 2,
         scheduler_user_max_concurrency: 1,
+        skills_source_dir: None,
     };
 
     let user_store = UserStore::new(&config.users_db_path).expect("user store");

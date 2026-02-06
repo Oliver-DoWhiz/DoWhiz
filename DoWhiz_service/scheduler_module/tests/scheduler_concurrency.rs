@@ -92,6 +92,7 @@ fn scheduler_parallelism_reduces_wall_clock_time() -> Result<(), Box<dyn std::er
         scheduler_poll_interval: Duration::from_millis(100),
         scheduler_max_concurrency: CONCURRENCY_LIMIT,
         scheduler_user_max_concurrency: 3,
+        skills_source_dir: None,
     };
 
     let rt = Runtime::new()?;
