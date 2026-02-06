@@ -66,6 +66,27 @@ docker run --rm -p 9001:9001 \
   dowhiz-service
 ```
 
+Docker E2E (Codex + playwright-cli):
+```
+export AZURE_OPENAI_API_KEY_BACKUP=...
+mkdir -p .workspace_docker_test
+docker run --rm --entrypoint bash --user 10001:10001 \
+  -e AZURE_OPENAI_API_KEY_BACKUP \
+  -e HOME=/workspace \
+  -e TMPDIR=/workspace/tmp \
+  -v "$HOME/.codex:/codex-config:ro" \
+  -v "$PWD/.workspace_docker_test:/workspace" \
+  dowhiz-service -lc "set -euo pipefail; \
+    WORKDIR=/workspace/skill_e2e_test_docker; \
+    mkdir -p /workspace/.codex /workspace/tmp \"$WORKDIR/.agents/skills\" \"$WORKDIR/.playwright\"; \
+    cp -R /codex-config/* /workspace/.codex/; \
+    cat > \"$WORKDIR/.playwright/cli.config.json\" <<'EOF'
+{ \"browser\": { \"browserName\": \"chromium\", \"userDataDir\": \"/workspace/tmp/playwright-user-data\", \"launchOptions\": { \"channel\": \"chrome\", \"chromiumSandbox\": false } } }
+EOF
+    codex exec --skip-git-repo-check -c web_search=\"disabled\" --cd \"$WORKDIR\" --dangerously-bypass-approvals-and-sandbox \
+    \"Test the \\\"add todo\\\" flow on https://demo.playwright.dev/todomvc using playwright-cli. Check playwright-cli --help for available commands.\""
+```
+
 Website:
 ```
 cd website

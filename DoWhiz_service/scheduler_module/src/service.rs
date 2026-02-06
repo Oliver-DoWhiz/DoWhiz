@@ -47,6 +47,7 @@ pub struct ServiceConfig {
     pub scheduler_poll_interval: Duration,
     pub scheduler_max_concurrency: usize,
     pub scheduler_user_max_concurrency: usize,
+    pub skills_source_dir: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -97,6 +98,10 @@ impl ServiceConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(3);
+        let skills_source_dir = env::var("SKILLS_SOURCE_DIR")
+            .ok()
+            .map(|value| resolve_path(value))
+            .transpose()?;
 
         Ok(Self {
             host,
@@ -112,6 +117,7 @@ impl ServiceConfig {
             scheduler_poll_interval,
             scheduler_max_concurrency,
             scheduler_user_max_concurrency,
+            skills_source_dir,
         })
     }
 }
@@ -556,7 +562,12 @@ pub fn process_inbound_payload(
     user_store.ensure_user_dirs(&user_paths)?;
 
     let thread_key = thread_key(payload, raw_payload);
-    let workspace = ensure_thread_workspace(&user_paths, &user.user_id, &thread_key)?;
+    let workspace = ensure_thread_workspace(
+        &user_paths,
+        &user.user_id,
+        &thread_key,
+        config.skills_source_dir.as_deref(),
+    )?;
     let thread_state_path = default_thread_state_path(&workspace);
     let message_id = payload
         .header_message_id()
@@ -806,10 +817,44 @@ fn thread_workspace_name(thread_key: &str) -> String {
     format!("thread_{}", hash)
 }
 
+fn copy_skills_directory(src: &Path, dest: &Path) -> io::Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let skill_src = entry.path();
+        let skill_dest = dest.join(entry.file_name());
+
+        if skill_src.is_dir() {
+            copy_dir_recursive(&skill_src, &skill_dest)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn ensure_thread_workspace(
     user_paths: &crate::user_store::UserPaths,
     user_id: &str,
     thread_key: &str,
+    skills_source_dir: Option<&Path>,
 ) -> Result<PathBuf, BoxError> {
     fs::create_dir_all(&user_paths.workspaces_root)?;
 
@@ -838,6 +883,14 @@ fn ensure_thread_workspace(
             None,
         ) {
             error!("failed to hydrate past_emails: {}", err);
+        }
+    }
+
+    // Copy skills to workspace for Codex CLI
+    if let Some(skills_src) = skills_source_dir {
+        let agents_skills_dir = workspace.join(".agents").join("skills");
+        if let Err(err) = copy_skills_directory(skills_src, &agents_skills_dir) {
+            error!("failed to copy skills to workspace: {}", err);
         }
     }
 
@@ -1314,7 +1367,7 @@ mod tests {
             serde_json::from_str(inbound_raw).expect("parse inbound");
         let thread = thread_key(&inbound_payload, inbound_raw.as_bytes());
         let workspace =
-            ensure_thread_workspace(&user_paths, "user123", &thread)
+            ensure_thread_workspace(&user_paths, "user123", &thread, None)
                 .expect("create workspace");
 
         let past_root = workspace.join("references").join("past_emails");
