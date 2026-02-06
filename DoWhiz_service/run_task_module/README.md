@@ -6,9 +6,23 @@ Run Codex CLI to generate `reply_email_draft.html` and optional `reply_email_att
 
 Requirements:
 - Codex CLI installed and available on PATH.
+- Node.js 20 + npm.
+- `playwright-cli` + Chromium (required when Codex calls browser automation skills).
+- `SKILLS_SOURCE_DIR` set to `DoWhiz_service/skills` to load repo skills.
 - Environment variables:
   - `AZURE_OPENAI_API_KEY_BACKUP`
   - `AZURE_OPENAI_ENDPOINT_BACKUP`
+
+Install (Linux, Dockerfile parity):
+```
+sudo apt-get update
+sudo apt-get install -y ca-certificates libsqlite3-dev libssl-dev pkg-config curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex@latest @playwright/cli@latest
+sudo npx playwright install --with-deps chromium
+export SKILLS_SOURCE_DIR="$PWD/DoWhiz_service/skills"
+```
 
 Example:
 ```rust
