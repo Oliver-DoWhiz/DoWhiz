@@ -17,6 +17,17 @@ failed CLI, missing output, invalid paths).
 
 ## Manual smoke test (real Codex)
 
+Prereqs (Dockerfile parity):
+```
+sudo apt-get update
+sudo apt-get install -y ca-certificates libsqlite3-dev libssl-dev pkg-config curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex@latest @playwright/cli@latest
+sudo npx playwright install --with-deps chromium
+export SKILLS_SOURCE_DIR="$PWD/DoWhiz_service/skills"
+```
+
 1) Prepare a workspace with the required folders:
 
 ```

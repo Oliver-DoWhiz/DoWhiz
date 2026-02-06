@@ -5,11 +5,46 @@ then schedules a SendEmail job and sends the reply via Postmark.
 
 ## Prereqs
 - Rust toolchain
+- System libs: `libsqlite3`, `libssl`, `pkg-config`, `ca-certificates`
+- Node.js 20 + npm
 - `codex` CLI on your PATH (unless `CODEX_DISABLED=1`)
+- `playwright-cli` + Chromium (required for browser automation skills)
+- `SKILLS_SOURCE_DIR` set to `DoWhiz_service/skills` to load repo skills locally
 - `.env` includes:
   - `POSTMARK_SERVER_TOKEN`
   - `OUTBOUND_FROM` (optional, defaults to `oliver@dowhiz.com`)
   - `AZURE_OPENAI_API_KEY_BACKUP` and `AZURE_OPENAI_ENDPOINT_BACKUP` (required when Codex is enabled)
+
+### Install dependencies (Dockerfile parity)
+Linux (Debian/Ubuntu):
+```
+sudo apt-get update
+sudo apt-get install -y ca-certificates libsqlite3-dev libssl-dev pkg-config curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex@latest @playwright/cli@latest
+sudo npx playwright install --with-deps chromium
+```
+
+Optional (match Dockerfile's chrome-channel lookup used by E2E):
+```
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/.cache/ms-playwright"
+chromium_path="$(ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux/chrome | head -n1)"
+sudo mkdir -p /opt/google/chrome
+sudo ln -sf "$chromium_path" /opt/google/chrome/chrome
+```
+
+macOS (Homebrew):
+```
+brew install node@20 openssl@3 sqlite pkg-config
+npm install -g @openai/codex@latest @playwright/cli@latest
+npx playwright install chromium
+```
+
+Export the skills directory before running locally:
+```
+export SKILLS_SOURCE_DIR="$PWD/DoWhiz_service/skills"
+```
 
 ## Docker (production image)
 Build the image from the repo root and run it with the same `.env` file mounted

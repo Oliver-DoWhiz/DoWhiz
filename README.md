@@ -51,6 +51,41 @@ like teammates, and the system escalates when human input is needed.
 - `external/`: Vendored references (including OpenClaw).
 - `scripts/`: Helper scripts.
 
+## Local dependencies (Dockerfile parity for agents)
+The Docker image installs extra tooling so Codex can run the `playwright-cli`
+skill. For the same capabilities locally, install the Dockerfile deps and set
+the skills source dir.
+
+Linux (Debian/Ubuntu, matches Dockerfile):
+```
+sudo apt-get update
+sudo apt-get install -y ca-certificates libsqlite3-dev libssl-dev pkg-config curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex@latest @playwright/cli@latest
+sudo npx playwright install --with-deps chromium
+```
+
+Optional (match Dockerfile's chrome-channel lookup used by E2E):
+```
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/.cache/ms-playwright"
+chromium_path="$(ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux/chrome | head -n1)"
+sudo mkdir -p /opt/google/chrome
+sudo ln -sf "$chromium_path" /opt/google/chrome/chrome
+```
+
+macOS (Homebrew):
+```
+brew install node@20 openssl@3 sqlite pkg-config
+npm install -g @openai/codex@latest @playwright/cli@latest
+npx playwright install chromium
+```
+
+Point the service at the repo skills when running locally:
+```
+export SKILLS_SOURCE_DIR="$PWD/DoWhiz_service/skills"
+```
+
 ## Getting started
 Rust service:
 ```
