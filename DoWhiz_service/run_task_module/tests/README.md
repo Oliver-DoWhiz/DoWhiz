@@ -15,6 +15,23 @@ verify that `run_task` writes `reply_email_draft.html`, creates the
 attachments directory, and handles error cases (missing env, missing CLI,
 failed CLI, missing output, invalid paths).
 
+## Optional real Codex E2E test (RUN_CODEX_E2E)
+
+When `RUN_CODEX_E2E=1` is set, `run_task_tests` runs a live Codex CLI test.
+
+Prereqs:
+- `codex` CLI installed.
+- `AZURE_OPENAI_API_KEY_BACKUP` and `AZURE_OPENAI_ENDPOINT_BACKUP` set.
+- Optional: `CODEX_MODEL` to override the default model.
+
+Run:
+```
+RUN_CODEX_E2E=1 \
+AZURE_OPENAI_API_KEY_BACKUP=... \
+AZURE_OPENAI_ENDPOINT_BACKUP=... \
+cargo test -p run_task_module --test run_task_tests -- --nocapture
+```
+
 ## Manual smoke test (real Codex)
 
 Prereqs (Dockerfile parity):
@@ -43,7 +60,3 @@ workspace/
    - reply_email_draft.html exists in the workspace root.
    - reply_email_attachments/ exists (and contains any generated attachments).
    - Skills are copied from `DoWhiz_service/skills` automatically when preparing workspaces.
-
-## Future automated tests
-
-- Add a gated test that uses the real Codex CLI when RUN_CODEX_E2E=1 is set.
