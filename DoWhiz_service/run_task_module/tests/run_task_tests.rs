@@ -9,6 +9,17 @@ use support::{
     FakeCodexMode, TempDir, ENV_MUTEX,
 };
 
+fn env_enabled(key: &str) -> bool {
+    matches!(env::var(key).as_deref(), Ok("1"))
+}
+
+fn require_env(key: &'static str) {
+    let value = env::var(key).unwrap_or_default();
+    if value.trim().is_empty() {
+        panic!("{key} must be set to run the real Codex E2E test");
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn run_task_success_with_fake_codex() {
@@ -240,4 +251,36 @@ fn run_task_codex_disabled_writes_placeholder() {
     let html = fs::read_to_string(&result.reply_html_path).unwrap();
     assert!(html.contains("Codex disabled"));
     assert!(result.reply_attachments_dir.is_dir());
+}
+
+#[test]
+#[cfg(unix)]
+fn run_task_real_codex_e2e_when_enabled() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    if !env_enabled("RUN_CODEX_E2E") {
+        eprintln!("RUN_CODEX_E2E not set; skipping real Codex E2E test.");
+        return;
+    }
+
+    require_env("AZURE_OPENAI_API_KEY_BACKUP");
+    require_env("AZURE_OPENAI_ENDPOINT_BACKUP");
+
+    let temp = TempDir::new("codex_task_real_e2e").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+    let _env = EnvGuard::set(&[("HOME", home_dir.to_str().unwrap())]);
+
+    let mut params = build_params(&workspace);
+    params.model_name = env::var("CODEX_MODEL").unwrap_or_default();
+
+    let result = run_task(&params).unwrap_or_else(|err| {
+        panic!("Real Codex E2E test failed: {err}");
+    });
+    assert!(result.reply_html_path.exists());
+    assert!(result.reply_attachments_dir.is_dir());
+
+    let html = fs::read_to_string(&result.reply_html_path).unwrap();
+    assert!(!html.trim().is_empty());
 }
