@@ -24,6 +24,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::index_store::{IndexStore, TaskRef};
+use crate::mailbox;
 use crate::thread_state::{bump_thread_state, default_thread_state_path};
 use crate::user_store::{extract_emails, UserStore};
 use crate::{
@@ -33,11 +34,6 @@ use crate::{
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub const DEFAULT_INBOUND_BODY_MAX_BYTES: usize = 25 * 1024 * 1024;
-const WORKSPACE_SOUL_BLOCK: &str = r#"<SOUL>
-Your name is Oliver, a little bear, who is cute and smart and capable. You always get task done.
-Go bears!
-</SOUL>
-"#;
 
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
@@ -566,11 +562,32 @@ pub fn process_inbound_payload(
     let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
     user_store.ensure_user_dirs(&user_paths)?;
 
+    let reply_to_raw = payload.reply_to.as_deref().unwrap_or("");
+    let from_raw = payload.from.as_deref().unwrap_or("");
+    let mut to_list = replyable_recipients(reply_to_raw);
+    if to_list.is_empty() {
+        to_list = replyable_recipients(from_raw);
+    }
+    if to_list.is_empty() {
+        info!(
+            "no replyable recipients found (reply_to='{}', from='{}')",
+            reply_to_raw, from_raw
+        );
+    }
+
+    let inbound_service_address = mailbox::select_inbound_service_address(&[
+        payload.to.as_deref(),
+        payload.cc.as_deref(),
+        payload.bcc.as_deref(),
+    ]);
+    let persona = mailbox::persona_for_address(inbound_service_address.as_deref());
+
     let thread_key = thread_key(payload, raw_payload);
     let workspace = ensure_thread_workspace(
         &user_paths,
         &user.user_id,
         &thread_key,
+        persona,
         config.skills_source_dir.as_deref(),
     )?;
     let thread_state_path = default_thread_state_path(&workspace);
@@ -595,17 +612,6 @@ pub fn process_inbound_payload(
         thread_key,
         thread_state.epoch
     );
-
-    let reply_target = payload
-        .reply_to
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload.from.as_deref())
-        .unwrap_or("");
-    let to_list = split_recipients(reply_target);
-    if to_list.is_empty() {
-        return Err("missing reply recipient".into());
-    }
 
     let run_task = RunTaskTask {
         workspace_dir: workspace.clone(),
@@ -774,7 +780,7 @@ fn is_blacklisted_sender(sender: &str) -> bool {
 }
 
 fn is_blacklisted_address(address: &str) -> bool {
-    matches!(address, "agent@dowhiz.com" | "oliver@dowhiz.com")
+    mailbox::is_service_address(address)
 }
 
 fn thread_key(payload: &PostmarkInbound, raw_payload: &[u8]) -> String {
@@ -849,20 +855,25 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn ensure_workspace_soul_files(workspace: &Path) -> io::Result<()> {
-    write_workspace_soul_file(&workspace.join("AGENTS.md"))?;
-    write_workspace_soul_file(&workspace.join("CLAUDE.md"))?;
+fn ensure_workspace_soul_files(
+    workspace: &Path,
+    persona: mailbox::WorkspacePersona,
+) -> io::Result<()> {
+    let soul_block = mailbox::soul_block(persona);
+    write_workspace_soul_file(&workspace.join("AGENTS.md"), soul_block)?;
+    write_workspace_soul_file(&workspace.join("CLAUDE.md"), soul_block)?;
     Ok(())
 }
 
-fn write_workspace_soul_file(path: &Path) -> io::Result<()> {
-    fs::write(path, WORKSPACE_SOUL_BLOCK)
+fn write_workspace_soul_file(path: &Path, soul_block: &str) -> io::Result<()> {
+    fs::write(path, soul_block)
 }
 
 fn ensure_thread_workspace(
     user_paths: &crate::user_store::UserPaths,
     user_id: &str,
     thread_key: &str,
+    persona: mailbox::WorkspacePersona,
     skills_source_dir: Option<&Path>,
 ) -> Result<PathBuf, BoxError> {
     fs::create_dir_all(&user_paths.workspaces_root)?;
@@ -895,7 +906,7 @@ fn ensure_thread_workspace(
         }
     }
 
-    ensure_workspace_soul_files(&workspace)?;
+    ensure_workspace_soul_files(&workspace, persona)?;
 
     // Copy skills to workspace for Codex CLI
     if let Some(skills_src) = skills_source_dir {
@@ -1335,6 +1346,35 @@ fn split_recipients(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn replyable_recipients(raw: &str) -> Vec<String> {
+    split_recipients(raw)
+        .into_iter()
+        .filter(|recipient| contains_replyable_address(recipient))
+        .collect()
+}
+
+fn contains_replyable_address(value: &str) -> bool {
+    let emails = extract_emails(value);
+    if emails.is_empty() {
+        return false;
+    }
+    emails.iter().any(|address| !is_no_reply_address(address))
+}
+
+// Only local-part markers; avoid domain-based filtering.
+const NO_REPLY_LOCAL_PARTS: [&str; 3] = ["noreply", "no-reply", "do-not-reply"];
+
+fn is_no_reply_address(address: &str) -> bool {
+    let normalized = address.trim().to_ascii_lowercase();
+    let local = normalized.split('@').next().unwrap_or("");
+    if local.is_empty() {
+        return false;
+    }
+    NO_REPLY_LOCAL_PARTS
+        .iter()
+        .any(|marker| local == *marker)
+}
+
 fn env_flag(key: &str, default: bool) -> bool {
     match env::var(key) {
         Ok(value) => matches!(
@@ -1571,7 +1611,13 @@ mod tests {
         let inbound_payload: PostmarkInbound =
             serde_json::from_str(inbound_raw).expect("parse inbound");
         let thread = thread_key(&inbound_payload, inbound_raw.as_bytes());
-        let workspace = ensure_thread_workspace(&user_paths, "user123", &thread, None)
+        let workspace = ensure_thread_workspace(
+            &user_paths,
+            "user123",
+            &thread,
+            mailbox::WorkspacePersona::LittleBear,
+            None,
+        )
             .expect("create workspace");
 
         let past_root = workspace.join("references").join("past_emails");
@@ -1588,5 +1634,40 @@ mod tests {
             .join(entry_path)
             .join("attachments_manifest.json")
             .exists());
+    }
+
+    #[test]
+    fn replyable_recipients_filters_no_reply_addresses() {
+        let raw = "No Reply <noreply@example.com>, Real <user@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert_eq!(recipients, vec!["Real <user@example.com>"]);
+    }
+
+    #[test]
+    fn replyable_recipients_returns_empty_when_only_no_reply() {
+        let raw = "No Reply <no-reply@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert!(recipients.is_empty());
+    }
+
+    #[test]
+    fn no_reply_detection_matches_common_variants() {
+        assert!(is_no_reply_address("noreply@example.com"));
+        assert!(is_no_reply_address("no-reply@example.com"));
+        assert!(is_no_reply_address("do-not-reply@example.com"));
+        assert!(!is_no_reply_address("reply@example.com"));
+    }
+
+    #[test]
+    fn no_reply_detection_requires_exact_local_part() {
+        assert!(!is_no_reply_address("noreplying@example.com"));
+        assert!(!is_no_reply_address("reply-noreply@example.com"));
+        assert!(!is_no_reply_address("no-reply-bot@example.com"));
+    }
+
+    #[test]
+    fn no_reply_detection_ignores_domain_markers() {
+        assert!(!is_no_reply_address("notifications@github.com"));
+        assert!(!is_no_reply_address("octocat@users.noreply.github.com"));
     }
 }
