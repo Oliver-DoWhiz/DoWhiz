@@ -1358,12 +1358,44 @@ fn sanitize_token(value: &str, fallback: &str) -> String {
 }
 
 fn split_recipients(value: &str) -> Vec<String> {
-    value
-        .split(|ch| ch == ',' || ch == ';')
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_string())
-        .collect()
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                escaped = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' | ';' if !in_quotes => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
+
+    out
 }
 
 fn replyable_recipients(raw: &str) -> Vec<String> {
@@ -1677,6 +1709,20 @@ mod tests {
         let raw = "No Reply <no-reply@example.com>";
         let recipients = replyable_recipients(raw);
         assert!(recipients.is_empty());
+    }
+
+    #[test]
+    fn replyable_recipients_keeps_quoted_display_name_commas() {
+        let raw =
+            "\"Zoom Video Communications, Inc\" <reply@example.com>, Other <other@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert_eq!(
+            recipients,
+            vec![
+                "\"Zoom Video Communications, Inc\" <reply@example.com>",
+                "Other <other@example.com>"
+            ]
+        );
     }
 
     #[test]
