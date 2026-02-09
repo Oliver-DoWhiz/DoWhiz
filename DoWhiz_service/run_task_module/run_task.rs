@@ -15,7 +15,7 @@ model_provider = "azure"
 model_reasoning_effort = "xhigh"
 web_search = "live"
 ask_for_approval = "never"
-sandbox = "workspace-write"
+sandbox = "{sandbox_mode}"
 
 [model_providers.azure]
 name = "Azure OpenAI"
@@ -191,6 +191,7 @@ pub enum RunTaskError {
     },
     OutputMissing {
         path: PathBuf,
+        output: String,
     },
 }
 
@@ -226,8 +227,13 @@ impl fmt::Display for RunTaskError {
                 "GitHub auth command failed ({} status: {:?}). Output tail:\n{}",
                 command, status, output
             ),
-            RunTaskError::OutputMissing { path } => {
-                write!(f, "Expected output not found: {}", path.display())
+            RunTaskError::OutputMissing { path, output } => {
+                write!(
+                    f,
+                    "Expected output not found: {}\nCodex output tail:\n{}",
+                    path.display(),
+                    output
+                )
             }
         }
     }
@@ -306,7 +312,14 @@ fn run_codex_task(
         request.model_name.to_string()
     };
 
-    ensure_codex_config(&model_name, &azure_endpoint)?;
+    let sandbox_mode = codex_sandbox_mode();
+    let bypass_sandbox = codex_bypass_sandbox();
+    ensure_codex_config(
+        &model_name,
+        &azure_endpoint,
+        request.workspace_dir,
+        &sandbox_mode,
+    )?;
     ensure_github_cli_auth(&github_auth)?;
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -321,6 +334,7 @@ fn run_codex_task(
 
     let mut cmd = Command::new("codex");
     cmd.arg("exec")
+        .args(bypass_sandbox.then_some("--dangerously-bypass-approvals-and-sandbox"))
         .arg("--skip-git-repo-check")
         .arg("-m")
         .arg(&model_name)
@@ -329,7 +343,7 @@ fn run_codex_task(
         .arg("-c")
         .arg("ask_for_approval=\"never\"")
         .arg("-c")
-        .arg("sandbox=\"workspace-write\"")
+        .arg(format!("sandbox=\"{}\"", sandbox_mode))
         .arg("-c")
         .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
         .arg("--cd")
@@ -370,6 +384,7 @@ fn run_codex_task(
     if !reply_html_path.exists() {
         return Err(RunTaskError::OutputMissing {
             path: reply_html_path,
+            output: output_tail,
         });
     }
 
@@ -852,7 +867,12 @@ fn write_git_askpass_script() -> Result<PathBuf, RunTaskError> {
     Ok(path)
 }
 
-fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), RunTaskError> {
+fn ensure_codex_config(
+    model_name: &str,
+    azure_endpoint: &str,
+    workspace_dir: &Path,
+    sandbox_mode: &str,
+) -> Result<(), RunTaskError> {
     let home = env::var("HOME").map_err(|_| RunTaskError::MissingEnv { key: "HOME" })?;
     let config_path = PathBuf::from(home).join(".codex").join("config.toml");
     let config_dir = config_path.parent().ok_or(RunTaskError::InvalidPath {
@@ -865,7 +885,8 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     let endpoint = normalize_azure_endpoint(azure_endpoint);
     let block = CODEX_CONFIG_BLOCK_TEMPLATE
         .replace("{model_name}", model_name)
-        .replace("{azure_endpoint}", &endpoint);
+        .replace("{azure_endpoint}", &endpoint)
+        .replace("{sandbox_mode}", sandbox_mode);
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -874,8 +895,39 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     };
 
     let updated = update_config_block(&existing, &block);
+    let updated = ensure_project_trust(&updated, workspace_dir);
     fs::write(config_path, updated)?;
     Ok(())
+}
+
+fn ensure_project_trust(existing: &str, workspace_dir: &Path) -> String {
+    let workspace_str = workspace_dir.to_string_lossy();
+    let escaped = toml_escape(&workspace_str);
+    let header = format!("[projects.\"{escaped}\"]");
+    if existing.contains(&header) {
+        return existing.to_string();
+    }
+    let mut updated = existing.trim_end().to_string();
+    if !updated.is_empty() {
+        updated.push_str("\n\n");
+    }
+    updated.push_str(&header);
+    updated.push('\n');
+    updated.push_str("trust_level = \"trusted\"\n");
+    updated
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn codex_sandbox_mode() -> String {
+    env::var("CODEX_SANDBOX").unwrap_or_else(|_| "workspace-write".to_string())
+}
+
+fn codex_bypass_sandbox() -> bool {
+    env_enabled("CODEX_BYPASS_SANDBOX")
+        || env_enabled("CODEX_DANGEROUSLY_BYPASS_SANDBOX")
 }
 
 fn normalize_azure_endpoint(endpoint: &str) -> String {
