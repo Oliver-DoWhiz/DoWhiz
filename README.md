@@ -88,6 +88,9 @@ Rust service:
 ```
 cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001
 ```
+If `RUN_TASK_DOCKER_IMAGE` is set in `DoWhiz_service/.env`, each task runs
+inside a fresh Docker container and the image auto-builds on first use (unless
+disabled with `RUN_TASK_DOCKER_AUTO_BUILD=0`).
 
 Docker (production image):
 ```
