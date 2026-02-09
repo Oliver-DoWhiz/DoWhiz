@@ -7,13 +7,15 @@ then schedules a SendEmail job and sends the reply via Postmark.
 - Rust toolchain
 - System libs: `libsqlite3`, `libssl`, `pkg-config`, `ca-certificates`
 - Node.js 20 + npm
-- `codex` CLI on your PATH (unless `CODEX_DISABLED=1`)
+- `codex` CLI on your PATH (only required for local execution; optional when `RUN_TASK_DOCKER_IMAGE` is set)
 - `playwright-cli` + Chromium (required for browser automation skills)
 - `.env` includes:
   - `POSTMARK_SERVER_TOKEN`
   - `OUTBOUND_FROM` (optional, defaults to `oliver@dowhiz.com`)
   - `AZURE_OPENAI_API_KEY_BACKUP` and `AZURE_OPENAI_ENDPOINT_BACKUP` (required when Codex is enabled)
   - `GITHUB_USERNAME` + `GITHUB_PERSONAL_ACCESS_TOKEN` (optional; enables Codex/agent GitHub access via `GH_TOKEN`/`GITHUB_TOKEN` + git askpass)
+  - `RUN_TASK_DOCKER_IMAGE` (run each task inside a disposable Docker container; use `dowhiz-service` for the repo image)
+  - `RUN_TASK_DOCKER_AUTO_BUILD=1` to auto-build the image when missing (set `0` to disable)
 
 ### Install dependencies (Dockerfile parity)
 Linux (Debian/Ubuntu):
@@ -42,6 +44,13 @@ npx playwright install chromium
 ```
 
 Skills are copied from `DoWhiz_service/skills` automatically when preparing workspaces.
+
+## Per-task Docker execution
+When `RUN_TASK_DOCKER_IMAGE` is set, each RunTask spins up a fresh container,
+mounts the task workspace at `/workspace`, runs Codex inside the container, and
+removes the container when done. If the image is missing, the service will
+auto-build it (unless `RUN_TASK_DOCKER_AUTO_BUILD=0`). You can override the
+build inputs with `RUN_TASK_DOCKERFILE` and `RUN_TASK_DOCKER_BUILD_CONTEXT`.
 
 ## Docker (production image)
 Build the image from the repo root and run it with the same `.env` file mounted
@@ -95,6 +104,10 @@ oliver@dowhiz.com
 - `SCHEDULER_USER_MAX_CONCURRENCY` (default: `3`)
 - `CODEX_MODEL`
 - `CODEX_DISABLED=1` to bypass Codex CLI
+- `RUN_TASK_DOCKER_IMAGE` to enable per-task containers
+- `RUN_TASK_DOCKER_AUTO_BUILD=1` to auto-build missing images
+- `RUN_TASK_DOCKERFILE` to override the Dockerfile path
+- `RUN_TASK_DOCKER_BUILD_CONTEXT` to override the docker build context directory
 - Inbound blacklist: `little-bear@dowhiz.com`, `agent@dowhiz.com`, `oliver@dowhiz.com`, `mini-mouse@dowhiz.com`, `maggie@dowhiz.com` are ignored (display names and `+tag` aliases are normalized).
 
 ## Database files

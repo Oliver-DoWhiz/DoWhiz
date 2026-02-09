@@ -7,12 +7,7 @@ import workflowExecution from './assets/Workflow-Execution.png';
 import workflowReturn from './assets/Workflow-Return.png';
 
 function App() {
-  const [mounted, setMounted] = useState(false);
   const [theme, setTheme] = useState('dark');
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -25,7 +20,7 @@ function App() {
   };
 
   return (
-    <div className={`app-container ${mounted ? 'visible' : ''}`}>
+    <div className="app-container">
       {/* Navigation */}
       <nav className="navbar">
         <div className="container nav-content">

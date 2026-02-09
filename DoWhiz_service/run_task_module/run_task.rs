@@ -15,7 +15,7 @@ model_provider = "azure"
 model_reasoning_effort = "xhigh"
 web_search = "live"
 ask_for_approval = "never"
-sandbox = "workspace-write"
+sandbox = "{sandbox_mode}"
 
 [model_providers.azure]
 name = "Azure OpenAI"
@@ -23,6 +23,8 @@ base_url = "{azure_endpoint}"
 env_key = "AZURE_OPENAI_API_KEY_BACKUP"
 wire_api = "responses"
 "#;
+const DOCKER_WORKSPACE_DIR: &str = "/workspace";
+const DOCKER_CODEX_HOME_DIR: &str = ".codex";
 const SCHEDULED_TASKS_BEGIN: &str = "SCHEDULED_TASKS_JSON_BEGIN";
 const SCHEDULED_TASKS_END: &str = "SCHEDULED_TASKS_JSON_END";
 const SCHEDULER_ACTIONS_BEGIN: &str = "SCHEDULER_ACTIONS_JSON_BEGIN";
@@ -181,6 +183,11 @@ pub enum RunTaskError {
         status: Option<i32>,
         output: String,
     },
+    DockerNotFound,
+    DockerFailed {
+        status: Option<i32>,
+        output: String,
+    },
     GitHubAuthCommandNotFound {
         command: &'static str,
     },
@@ -191,6 +198,7 @@ pub enum RunTaskError {
     },
     OutputMissing {
         path: PathBuf,
+        output: String,
     },
 }
 
@@ -214,6 +222,12 @@ impl fmt::Display for RunTaskError {
                 "Codex CLI failed (status: {:?}). Output tail:\n{}",
                 status, output
             ),
+            RunTaskError::DockerNotFound => write!(f, "Docker CLI not found on PATH."),
+            RunTaskError::DockerFailed { status, output } => write!(
+                f,
+                "Docker run failed (status: {:?}). Output tail:\n{}",
+                status, output
+            ),
             RunTaskError::GitHubAuthCommandNotFound { command } => {
                 write!(f, "GitHub auth command not found on PATH: {}", command)
             }
@@ -226,8 +240,13 @@ impl fmt::Display for RunTaskError {
                 "GitHub auth command failed ({} status: {:?}). Output tail:\n{}",
                 command, status, output
             ),
-            RunTaskError::OutputMissing { path } => {
-                write!(f, "Expected output not found: {}", path.display())
+            RunTaskError::OutputMissing { path, output } => {
+                write!(
+                    f,
+                    "Expected output not found: {}\nCodex output tail:\n{}",
+                    path.display(),
+                    output
+                )
             }
         }
     }
@@ -279,7 +298,28 @@ fn run_codex_task(
     reply_attachments_dir: PathBuf,
 ) -> Result<RunTaskOutput, RunTaskError> {
     load_env_sources(request.workspace_dir)?;
-    let github_auth = resolve_github_auth()?;
+    let docker_image = read_env_trimmed("RUN_TASK_DOCKER_IMAGE");
+    let use_docker = docker_image.is_some() || env_enabled("RUN_TASK_USE_DOCKER");
+    let docker_image = if use_docker {
+        docker_image.ok_or(RunTaskError::MissingEnv {
+            key: "RUN_TASK_DOCKER_IMAGE",
+        })?
+    } else {
+        String::new()
+    };
+    let host_workspace_dir = if use_docker {
+        Some(canonicalize_dir(request.workspace_dir)?)
+    } else {
+        None
+    };
+    let askpass_dir = if use_docker {
+        host_workspace_dir
+            .as_ref()
+            .map(|dir| dir.join(DOCKER_CODEX_HOME_DIR))
+    } else {
+        None
+    };
+    let github_auth = resolve_github_auth(askpass_dir.as_deref())?;
 
     let api_key =
         env::var("AZURE_OPENAI_API_KEY_BACKUP").map_err(|_| RunTaskError::MissingEnv {
@@ -306,7 +346,28 @@ fn run_codex_task(
         request.model_name.to_string()
     };
 
-    ensure_codex_config(&model_name, &azure_endpoint)?;
+    let sandbox_mode = codex_sandbox_mode();
+    let bypass_sandbox = codex_bypass_sandbox() || use_docker;
+    if use_docker {
+        let codex_home = host_workspace_dir
+            .as_ref()
+            .map(|dir| dir.join(DOCKER_CODEX_HOME_DIR))
+            .unwrap_or_else(|| request.workspace_dir.join(DOCKER_CODEX_HOME_DIR));
+        ensure_codex_config_at(
+            &model_name,
+            &azure_endpoint,
+            &codex_home,
+            Path::new(DOCKER_WORKSPACE_DIR),
+            &sandbox_mode,
+        )?;
+    } else {
+        ensure_codex_config(
+            &model_name,
+            &azure_endpoint,
+            request.workspace_dir,
+            &sandbox_mode,
+        )?;
+    }
     ensure_github_cli_auth(&github_auth)?;
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -319,38 +380,126 @@ fn run_codex_task(
         !request.reply_to.is_empty(),
     );
 
-    let mut cmd = Command::new("codex");
-    cmd.arg("exec")
-        .arg("--skip-git-repo-check")
-        .arg("-m")
-        .arg(&model_name)
-        .arg("-c")
-        .arg("web_search=\"live\"")
-        .arg("-c")
-        .arg("ask_for_approval=\"never\"")
-        .arg("-c")
-        .arg("sandbox=\"workspace-write\"")
-        .arg("-c")
-        .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
-        .arg("--cd")
-        .arg(request.workspace_dir)
-        .arg(prompt)
-        .env("AZURE_OPENAI_API_KEY_BACKUP", api_key)
-        .current_dir(request.workspace_dir);
-    for (key, value) in github_auth.env_overrides {
-        cmd.env(key, value);
-    }
-    if let Some(askpass_path) = github_auth.askpass_path {
-        cmd.env("GIT_ASKPASS", askpass_path);
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
-    }
+    let output = if use_docker {
+        ensure_docker_image_available(&docker_image)?;
+        let host_workspace_dir = host_workspace_dir
+            .as_ref()
+            .ok_or(RunTaskError::MissingEnv {
+                key: "RUN_TASK_DOCKER_IMAGE",
+            })?;
+        let askpass_container_path = github_auth
+            .askpass_path
+            .as_ref()
+            .and_then(|path| workspace_path_in_container(path, host_workspace_dir));
 
-    let output = match cmd.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Err(RunTaskError::CodexNotFound)
+        if github_auth.askpass_path.is_some() && askpass_container_path.is_none() {
+            return Err(RunTaskError::InvalidPath {
+                label: "git_askpass_path",
+                path: github_auth
+                    .askpass_path
+                    .clone()
+                    .unwrap_or_else(|| host_workspace_dir.join("missing")),
+                reason: "askpass path is not within workspace_dir",
+            });
         }
-        Err(err) => return Err(RunTaskError::Io(err)),
+
+        let mut cmd = Command::new("docker");
+        cmd.arg("run")
+            .arg("--rm")
+            .arg("--workdir")
+            .arg(DOCKER_WORKSPACE_DIR)
+            .arg("-v")
+            .arg(format!(
+                "{}:{}",
+                host_workspace_dir.display(),
+                DOCKER_WORKSPACE_DIR
+            ))
+            .arg("-e")
+            .arg(format!("HOME={}", DOCKER_WORKSPACE_DIR))
+            .arg("-e")
+            .arg(format!(
+                "CODEX_HOME={}/{}",
+                DOCKER_WORKSPACE_DIR, DOCKER_CODEX_HOME_DIR
+            ))
+            .arg("-e")
+            .arg(format!("AZURE_OPENAI_API_KEY_BACKUP={}", api_key))
+            .arg("-e")
+            .arg(format!("AZURE_OPENAI_ENDPOINT_BACKUP={}", azure_endpoint));
+        for (key, value) in &github_auth.env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
+        if let Some(container_path) = askpass_container_path {
+            cmd.arg("-e")
+                .arg(format!("GIT_ASKPASS={}", container_path.display()))
+                .arg("-e")
+                .arg("GIT_TERMINAL_PROMPT=0");
+        }
+        cmd.arg("--entrypoint")
+            .arg("codex")
+            .arg(&docker_image)
+            .arg("exec");
+        if bypass_sandbox {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(&model_name)
+            .arg("-c")
+            .arg("web_search=\"live\"")
+            .arg("-c")
+            .arg("ask_for_approval=\"never\"")
+            .arg("-c")
+            .arg(format!("sandbox=\"{}\"", sandbox_mode))
+            .arg("-c")
+            .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
+            .arg("--cd")
+            .arg(DOCKER_WORKSPACE_DIR)
+            .arg(prompt);
+
+        match cmd.output() {
+            Ok(output) => output,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(RunTaskError::DockerNotFound)
+            }
+            Err(err) => return Err(RunTaskError::Io(err)),
+        }
+    } else {
+        let mut cmd = Command::new("codex");
+        cmd.arg("exec");
+        if bypass_sandbox {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(&model_name)
+            .arg("-c")
+            .arg("web_search=\"live\"")
+            .arg("-c")
+            .arg("ask_for_approval=\"never\"")
+            .arg("-c")
+            .arg(format!("sandbox=\"{}\"", sandbox_mode))
+            .arg("-c")
+            .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
+            .arg("--cd")
+            .arg(request.workspace_dir)
+            .arg(prompt)
+            .env("AZURE_OPENAI_API_KEY_BACKUP", api_key)
+            .current_dir(request.workspace_dir);
+        for (key, value) in github_auth.env_overrides {
+            cmd.env(key, value);
+        }
+        if let Some(askpass_path) = github_auth.askpass_path {
+            cmd.env("GIT_ASKPASS", askpass_path);
+            cmd.env("GIT_TERMINAL_PROMPT", "0");
+        }
+
+        match cmd.output() {
+            Ok(output) => output,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(RunTaskError::CodexNotFound)
+            }
+            Err(err) => return Err(RunTaskError::Io(err)),
+        }
     };
 
     let mut combined_output = String::new();
@@ -361,15 +510,23 @@ fn run_codex_task(
     let output_tail = tail_string(&combined_output, 2000);
 
     if !output.status.success() {
-        return Err(RunTaskError::CodexFailed {
-            status: output.status.code(),
-            output: output_tail,
+        return Err(if use_docker {
+            RunTaskError::DockerFailed {
+                status: output.status.code(),
+                output: output_tail,
+            }
+        } else {
+            RunTaskError::CodexFailed {
+                status: output.status.code(),
+                output: output_tail,
+            }
         });
     }
 
     if !reply_html_path.exists() {
         return Err(RunTaskError::OutputMissing {
             path: reply_html_path,
+            output: output_tail,
         });
     }
 
@@ -514,6 +671,116 @@ fn ensure_dir_exists(path: &Path, label: &'static str) -> Result<(), RunTaskErro
     Ok(())
 }
 
+fn canonicalize_dir(path: &Path) -> Result<PathBuf, RunTaskError> {
+    fs::canonicalize(path).map_err(RunTaskError::Io)
+}
+
+fn workspace_path_in_container(path: &Path, host_workspace_dir: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(host_workspace_dir).ok()?;
+    Some(Path::new(DOCKER_WORKSPACE_DIR).join(relative))
+}
+
+fn ensure_docker_image_available(image: &str) -> Result<(), RunTaskError> {
+    if docker_image_exists(image)? {
+        return Ok(());
+    }
+
+    if !env_enabled_default("RUN_TASK_DOCKER_AUTO_BUILD", true) {
+        return Err(RunTaskError::DockerFailed {
+            status: None,
+            output: format!(
+                "docker image '{}' not found and auto-build disabled (set RUN_TASK_DOCKER_AUTO_BUILD=1)",
+                image
+            ),
+        });
+    }
+
+    let (dockerfile, context) = resolve_docker_build_paths()?;
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "build",
+        "-t",
+        image,
+        "-f",
+        dockerfile.to_string_lossy().as_ref(),
+        context.to_string_lossy().as_ref(),
+    ]);
+
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(RunTaskError::DockerNotFound)
+        }
+        Err(err) => return Err(RunTaskError::Io(err)),
+    };
+    let mut combined_output = String::new();
+    combined_output.push_str(&String::from_utf8_lossy(&output.stdout));
+    combined_output.push_str(&String::from_utf8_lossy(&output.stderr));
+    let output_tail = tail_string(&combined_output, 2000);
+
+    if !output.status.success() {
+        return Err(RunTaskError::DockerFailed {
+            status: output.status.code(),
+            output: output_tail,
+        });
+    }
+
+    Ok(())
+}
+
+fn docker_image_exists(image: &str) -> Result<bool, RunTaskError> {
+    let output = match Command::new("docker")
+        .args(["image", "inspect", image])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(RunTaskError::DockerNotFound)
+        }
+        Err(err) => return Err(RunTaskError::Io(err)),
+    };
+
+    Ok(output.status.success())
+}
+
+fn resolve_docker_build_paths() -> Result<(PathBuf, PathBuf), RunTaskError> {
+    let cwd = env::current_dir().map_err(RunTaskError::Io)?;
+    let dockerfile = if let Some(path) = resolve_env_path("RUN_TASK_DOCKERFILE", &cwd) {
+        path
+    } else {
+        let candidate = cwd.join("Dockerfile");
+        if candidate.exists() {
+            candidate
+        } else {
+            let candidate = cwd.join("..").join("Dockerfile");
+            if candidate.exists() {
+                candidate
+            } else {
+                return Err(RunTaskError::InvalidPath {
+                    label: "dockerfile",
+                    path: cwd.join("Dockerfile"),
+                    reason: "Dockerfile not found; set RUN_TASK_DOCKERFILE",
+                });
+            }
+        }
+    };
+
+    let context = if let Some(path) = resolve_env_path("RUN_TASK_DOCKER_BUILD_CONTEXT", &cwd) {
+        path
+    } else {
+        dockerfile
+            .parent()
+            .map(PathBuf::from)
+            .ok_or(RunTaskError::InvalidPath {
+                label: "docker_build_context",
+                path: dockerfile.clone(),
+                reason: "could not resolve Dockerfile directory",
+            })?
+    };
+
+    Ok((dockerfile, context))
+}
+
 fn resolve_rel_dir(
     workspace_dir: &Path,
     rel_dir: &Path,
@@ -608,7 +875,7 @@ fn unquote_env_value(value: &str) -> &str {
     value
 }
 
-fn resolve_github_auth() -> Result<GitHubAuthConfig, RunTaskError> {
+fn resolve_github_auth(askpass_dir: Option<&Path>) -> Result<GitHubAuthConfig, RunTaskError> {
     let gh_token = read_env_trimmed("GH_TOKEN");
     let github_token = read_env_trimmed("GITHUB_TOKEN");
     let pat_token = read_env_trimmed("GITHUB_PERSONAL_ACCESS_TOKEN");
@@ -658,7 +925,10 @@ fn resolve_github_auth() -> Result<GitHubAuthConfig, RunTaskError> {
     }
 
     let askpass_path = if token.is_some() {
-        Some(write_git_askpass_script()?)
+        let target_dir = askpass_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir);
+        Some(write_git_askpass_script_in(&target_dir)?)
     } else {
         None
     };
@@ -809,7 +1079,7 @@ fn read_env_trimmed(key: &str) -> Option<String> {
     if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(unquote_env_value(trimmed).to_string())
     }
 }
 
@@ -830,8 +1100,33 @@ fn env_enabled(key: &str) -> bool {
     }
 }
 
-fn write_git_askpass_script() -> Result<PathBuf, RunTaskError> {
-    let mut path = env::temp_dir();
+fn env_enabled_default(key: &str, default_value: bool) -> bool {
+    match env::var(key) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !(normalized.is_empty() || normalized == "0" || normalized == "false")
+        }
+        Err(_) => default_value,
+    }
+}
+
+fn resolve_env_path(key: &str, cwd: &Path) -> Option<PathBuf> {
+    let value = env::var(key).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(cwd.join(path))
+    }
+}
+
+fn write_git_askpass_script_in(dir: &Path) -> Result<PathBuf, RunTaskError> {
+    fs::create_dir_all(dir)?;
+    let mut path = dir.to_path_buf();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -852,9 +1147,31 @@ fn write_git_askpass_script() -> Result<PathBuf, RunTaskError> {
     Ok(path)
 }
 
-fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), RunTaskError> {
+fn ensure_codex_config(
+    model_name: &str,
+    azure_endpoint: &str,
+    workspace_dir: &Path,
+    sandbox_mode: &str,
+) -> Result<(), RunTaskError> {
     let home = env::var("HOME").map_err(|_| RunTaskError::MissingEnv { key: "HOME" })?;
-    let config_path = PathBuf::from(home).join(".codex").join("config.toml");
+    let config_dir = PathBuf::from(home).join(".codex");
+    ensure_codex_config_at(
+        model_name,
+        azure_endpoint,
+        &config_dir,
+        workspace_dir,
+        sandbox_mode,
+    )
+}
+
+fn ensure_codex_config_at(
+    model_name: &str,
+    azure_endpoint: &str,
+    config_dir: &Path,
+    trust_workspace_dir: &Path,
+    sandbox_mode: &str,
+) -> Result<(), RunTaskError> {
+    let config_path = config_dir.join("config.toml");
     let config_dir = config_path.parent().ok_or(RunTaskError::InvalidPath {
         label: "codex_config_dir",
         path: config_path.clone(),
@@ -865,7 +1182,8 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     let endpoint = normalize_azure_endpoint(azure_endpoint);
     let block = CODEX_CONFIG_BLOCK_TEMPLATE
         .replace("{model_name}", model_name)
-        .replace("{azure_endpoint}", &endpoint);
+        .replace("{azure_endpoint}", &endpoint)
+        .replace("{sandbox_mode}", sandbox_mode);
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -874,8 +1192,39 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     };
 
     let updated = update_config_block(&existing, &block);
+    let updated = ensure_project_trust(&updated, trust_workspace_dir);
     fs::write(config_path, updated)?;
     Ok(())
+}
+
+fn ensure_project_trust(existing: &str, workspace_dir: &Path) -> String {
+    let workspace_str = workspace_dir.to_string_lossy();
+    let escaped = toml_escape(&workspace_str);
+    let header = format!("[projects.\"{escaped}\"]");
+    if existing.contains(&header) {
+        return existing.to_string();
+    }
+    let mut updated = existing.trim_end().to_string();
+    if !updated.is_empty() {
+        updated.push_str("\n\n");
+    }
+    updated.push_str(&header);
+    updated.push('\n');
+    updated.push_str("trust_level = \"trusted\"\n");
+    updated
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn codex_sandbox_mode() -> String {
+    env::var("CODEX_SANDBOX").unwrap_or_else(|_| "workspace-write".to_string())
+}
+
+fn codex_bypass_sandbox() -> bool {
+    env_enabled("CODEX_BYPASS_SANDBOX")
+        || env_enabled("CODEX_DANGEROUSLY_BYPASS_SANDBOX")
 }
 
 fn normalize_azure_endpoint(endpoint: &str) -> String {
