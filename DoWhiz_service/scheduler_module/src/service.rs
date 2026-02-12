@@ -25,6 +25,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::adapters::slack::{is_url_verification, SlackChallengeResponse, SlackEventWrapper};
 use crate::employee_config::{load_employee_directory, EmployeeDirectory, EmployeeProfile};
 use crate::index_store::{IndexStore, TaskRef};
 use crate::mailbox;
@@ -443,6 +444,7 @@ pub async fn run_server(
         .route("/", get(health))
         .route("/health", get(health))
         .route("/postmark/inbound", post(postmark_inbound))
+        .route("/slack/events", post(slack_events))
         .with_state(state)
         .layer(DefaultBodyLimit::max(config.inbound_body_max_bytes));
 
@@ -586,6 +588,99 @@ async fn postmark_inbound(State(state): State<AppState>, body: Bytes) -> impl In
     });
 
     (StatusCode::OK, Json(json!({"status": "accepted"})))
+}
+
+async fn slack_events(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
+    // Check for URL verification challenge first
+    if let Some(verification) = is_url_verification(&body) {
+        info!("slack url verification challenge received");
+        let response = SlackChallengeResponse {
+            challenge: verification.challenge,
+        };
+        return (StatusCode::OK, Json(json!(response)));
+    }
+
+    // Parse the event wrapper to extract event_id for deduplication
+    let wrapper: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"status": "bad_json"})));
+        }
+    };
+
+    info!("slack event received");
+
+    // Extract event_id for deduplication
+    let event_id = wrapper
+        .get("event_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if !event_id.is_empty() {
+        let is_new = {
+            let mut store = state.dedupe_store.lock().await;
+            match store.mark_if_new(&[event_id.to_string()]) {
+                Ok(value) => value,
+                Err(err) => {
+                    error!("dedupe store error: {err}");
+                    true
+                }
+            }
+        };
+
+        if !is_new {
+            return (StatusCode::OK, Json(json!({"status": "duplicate"})));
+        }
+    }
+
+    // TODO: Process Slack event payload similar to postmark_inbound
+    // For now, just acknowledge receipt
+    let config = state.config.clone();
+    let _user_store = state.user_store.clone();
+    let _index_store = state.index_store.clone();
+    let body_bytes = body.to_vec();
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = process_slack_event(&config, &body_bytes) {
+            error!("failed to process slack event: {err}");
+        }
+    });
+
+    (StatusCode::OK, Json(json!({"status": "accepted"})))
+}
+
+fn process_slack_event(_config: &ServiceConfig, raw_payload: &[u8]) -> Result<(), BoxError> {
+    use crate::adapters::slack::SlackInboundAdapter;
+    use crate::channel::InboundAdapter;
+
+    info!("processing slack event");
+
+    let adapter = SlackInboundAdapter::default();
+    let message = adapter.parse(raw_payload)?;
+
+    // Check if this is a bot message (should be ignored)
+    let wrapper: SlackEventWrapper = serde_json::from_slice(raw_payload)?;
+    if let Some(event) = &wrapper.event {
+        if adapter.is_bot_message(event) {
+            info!("ignoring bot message from user {:?}", event.user);
+            return Ok(());
+        }
+    }
+
+    info!(
+        "slack message from {} in channel {:?}: {:?}",
+        message.sender,
+        message.metadata.slack_channel_id,
+        message.text_body
+    );
+
+    // TODO: Create workspace and schedule task similar to email flow
+    // This will involve:
+    // 1. Look up or create user based on Slack user ID
+    // 2. Create/get thread workspace
+    // 3. Save the message to workspace
+    // 4. Schedule a RunTask to process and reply
+
+    Ok(())
 }
 
 pub fn process_inbound_payload(
