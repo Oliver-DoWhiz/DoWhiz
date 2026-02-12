@@ -107,7 +107,7 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                 })
             }
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 self.sent_subjects
                     .lock()
                     .expect("sent_subjects lock poisoned")
@@ -251,7 +251,7 @@ fn thread_latest_epoch_end_to_end() {
     let pending_send = scheduler
         .tasks()
         .iter()
-        .filter(|task| matches!(task.kind, TaskKind::SendEmail(_)) && task.enabled)
+        .filter(|task| matches!(task.kind, TaskKind::SendReply(_)) && task.enabled)
         .count();
     assert_eq!(pending_send, 1, "pending send should exist");
 
@@ -280,7 +280,7 @@ fn thread_latest_epoch_end_to_end() {
     let enabled_sends_after_cancel = scheduler
         .tasks()
         .iter()
-        .filter(|task| matches!(task.kind, TaskKind::SendEmail(_)) && task.enabled)
+        .filter(|task| matches!(task.kind, TaskKind::SendReply(_)) && task.enabled)
         .count();
     assert_eq!(
         enabled_sends_after_cancel, 0,

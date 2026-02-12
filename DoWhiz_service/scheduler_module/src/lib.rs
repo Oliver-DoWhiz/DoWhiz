@@ -14,6 +14,8 @@ use uuid::Uuid;
 pub(crate) mod thread_state;
 pub(crate) mod mailbox;
 pub mod employee_config;
+pub mod channel;
+pub mod adapters;
 use crate::memory_store::{
     resolve_user_memory_dir, sync_user_memory_to_workspace, sync_workspace_memory_to_user,
 };
@@ -24,16 +26,27 @@ use crate::thread_state::{
     current_thread_epoch, default_thread_state_path, find_thread_state_path,
 };
 
+use crate::channel::Channel;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskKind {
-    SendEmail(SendEmailTask),
+    /// Send a reply message (email, Slack, etc.)
+    /// Note: Serializes as "send_email" for backward compatibility
+    #[serde(rename = "send_email")]
+    SendReply(SendReplyTask),
     RunTask(RunTaskTask),
     Noop,
 }
 
+/// Task for sending an outbound reply message to any channel.
+///
+/// Supports email (Postmark), Slack, Telegram, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendEmailTask {
+pub struct SendReplyTask {
+    /// The channel to send this message on (defaults to Email for backward compat)
+    #[serde(default)]
+    pub channel: Channel,
     pub subject: String,
     pub html_path: PathBuf,
     pub attachments_dir: PathBuf,
@@ -155,7 +168,7 @@ pub struct ModuleExecutor;
 impl TaskExecutor for ModuleExecutor {
     fn execute(&self, task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
         match task {
-            TaskKind::SendEmail(task) => {
+            TaskKind::SendReply(task) => {
                 if let Some(expected_epoch) = task.thread_epoch {
                     let state_path = task
                         .thread_state_path
@@ -779,7 +792,7 @@ impl SqliteSchedulerStore {
                 }
             };
             let kind = match kind_raw.as_str() {
-                "send_email" => TaskKind::SendEmail(self.load_send_email_task(&conn, &id_raw)?),
+                "send_email" => TaskKind::SendReply(self.load_send_email_task(&conn, &id_raw)?),
                 "run_task" => TaskKind::RunTask(self.load_run_task_task(&conn, &id_raw)?),
                 "noop" => TaskKind::Noop,
                 other => {
@@ -822,7 +835,7 @@ impl SqliteSchedulerStore {
         )?;
 
         match &task.kind {
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 tx.execute(
                     "INSERT INTO send_email_tasks (task_id, subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -950,7 +963,7 @@ impl SqliteSchedulerStore {
         &self,
         conn: &Connection,
         task_id: &str,
-    ) -> Result<SendEmailTask, SchedulerError> {
+    ) -> Result<SendReplyTask, SchedulerError> {
         let row = conn
             .query_row(
                 "SELECT subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path
@@ -1008,7 +1021,8 @@ impl SqliteSchedulerStore {
             }
         }
 
-        Ok(SendEmailTask {
+        Ok(SendReplyTask {
+            channel: Channel::default(),
             subject,
             html_path: PathBuf::from(html_path),
             attachments_dir: PathBuf::from(attachments_dir),
@@ -1112,7 +1126,7 @@ impl SqliteSchedulerStore {
 
 fn task_kind_label(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::SendReply(_) => "send_email",
         TaskKind::RunTask(_) => "run_task",
         TaskKind::Noop => "noop",
     }
@@ -1357,7 +1371,7 @@ fn task_status_label(task: &ScheduledTask, now: DateTime<Utc>) -> String {
 
 fn task_label(kind: &TaskKind) -> Option<String> {
     match kind {
-        TaskKind::SendEmail(task) => {
+        TaskKind::SendReply(task) => {
             if task.subject.trim().is_empty() {
                 None
             } else {
@@ -1473,7 +1487,8 @@ fn schedule_auto_reply<E: TaskExecutor>(
     let reply_context = load_reply_context(&task.workspace_dir);
     let reply_from = task.reply_from.clone().or(reply_context.from.clone());
 
-    let send_task = SendEmailTask {
+    let send_task = SendReplyTask {
+        channel: Channel::default(),
         subject: reply_context.subject,
         html_path,
         attachments_dir,
@@ -1489,7 +1504,7 @@ fn schedule_auto_reply<E: TaskExecutor>(
     };
 
     let task_id =
-        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendEmail(send_task))?;
+        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendReply(send_task))?;
     info!(
         "scheduled auto reply task {} from {}",
         task_id,
@@ -1564,12 +1579,13 @@ fn schedule_send_email<E: TaskExecutor>(
         .from
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
+        .filter(|value: &&str| !value.is_empty())
+        .map(|value: &str| value.to_string())
         .or_else(|| task.reply_from.clone())
         .or_else(|| reply_context.from.clone());
 
-    let send_task = SendEmailTask {
+    let send_task = SendReplyTask {
+        channel: Channel::default(),
         subject: request.subject.clone(),
         html_path,
         attachments_dir,
@@ -1587,7 +1603,7 @@ fn schedule_send_email<E: TaskExecutor>(
     if let Some(run_at_raw) = request.run_at.as_deref() {
         match parse_datetime(run_at_raw) {
             Ok(run_at) => {
-                let task_id = scheduler.add_one_shot_at(run_at, TaskKind::SendEmail(send_task))?;
+                let task_id = scheduler.add_one_shot_at(run_at, TaskKind::SendReply(send_task))?;
                 info!(
                     "scheduled follow-up send_email task {} from {} run_at={}",
                     task_id,
@@ -1610,8 +1626,8 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let delay_seconds = request
         .delay_seconds
-        .or_else(|| request.delay_minutes.map(|value| value.saturating_mul(60)));
-    let delay_seconds = match delay_seconds {
+        .or_else(|| request.delay_minutes.map(|value: i64| value.saturating_mul(60)));
+    let delay_seconds: u64 = match delay_seconds {
         Some(value) => value.max(0) as u64,
         None => {
             warn!(
@@ -1624,7 +1640,7 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let task_id = scheduler.add_one_shot_in(
         Duration::from_secs(delay_seconds),
-        TaskKind::SendEmail(send_task),
+        TaskKind::SendReply(send_task),
     )?;
     info!(
         "scheduled follow-up send_email task {} from {} delay_seconds={}",

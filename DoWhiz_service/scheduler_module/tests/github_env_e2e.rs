@@ -121,7 +121,7 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                 })
             }
-            TaskKind::SendEmail(_) => Ok(TaskExecution::default()),
+            TaskKind::SendReply(_) => Ok(TaskExecution::default()),
             TaskKind::Noop => Ok(TaskExecution::default()),
         }
     }
