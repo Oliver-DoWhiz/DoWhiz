@@ -63,8 +63,8 @@ function App() {
       body: 'Implement the requested feature and open a PR.'
     },
     {
-      name: 'Logan',
-      email: 'logan@dowhiz.com',
+      name: 'Lumio',
+      email: 'lumio@dowhiz.com',
       nickname: 'Sky-Dragon',
       title: 'CEO',
       desc: 'CEO focused on strategy, leadership, and decision-making.',
