@@ -62,7 +62,7 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                 })
             }
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 self.sent_subjects
                     .lock()
                     .expect("sent_subjects lock poisoned")
@@ -228,9 +228,9 @@ fn scheduler_actions_end_to_end() {
     let send_email_task = scheduler
         .tasks()
         .iter()
-        .find(|task| matches!(task.kind, TaskKind::SendEmail(_)))
+        .find(|task| matches!(task.kind, TaskKind::SendReply(_)))
         .expect("send_email task missing");
-    if let TaskKind::SendEmail(send) = &send_email_task.kind {
+    if let TaskKind::SendReply(send) = &send_email_task.kind {
         assert_eq!(send.subject, "Follow up");
     }
 

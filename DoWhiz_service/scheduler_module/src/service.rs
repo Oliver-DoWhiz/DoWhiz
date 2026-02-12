@@ -826,7 +826,7 @@ fn format_datetime_opt(value: Option<DateTime<Utc>>) -> String {
 
 fn task_kind_label(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::SendReply(_) => "send_email",
         TaskKind::RunTask(_) => "run_task",
         TaskKind::Noop => "noop",
     }
@@ -1096,7 +1096,7 @@ fn cancel_pending_thread_tasks<E: crate::TaskExecutor>(
             TaskKind::RunTask(run) => {
                 run.workspace_dir == workspace && run.thread_epoch.unwrap_or(0) < current_epoch
             }
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 let same_thread = send
                     .thread_state_path
                     .as_ref()
