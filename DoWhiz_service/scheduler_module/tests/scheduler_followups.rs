@@ -61,6 +61,7 @@ fn run_task_followups_persist_to_sqlite() {
         thread_id: None,
         thread_epoch: None,
         thread_state_path: None,
+        channel: scheduler_module::channel::Channel::default(),
     };
 
     let mut scheduler =
@@ -79,7 +80,7 @@ fn run_task_followups_persist_to_sqlite() {
         .tasks()
         .iter()
         .find_map(|task| {
-            if let TaskKind::SendEmail(send) = &task.kind {
+            if let TaskKind::SendReply(send) = &task.kind {
                 Some(send)
             } else {
                 None

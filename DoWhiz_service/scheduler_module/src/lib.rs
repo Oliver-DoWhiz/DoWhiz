@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local, Utc};
 use cron::Schedule as CronSchedule;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -14,6 +14,8 @@ use uuid::Uuid;
 pub(crate) mod thread_state;
 pub(crate) mod mailbox;
 pub mod employee_config;
+pub mod channel;
+pub mod adapters;
 use crate::memory_store::{
     resolve_user_memory_dir, sync_user_memory_to_workspace, sync_workspace_memory_to_user,
 };
@@ -24,16 +26,27 @@ use crate::thread_state::{
     current_thread_epoch, default_thread_state_path, find_thread_state_path,
 };
 
+use crate::channel::Channel;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskKind {
-    SendEmail(SendEmailTask),
+    /// Send a reply message (email, Slack, etc.)
+    /// Note: Serializes as "send_email" for backward compatibility
+    #[serde(rename = "send_email")]
+    SendReply(SendReplyTask),
     RunTask(RunTaskTask),
     Noop,
 }
 
+/// Task for sending an outbound reply message to any channel.
+///
+/// Supports email (Postmark), Slack, Telegram, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendEmailTask {
+pub struct SendReplyTask {
+    /// The channel to send this message on (defaults to Email for backward compat)
+    #[serde(default)]
+    pub channel: Channel,
     pub subject: String,
     pub html_path: PathBuf,
     pub attachments_dir: PathBuf,
@@ -79,6 +92,9 @@ pub struct RunTaskTask {
     pub thread_epoch: Option<u64>,
     #[serde(default)]
     pub thread_state_path: Option<PathBuf>,
+    /// The channel to reply on (Email, Slack, etc.)
+    #[serde(default)]
+    pub channel: Channel,
 }
 
 fn default_runner() -> String {
@@ -155,7 +171,7 @@ pub struct ModuleExecutor;
 impl TaskExecutor for ModuleExecutor {
     fn execute(&self, task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
         match task {
-            TaskKind::SendEmail(task) => {
+            TaskKind::SendReply(task) => {
                 if let Some(expected_epoch) = task.thread_epoch {
                     let state_path = task
                         .thread_state_path
@@ -175,42 +191,15 @@ impl TaskExecutor for ModuleExecutor {
                         }
                     }
                 }
-                let params = send_emails_module::SendEmailParams {
-                    subject: task.subject.clone(),
-                    html_path: task.html_path.clone(),
-                    attachments_dir: task.attachments_dir.clone(),
-                    from: task.from.clone(),
-                    to: task.to.clone(),
-                    cc: task.cc.clone(),
-                    bcc: task.bcc.clone(),
-                    in_reply_to: task.in_reply_to.clone(),
-                    references: task.references.clone(),
-                };
-                let response = send_emails_module::send_email(&params)
-                    .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
-                if let Some(archive_root) = task.archive_root.as_ref() {
-                    dotenvy::dotenv().ok();
-                    let from = task
-                        .from
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or("");
-                    if let Err(err) = crate::past_emails::archive_outbound(
-                        archive_root,
-                        &task.subject,
-                        &task.html_path,
-                        &task.attachments_dir,
-                        &task.to,
-                        &task.cc,
-                        &task.bcc,
-                        task.in_reply_to.as_deref(),
-                        task.references.as_deref(),
-                        &response.message_id,
-                        &response.submitted_at,
-                        from,
-                    ) {
-                        warn!("failed to archive outbound email: {}", err);
+
+                // Dispatch to the appropriate adapter based on channel
+                match task.channel {
+                    Channel::Slack => {
+                        execute_slack_send(task)?;
+                    }
+                    Channel::Email | Channel::Telegram => {
+                        // Email (and Telegram as fallback) use Postmark
+                        execute_email_send(task)?;
                     }
                 }
                 Ok(TaskExecution::empty())
@@ -272,6 +261,104 @@ impl TaskExecutor for ModuleExecutor {
             TaskKind::Noop => Ok(TaskExecution::empty()),
         }
     }
+}
+
+/// Execute a SendReplyTask via email (Postmark).
+fn execute_email_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    let params = send_emails_module::SendEmailParams {
+        subject: task.subject.clone(),
+        html_path: task.html_path.clone(),
+        attachments_dir: task.attachments_dir.clone(),
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: task.cc.clone(),
+        bcc: task.bcc.clone(),
+        in_reply_to: task.in_reply_to.clone(),
+        references: task.references.clone(),
+    };
+    let response = send_emails_module::send_email(&params)
+        .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
+
+    if let Some(archive_root) = task.archive_root.as_ref() {
+        dotenvy::dotenv().ok();
+        let from = task
+            .from
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        if let Err(err) = crate::past_emails::archive_outbound(
+            archive_root,
+            &task.subject,
+            &task.html_path,
+            &task.attachments_dir,
+            &task.to,
+            &task.cc,
+            &task.bcc,
+            task.in_reply_to.as_deref(),
+            task.references.as_deref(),
+            &response.message_id,
+            &response.submitted_at,
+            from,
+        ) {
+            warn!("failed to archive outbound email: {}", err);
+        }
+    }
+    Ok(())
+}
+
+/// Execute a SendReplyTask via Slack.
+fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    use crate::adapters::slack::SlackOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter, OutboundMessage};
+
+    dotenvy::dotenv().ok();
+    let bot_token = std::env::var("SLACK_BOT_TOKEN")
+        .map_err(|_| SchedulerError::TaskFailed("SLACK_BOT_TOKEN not set".to_string()))?;
+
+    let adapter = SlackOutboundAdapter::new(bot_token);
+
+    // Read text content from html_path if it exists
+    let text_body = if task.html_path.exists() {
+        fs::read_to_string(&task.html_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let message = OutboundMessage {
+        channel: Channel::Slack,
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: vec![],
+        bcc: vec![],
+        subject: task.subject.clone(),
+        text_body,
+        html_body: String::new(),
+        html_path: Some(task.html_path.clone()),
+        attachments_dir: Some(task.attachments_dir.clone()),
+        thread_id: task.in_reply_to.clone(), // Use in_reply_to as thread_ts for Slack
+        metadata: ChannelMetadata {
+            slack_channel_id: task.to.first().cloned(),
+            ..Default::default()
+        },
+    };
+
+    let result = adapter.send(&message).map_err(|err| {
+        SchedulerError::TaskFailed(format!("Slack send failed: {}", err))
+    })?;
+
+    if !result.success {
+        return Err(SchedulerError::TaskFailed(format!(
+            "Slack API error: {}",
+            result.error.unwrap_or_default()
+        )));
+    }
+
+    info!(
+        "sent Slack message to {:?}, message_id={}",
+        task.to, result.message_id
+    );
+    Ok(())
 }
 
 pub struct Scheduler<E: TaskExecutor> {
@@ -544,6 +631,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'email',
     enabled INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     last_run TEXT,
@@ -571,6 +659,14 @@ CREATE TABLE IF NOT EXISTS send_email_recipients (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     recipient_type TEXT NOT NULL,
     address TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS send_slack_tasks (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    slack_channel_id TEXT NOT NULL,
+    thread_ts TEXT,
+    text_path TEXT NOT NULL,
+    workspace_dir TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_task_tasks (
@@ -648,6 +744,37 @@ fn ensure_send_email_task_columns(conn: &Connection) -> Result<(), SchedulerErro
     Ok(())
 }
 
+fn ensure_tasks_columns(conn: &Connection) -> Result<(), SchedulerError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(tasks)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+
+    if !columns.contains("channel") {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN channel TEXT NOT NULL DEFAULT 'email'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_send_slack_tasks_table(conn: &Connection) -> Result<(), SchedulerError> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS send_slack_tasks (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+            slack_channel_id TEXT NOT NULL,
+            thread_ts TEXT,
+            text_path TEXT NOT NULL,
+            workspace_dir TEXT
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_run_task_task_columns(conn: &Connection) -> Result<(), SchedulerError> {
     let mut stmt = conn.prepare("PRAGMA table_info(run_task_tasks)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -707,7 +834,7 @@ impl SqliteSchedulerStore {
     fn load_tasks(&self) -> Result<Vec<ScheduledTask>, SchedulerError> {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
-            "SELECT id, kind, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at
+            "SELECT id, kind, channel, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at
              FROM tasks
              ORDER BY created_at",
         )?;
@@ -715,13 +842,14 @@ impl SqliteSchedulerStore {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
 
@@ -730,6 +858,7 @@ impl SqliteSchedulerStore {
             let (
                 id_raw,
                 kind_raw,
+                channel_raw,
                 enabled_raw,
                 created_at_raw,
                 last_run_raw,
@@ -738,6 +867,7 @@ impl SqliteSchedulerStore {
                 next_run_raw,
                 run_at_raw,
             ) = row?;
+            let channel: Channel = channel_raw.parse().unwrap_or_default();
             let id = Uuid::parse_str(&id_raw)?;
             let created_at = parse_datetime(&created_at_raw)?;
             let last_run = parse_optional_datetime(last_run_raw.as_deref())?;
@@ -779,8 +909,17 @@ impl SqliteSchedulerStore {
                 }
             };
             let kind = match kind_raw.as_str() {
-                "send_email" => TaskKind::SendEmail(self.load_send_email_task(&conn, &id_raw)?),
-                "run_task" => TaskKind::RunTask(self.load_run_task_task(&conn, &id_raw)?),
+                "send_email" => {
+                    // Dispatch to appropriate loader based on channel
+                    let send_task = match channel {
+                        Channel::Slack => self.load_send_slack_task(&conn, &id_raw)?,
+                        Channel::Email | Channel::Telegram => {
+                            self.load_send_email_task(&conn, &id_raw)?
+                        }
+                    };
+                    TaskKind::SendReply(send_task)
+                }
+                "run_task" => TaskKind::RunTask(self.load_run_task_task(&conn, &id_raw, channel)?),
                 "noop" => TaskKind::Noop,
                 other => {
                     return Err(SchedulerError::Storage(format!(
@@ -805,12 +944,14 @@ impl SqliteSchedulerStore {
         let mut conn = self.open()?;
         let tx = conn.transaction()?;
         let (schedule_type, cron_expression, next_run, run_at) = schedule_columns(&task.schedule);
+        let channel = task_kind_channel(&task.kind);
         tx.execute(
-            "INSERT INTO tasks (id, kind, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO tasks (id, kind, channel, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 task.id.to_string(),
                 task_kind_label(&task.kind),
+                channel.to_string(),
                 bool_to_int(task.enabled),
                 format_datetime(task.created_at.clone()),
                 task.last_run.as_ref().map(|value| format_datetime(value.clone())),
@@ -822,30 +963,16 @@ impl SqliteSchedulerStore {
         )?;
 
         match &task.kind {
-            TaskKind::SendEmail(send) => {
-                tx.execute(
-                    "INSERT INTO send_email_tasks (task_id, subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    params![
-                        task.id.to_string(),
-                        send.subject.as_str(),
-                        send.html_path.to_string_lossy().into_owned(),
-                        send.attachments_dir.to_string_lossy().into_owned(),
-                        send.from.as_deref(),
-                        send.in_reply_to.as_deref(),
-                        send.references.as_deref(),
-                        send.archive_root
-                            .as_ref()
-                            .map(|value| value.to_string_lossy().into_owned()),
-                        send.thread_epoch.map(|value| value as i64),
-                        send.thread_state_path
-                            .as_ref()
-                            .map(|value| value.to_string_lossy().into_owned()),
-                    ],
-                )?;
-                insert_recipients(&tx, &task.id.to_string(), "to", &send.to)?;
-                insert_recipients(&tx, &task.id.to_string(), "cc", &send.cc)?;
-                insert_recipients(&tx, &task.id.to_string(), "bcc", &send.bcc)?;
+            TaskKind::SendReply(send) => {
+                // Dispatch to appropriate child table based on channel
+                match send.channel {
+                    Channel::Slack => {
+                        self.insert_send_slack_task(&tx, &task.id.to_string(), send)?;
+                    }
+                    Channel::Email | Channel::Telegram => {
+                        self.insert_send_email_task(&tx, &task.id.to_string(), send)?;
+                    }
+                }
             }
             TaskKind::RunTask(run) => {
                 tx.execute(
@@ -946,11 +1073,67 @@ impl SqliteSchedulerStore {
         Ok(())
     }
 
+    fn insert_send_email_task(
+        &self,
+        tx: &Transaction,
+        task_id: &str,
+        send: &SendReplyTask,
+    ) -> Result<(), SchedulerError> {
+        tx.execute(
+            "INSERT INTO send_email_tasks (task_id, subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                task_id,
+                send.subject.as_str(),
+                send.html_path.to_string_lossy().into_owned(),
+                send.attachments_dir.to_string_lossy().into_owned(),
+                send.from.as_deref(),
+                send.in_reply_to.as_deref(),
+                send.references.as_deref(),
+                send.archive_root
+                    .as_ref()
+                    .map(|value| value.to_string_lossy().into_owned()),
+                send.thread_epoch.map(|value| value as i64),
+                send.thread_state_path
+                    .as_ref()
+                    .map(|value| value.to_string_lossy().into_owned()),
+            ],
+        )?;
+        insert_recipients(tx, task_id, "to", &send.to)?;
+        insert_recipients(tx, task_id, "cc", &send.cc)?;
+        insert_recipients(tx, task_id, "bcc", &send.bcc)?;
+        Ok(())
+    }
+
+    fn insert_send_slack_task(
+        &self,
+        tx: &Transaction,
+        task_id: &str,
+        send: &SendReplyTask,
+    ) -> Result<(), SchedulerError> {
+        // For Slack, we use to[0] as channel_id and html_path as text_path
+        let slack_channel_id = send.to.first().cloned().unwrap_or_default();
+        let thread_ts = send.in_reply_to.clone();
+        let workspace_dir = send.archive_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+        tx.execute(
+            "INSERT INTO send_slack_tasks (task_id, slack_channel_id, thread_ts, text_path, workspace_dir)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                task_id,
+                slack_channel_id,
+                thread_ts,
+                send.html_path.to_string_lossy().into_owned(),
+                workspace_dir,
+            ],
+        )?;
+        Ok(())
+    }
+
     fn load_send_email_task(
         &self,
         conn: &Connection,
         task_id: &str,
-    ) -> Result<SendEmailTask, SchedulerError> {
+    ) -> Result<SendReplyTask, SchedulerError> {
         let row = conn
             .query_row(
                 "SELECT subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path
@@ -1008,7 +1191,8 @@ impl SqliteSchedulerStore {
             }
         }
 
-        Ok(SendEmailTask {
+        Ok(SendReplyTask {
+            channel: Channel::Email,
             subject,
             html_path: PathBuf::from(html_path),
             attachments_dir: PathBuf::from(attachments_dir),
@@ -1024,10 +1208,53 @@ impl SqliteSchedulerStore {
         })
     }
 
+    fn load_send_slack_task(
+        &self,
+        conn: &Connection,
+        task_id: &str,
+    ) -> Result<SendReplyTask, SchedulerError> {
+        let row = conn
+            .query_row(
+                "SELECT slack_channel_id, thread_ts, text_path, workspace_dir
+                 FROM send_slack_tasks
+                 WHERE task_id = ?1",
+                params![task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let (slack_channel_id, thread_ts, text_path, workspace_dir) = row.ok_or_else(|| {
+            SchedulerError::Storage(format!("missing send_slack_tasks row for task {}", task_id))
+        })?;
+
+        Ok(SendReplyTask {
+            channel: Channel::Slack,
+            subject: String::new(), // Slack doesn't use subject
+            html_path: PathBuf::from(text_path),
+            attachments_dir: PathBuf::new(), // Slack attachments handled differently
+            from: None,
+            to: vec![slack_channel_id], // channel_id stored in to[0]
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            in_reply_to: thread_ts, // thread_ts stored in in_reply_to
+            references: None,
+            archive_root: workspace_dir.map(PathBuf::from),
+            thread_epoch: None,
+            thread_state_path: None,
+        })
+    }
+
     fn load_run_task_task(
         &self,
         conn: &Connection,
         task_id: &str,
+        channel: Channel,
     ) -> Result<RunTaskTask, SchedulerError> {
         let row = conn
             .query_row(
@@ -1094,6 +1321,7 @@ impl SqliteSchedulerStore {
             thread_id,
             thread_epoch: thread_epoch_raw.map(|value| value as u64),
             thread_state_path: normalize_optional_path(thread_state_path),
+            channel,
         })
     }
 
@@ -1104,7 +1332,9 @@ impl SqliteSchedulerStore {
         let conn = Connection::open(&self.path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(SCHEDULER_SCHEMA)?;
+        ensure_tasks_columns(&conn)?;
         ensure_send_email_task_columns(&conn)?;
+        ensure_send_slack_tasks_table(&conn)?;
         ensure_run_task_task_columns(&conn)?;
         Ok(conn)
     }
@@ -1112,9 +1342,17 @@ impl SqliteSchedulerStore {
 
 fn task_kind_label(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::SendReply(_) => "send_email",
         TaskKind::RunTask(_) => "run_task",
         TaskKind::Noop => "noop",
+    }
+}
+
+fn task_kind_channel(kind: &TaskKind) -> Channel {
+    match kind {
+        TaskKind::SendReply(send) => send.channel.clone(),
+        TaskKind::RunTask(run) => run.channel.clone(),
+        TaskKind::Noop => Channel::default(),
     }
 }
 
@@ -1357,7 +1595,7 @@ fn task_status_label(task: &ScheduledTask, now: DateTime<Utc>) -> String {
 
 fn task_label(kind: &TaskKind) -> Option<String> {
     match kind {
-        TaskKind::SendEmail(task) => {
+        TaskKind::SendReply(task) => {
             if task.subject.trim().is_empty() {
                 None
             } else {
@@ -1473,7 +1711,8 @@ fn schedule_auto_reply<E: TaskExecutor>(
     let reply_context = load_reply_context(&task.workspace_dir);
     let reply_from = task.reply_from.clone().or(reply_context.from.clone());
 
-    let send_task = SendEmailTask {
+    let send_task = SendReplyTask {
+        channel: task.channel.clone(),
         subject: reply_context.subject,
         html_path,
         attachments_dir,
@@ -1489,11 +1728,12 @@ fn schedule_auto_reply<E: TaskExecutor>(
     };
 
     let task_id =
-        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendEmail(send_task))?;
+        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendReply(send_task))?;
     info!(
-        "scheduled auto reply task {} from {}",
+        "scheduled auto reply task {} from {} via {:?}",
         task_id,
-        task.workspace_dir.display()
+        task.workspace_dir.display(),
+        task.channel
     );
     Ok(true)
 }
@@ -1564,12 +1804,13 @@ fn schedule_send_email<E: TaskExecutor>(
         .from
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
+        .filter(|value: &&str| !value.is_empty())
+        .map(|value: &str| value.to_string())
         .or_else(|| task.reply_from.clone())
         .or_else(|| reply_context.from.clone());
 
-    let send_task = SendEmailTask {
+    let send_task = SendReplyTask {
+        channel: task.channel.clone(),
         subject: request.subject.clone(),
         html_path,
         attachments_dir,
@@ -1587,12 +1828,13 @@ fn schedule_send_email<E: TaskExecutor>(
     if let Some(run_at_raw) = request.run_at.as_deref() {
         match parse_datetime(run_at_raw) {
             Ok(run_at) => {
-                let task_id = scheduler.add_one_shot_at(run_at, TaskKind::SendEmail(send_task))?;
+                let task_id = scheduler.add_one_shot_at(run_at, TaskKind::SendReply(send_task))?;
                 info!(
-                    "scheduled follow-up send_email task {} from {} run_at={}",
+                    "scheduled follow-up send_email task {} from {} run_at={} via {:?}",
                     task_id,
                     task.workspace_dir.display(),
-                    run_at.to_rfc3339()
+                    run_at.to_rfc3339(),
+                    task.channel
                 );
                 return Ok(true);
             }
@@ -1610,8 +1852,8 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let delay_seconds = request
         .delay_seconds
-        .or_else(|| request.delay_minutes.map(|value| value.saturating_mul(60)));
-    let delay_seconds = match delay_seconds {
+        .or_else(|| request.delay_minutes.map(|value: i64| value.saturating_mul(60)));
+    let delay_seconds: u64 = match delay_seconds {
         Some(value) => value.max(0) as u64,
         None => {
             warn!(
@@ -1624,7 +1866,7 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let task_id = scheduler.add_one_shot_in(
         Duration::from_secs(delay_seconds),
-        TaskKind::SendEmail(send_task),
+        TaskKind::SendReply(send_task),
     )?;
     info!(
         "scheduled follow-up send_email task {} from {} delay_seconds={}",
@@ -1969,6 +2211,7 @@ mod tests {
             thread_id: Some("thread-test".to_string()),
             thread_epoch: Some(1),
             thread_state_path: Some(workspace.join("thread_state.json")),
+            channel: Channel::default(),
         }
     }
 
