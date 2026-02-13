@@ -10,7 +10,8 @@ Cron-based scheduler (6-field format with seconds) that persists tasks to disk a
 
 Example:
 ```rust
-use scheduler_module::{ModuleExecutor, Scheduler, TaskKind, SendEmailTask};
+use scheduler_module::{ModuleExecutor, Scheduler, TaskKind, SendReplyTask};
+use scheduler_module::channel::Channel;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -19,19 +20,23 @@ let storage_path = PathBuf::from("/tmp/dowhiz_tasks.db");
 let executor = ModuleExecutor::default();
 let mut scheduler = Scheduler::load(storage_path, executor)?;
 
-let task = SendEmailTask {
+let task = SendReplyTask {
+    channel: Channel::Email,  // or Channel::Slack, Channel::Telegram
     subject: "Hello".to_string(),
     html_path: PathBuf::from("/path/to/reply_email_draft.html"),
     attachments_dir: PathBuf::from("/path/to/reply_email_attachments"),
+    from: None,
     to: vec!["mini-mouse@deep-tutor.com".to_string()],
     cc: Vec::new(),
     bcc: Vec::new(),
     in_reply_to: None,
     references: None,
     archive_root: None,
+    thread_epoch: None,
+    thread_state_path: None,
 };
 
-scheduler.add_cron_task("0 */5 * * * *", TaskKind::SendEmail(task))?;
+scheduler.add_cron_task("0 */5 * * * *", TaskKind::SendReply(task))?;
 
 let stop_flag = AtomicBool::new(false);
 scheduler.run_loop(Duration::from_secs(1), &stop_flag)?;

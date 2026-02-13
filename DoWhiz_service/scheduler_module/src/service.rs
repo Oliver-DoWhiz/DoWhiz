@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -7,6 +7,8 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use kuchiki::traits::*;
+use kuchiki::NodeRef;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -23,19 +25,29 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::adapters::slack::{is_url_verification, SlackChallengeResponse, SlackEventWrapper};
+use crate::employee_config::{load_employee_directory, EmployeeDirectory, EmployeeProfile};
 use crate::index_store::{IndexStore, TaskRef};
+use crate::mailbox;
 use crate::thread_state::{bump_thread_state, default_thread_state_path};
 use crate::user_store::{extract_emails, UserStore};
+use crate::channel::Channel;
 use crate::{
-    ModuleExecutor, RunTaskTask, Schedule, Scheduler, ScheduledTask, SchedulerError, TaskKind,
+    ModuleExecutor, RunTaskTask, Schedule, ScheduledTask, Scheduler, SchedulerError, TaskKind,
 };
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+pub const DEFAULT_INBOUND_BODY_MAX_BYTES: usize = 25 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub host: String,
     pub port: u16,
+    pub employee_id: String,
+    pub employee_config_path: PathBuf,
+    pub employee_profile: EmployeeProfile,
+    pub employee_directory: EmployeeDirectory,
     pub workspace_root: PathBuf,
     pub scheduler_state_path: PathBuf,
     pub processed_ids_path: PathBuf,
@@ -47,7 +59,12 @@ pub struct ServiceConfig {
     pub scheduler_poll_interval: Duration,
     pub scheduler_max_concurrency: usize,
     pub scheduler_user_max_concurrency: usize,
+    pub inbound_body_max_bytes: usize,
     pub skills_source_dir: Option<PathBuf>,
+    /// Slack bot OAuth token for sending messages
+    pub slack_bot_token: Option<String>,
+    /// Slack bot user ID for filtering out bot's own messages
+    pub slack_bot_user_id: Option<String>,
 }
 
 impl ServiceConfig {
@@ -60,27 +77,68 @@ impl ServiceConfig {
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(9001);
 
+        let employee_config_path =
+            resolve_path(env::var("EMPLOYEE_CONFIG_PATH").unwrap_or_else(|_| {
+                default_employee_config_path()
+                    .to_string_lossy()
+                    .into_owned()
+            }))?;
+        let employee_directory = load_employee_directory(&employee_config_path)?;
+        let employee_id = env::var("EMPLOYEE_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| employee_directory.default_employee_id.clone())
+            .or_else(|| employee_directory.employees.first().map(|emp| emp.id.clone()))
+            .ok_or_else(|| "employee config has no employees".to_string())?;
+        let employee_profile = employee_directory
+            .employee(&employee_id)
+            .ok_or_else(|| format!("employee '{}' not found in {}", employee_id, employee_config_path.display()))?
+            .clone();
+
+        let runtime_root = default_runtime_root()?;
+        let employee_runtime_root = runtime_root.join(&employee_id);
         let workspace_root = resolve_path(env::var("WORKSPACE_ROOT").unwrap_or_else(|_| {
-            ".workspace/run_task/workspaces".to_string()
+            employee_runtime_root
+                .join("workspaces")
+                .to_string_lossy()
+                .into_owned()
         }))?;
-        let scheduler_state_path = resolve_path(env::var("SCHEDULER_STATE_PATH").unwrap_or_else(
-            |_| ".workspace/run_task/state/tasks.db".to_string(),
-        ))?;
+        let scheduler_state_path =
+            resolve_path(env::var("SCHEDULER_STATE_PATH").unwrap_or_else(|_| {
+                employee_runtime_root
+                    .join("state")
+                    .join("tasks.db")
+                    .to_string_lossy()
+                    .into_owned()
+            }))?;
         let processed_ids_path =
             resolve_path(env::var("PROCESSED_IDS_PATH").unwrap_or_else(|_| {
-                ".workspace/run_task/state/postmark_processed_ids.txt".to_string()
+                employee_runtime_root
+                    .join("state")
+                    .join("postmark_processed_ids.txt")
+                    .to_string_lossy()
+                    .into_owned()
             }))?;
-        let users_root = resolve_path(env::var("USERS_ROOT").unwrap_or_else(|_| {
-            ".workspace/run_task/users".to_string()
-        }))?;
+        let users_root = resolve_path(
+            env::var("USERS_ROOT")
+                .unwrap_or_else(|_| employee_runtime_root.join("users").to_string_lossy().into_owned()),
+        )?;
         let users_db_path = resolve_path(env::var("USERS_DB_PATH").unwrap_or_else(|_| {
-            ".workspace/run_task/state/users.db".to_string()
+            employee_runtime_root
+                .join("state")
+                .join("users.db")
+                .to_string_lossy()
+                .into_owned()
         }))?;
         let task_index_path = resolve_path(env::var("TASK_INDEX_PATH").unwrap_or_else(|_| {
-            ".workspace/run_task/state/task_index.db".to_string()
+            employee_runtime_root
+                .join("state")
+                .join("task_index.db")
+                .to_string_lossy()
+                .into_owned()
         }))?;
-        let codex_model =
-            env::var("CODEX_MODEL").unwrap_or_else(|_| "gpt-5.2-codex".to_string());
+        let codex_model = env::var("CODEX_MODEL").unwrap_or_else(|_| "gpt-5.2-codex".to_string());
         let codex_disabled = env_flag("CODEX_DISABLED", false);
         let scheduler_poll_interval = env::var("SCHEDULER_POLL_INTERVAL_SECS")
             .ok()
@@ -98,11 +156,24 @@ impl ServiceConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(3);
+        let inbound_body_max_bytes = env::var("POSTMARK_INBOUND_MAX_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_INBOUND_BODY_MAX_BYTES);
         let skills_source_dir = Some(repo_skills_source_dir());
+
+        // Slack configuration
+        let slack_bot_token = env::var("SLACK_BOT_TOKEN").ok().filter(|s| !s.is_empty());
+        let slack_bot_user_id = env::var("SLACK_BOT_USER_ID").ok().filter(|s| !s.is_empty());
 
         Ok(Self {
             host,
             port,
+            employee_id,
+            employee_config_path,
+            employee_profile,
+            employee_directory,
             workspace_root,
             scheduler_state_path,
             processed_ids_path,
@@ -114,7 +185,10 @@ impl ServiceConfig {
             scheduler_poll_interval,
             scheduler_max_concurrency,
             scheduler_user_max_concurrency,
+            inbound_body_max_bytes,
             skills_source_dir,
+            slack_bot_token,
+            slack_bot_user_id,
         })
     }
 }
@@ -141,7 +215,11 @@ enum ClaimResult {
 
 impl SchedulerClaims {
     fn try_claim(&mut self, task_ref: &TaskRef, user_limit: usize) -> ClaimResult {
-        let active = self.running_users.get(&task_ref.user_id).copied().unwrap_or(0);
+        let active = self
+            .running_users
+            .get(&task_ref.user_id)
+            .copied()
+            .unwrap_or(0);
         if active >= user_limit {
             return ClaimResult::UserBusy;
         }
@@ -253,10 +331,8 @@ pub async fn run_server(
                     Ok(task_refs) => {
                         let mut current_due_tasks = HashSet::with_capacity(task_refs.len());
                         for task_ref in &task_refs {
-                            current_due_tasks.insert(format!(
-                                "{}@{}",
-                                task_ref.task_id, task_ref.user_id
-                            ));
+                            current_due_tasks
+                                .insert(format!("{}@{}", task_ref.task_id, task_ref.user_id));
                         }
                         if current_due_tasks != last_due_tasks {
                             if !current_due_tasks.is_empty() {
@@ -267,18 +343,12 @@ pub async fn run_server(
                                     })
                                     .collect::<Vec<_>>()
                                     .join(", ");
-                                info!(
-                                    "scheduler found {} due task(s): {}",
-                                    task_refs.len(),
-                                    refs
-                                );
+                                info!("scheduler found {} due task(s): {}", task_refs.len(), refs);
                             }
                             last_due_tasks = current_due_tasks.clone();
                         }
-                        logged_user_busy
-                            .retain(|key| current_due_tasks.contains(key));
-                        logged_task_busy
-                            .retain(|key| current_due_tasks.contains(key));
+                        logged_user_busy.retain(|key| current_due_tasks.contains(key));
+                        logged_task_busy.retain(|key| current_due_tasks.contains(key));
                         if current_due_tasks.is_empty() {
                             last_capacity_deferral = None;
                         }
@@ -296,12 +366,10 @@ pub async fn run_server(
                                 break;
                             }
                             last_capacity_deferral = None;
-                            let task_key =
-                                format!("{}@{}", task_ref.task_id, task_ref.user_id);
+                            let task_key = format!("{}@{}", task_ref.task_id, task_ref.user_id);
                             let claim_result = {
-                                let mut claims = claims
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner());
+                                let mut claims =
+                                    claims.lock().unwrap_or_else(|poison| poison.into_inner());
                                 claims.try_claim(&task_ref, scheduler_user_max_concurrency)
                             };
                             match claim_result {
@@ -354,9 +422,8 @@ pub async fn run_server(
                                         task_ref.task_id, task_ref.user_id, err
                                     );
                                 }
-                                let mut claims = claims
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner());
+                                let mut claims =
+                                    claims.lock().unwrap_or_else(|poison| poison.into_inner());
                                 claims.release(&task_ref);
                                 limiter.release();
                             });
@@ -388,7 +455,9 @@ pub async fn run_server(
         .route("/", get(health))
         .route("/health", get(health))
         .route("/postmark/inbound", post(postmark_inbound))
-        .with_state(state);
+        .route("/slack/events", post(slack_events))
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(config.inbound_body_max_bytes));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
@@ -407,8 +476,7 @@ fn execute_due_task(
 ) -> Result<(), BoxError> {
     let task_id = Uuid::parse_str(&task_ref.task_id)?;
     let user_paths = user_store.user_paths(&config.users_root, &task_ref.user_id);
-    let mut scheduler =
-        Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
+    let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
     let now = Utc::now();
     let summary = summarize_tasks(scheduler.tasks(), now);
     log_task_snapshot(&task_ref.user_id, "before_execute", &summary);
@@ -487,17 +555,11 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-async fn postmark_inbound(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
+async fn postmark_inbound(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let payload: PostmarkInbound = match serde_json::from_slice(&body) {
         Ok(payload) => payload,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"status": "bad_json"})),
-            );
+            return (StatusCode::BAD_REQUEST, Json(json!({"status": "bad_json"})));
         }
     };
 
@@ -525,14 +587,250 @@ async fn postmark_inbound(
     let payload_clone = payload.clone();
     let body_bytes = body.to_vec();
     tokio::task::spawn_blocking(move || {
-        if let Err(err) =
-            process_inbound_payload(&config, &user_store, &index_store, &payload_clone, &body_bytes)
-        {
+        if let Err(err) = process_inbound_payload(
+            &config,
+            &user_store,
+            &index_store,
+            &payload_clone,
+            &body_bytes,
+        ) {
             error!("failed to process inbound payload: {err}");
         }
     });
 
     (StatusCode::OK, Json(json!({"status": "accepted"})))
+}
+
+async fn slack_events(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
+    // Check for URL verification challenge first
+    if let Some(verification) = is_url_verification(&body) {
+        info!("slack url verification challenge received");
+        let response = SlackChallengeResponse {
+            challenge: verification.challenge,
+        };
+        return (StatusCode::OK, Json(json!(response)));
+    }
+
+    // Parse the event wrapper to extract event_id for deduplication
+    let wrapper: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"status": "bad_json"})));
+        }
+    };
+
+    info!("slack event received");
+
+    // Extract event_id for deduplication
+    let event_id = wrapper
+        .get("event_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if !event_id.is_empty() {
+        let is_new = {
+            let mut store = state.dedupe_store.lock().await;
+            match store.mark_if_new(&[event_id.to_string()]) {
+                Ok(value) => value,
+                Err(err) => {
+                    error!("dedupe store error: {err}");
+                    true
+                }
+            }
+        };
+
+        if !is_new {
+            return (StatusCode::OK, Json(json!({"status": "duplicate"})));
+        }
+    }
+
+    // Process Slack event payload similar to postmark_inbound
+    let config = state.config.clone();
+    let user_store = state.user_store.clone();
+    let index_store = state.index_store.clone();
+    let body_bytes = body.to_vec();
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = process_slack_event(&config, &user_store, &index_store, &body_bytes) {
+            error!("failed to process slack event: {err}");
+        }
+    });
+
+    (StatusCode::OK, Json(json!({"status": "accepted"})))
+}
+
+fn process_slack_event(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    index_store: &IndexStore,
+    raw_payload: &[u8],
+) -> Result<(), BoxError> {
+    use crate::adapters::slack::SlackInboundAdapter;
+    use crate::channel::InboundAdapter;
+
+    info!("processing slack event");
+
+    // Build bot_user_ids set from config
+    let mut bot_user_ids = HashSet::new();
+    if let Some(ref bot_id) = config.slack_bot_user_id {
+        bot_user_ids.insert(bot_id.clone());
+    }
+    let adapter = SlackInboundAdapter::new(bot_user_ids);
+
+    // Check if this is a bot message (should be ignored) before parsing
+    let wrapper: SlackEventWrapper = serde_json::from_slice(raw_payload)?;
+    if let Some(ref event) = wrapper.event {
+        if adapter.is_bot_message(event) {
+            info!("ignoring bot message from user {:?}", event.user);
+            return Ok(());
+        }
+    }
+
+    let message = adapter.parse(raw_payload)?;
+
+    info!(
+        "slack message from {} in channel {:?}: {:?}",
+        message.sender,
+        message.metadata.slack_channel_id,
+        message.text_body
+    );
+
+    // Get channel ID (required for Slack)
+    let channel_id = message
+        .metadata
+        .slack_channel_id
+        .as_ref()
+        .ok_or("missing slack_channel_id")?;
+
+    // Use Slack user ID as fake email (user_store requires email format)
+    let slack_user_email = format!("{}@slack.local", message.sender);
+    let user = user_store.get_or_create_user(&slack_user_email)?;
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    user_store.ensure_user_dirs(&user_paths)?;
+
+    // Thread key: channel_id + thread_id for grouping conversations
+    let thread_key = format!("slack:{}:{}", channel_id, message.thread_id);
+
+    // Create/get workspace for this thread
+    let workspace = ensure_thread_workspace(
+        &user_paths,
+        &user.user_id,
+        &thread_key,
+        &config.employee_profile,
+        config.skills_source_dir.as_deref(),
+    )?;
+
+    // Bump thread state
+    let thread_state_path = default_thread_state_path(&workspace);
+    let thread_state = bump_thread_state(
+        &thread_state_path,
+        &thread_key,
+        message.message_id.clone(),
+    )?;
+
+    // Save the incoming Slack message to workspace
+    append_slack_message(&workspace, &message, raw_payload, thread_state.last_email_seq)?;
+
+    // Determine model and runner
+    let model_name = match config.employee_profile.model.clone() {
+        Some(model) => model,
+        None => {
+            if config.employee_profile.runner.eq_ignore_ascii_case("claude") {
+                String::new()
+            } else {
+                config.codex_model.clone()
+            }
+        }
+    };
+
+    info!(
+        "workspace ready at {} for user {} thread={} epoch={}",
+        workspace.display(),
+        user.user_id,
+        thread_key,
+        thread_state.epoch
+    );
+
+    // Create RunTask to process the message
+    let run_task = RunTaskTask {
+        workspace_dir: workspace.clone(),
+        input_email_dir: PathBuf::from("incoming_email"),
+        input_attachments_dir: PathBuf::from("incoming_attachments"),
+        memory_dir: PathBuf::from("memory"),
+        reference_dir: PathBuf::from("references"),
+        model_name,
+        runner: config.employee_profile.runner.clone(),
+        codex_disabled: config.codex_disabled,
+        reply_to: vec![channel_id.clone()], // Reply to the same channel
+        reply_from: None, // Slack uses bot token, not a "from" address
+        archive_root: Some(user_paths.mail_root.clone()),
+        thread_id: Some(thread_key.clone()),
+        thread_epoch: Some(thread_state.epoch),
+        thread_state_path: Some(thread_state_path.clone()),
+        channel: Channel::Slack,
+    };
+
+    // Schedule the task
+    let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
+    if let Err(err) = cancel_pending_thread_tasks(&mut scheduler, &workspace, thread_state.epoch) {
+        warn!(
+            "failed to cancel pending thread tasks for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
+    let task_id = scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
+    index_store.sync_user_tasks(&user.user_id, scheduler.tasks())?;
+
+    info!(
+        "scheduler tasks enqueued user_id={} task_id={} message_id={:?} workspace={} thread_epoch={}",
+        user.user_id,
+        task_id,
+        message.message_id,
+        workspace.display(),
+        thread_state.epoch
+    );
+
+    Ok(())
+}
+
+/// Save an incoming Slack message to the workspace.
+fn append_slack_message(
+    workspace: &Path,
+    message: &crate::channel::InboundMessage,
+    raw_payload: &[u8],
+    seq: u64,
+) -> Result<(), BoxError> {
+    let incoming_dir = workspace.join("incoming_email");
+    fs::create_dir_all(&incoming_dir)?;
+
+    // Save the raw JSON payload
+    let raw_path = incoming_dir.join(format!("{:05}_slack_raw.json", seq));
+    fs::write(&raw_path, raw_payload)?;
+
+    // Save message text as a simple text file (similar to email body)
+    let text_path = incoming_dir.join(format!("{:05}_slack_message.txt", seq));
+    let text_content = message.text_body.clone().unwrap_or_default();
+    fs::write(&text_path, &text_content)?;
+
+    // Create a metadata file with sender info
+    let meta_path = incoming_dir.join(format!("{:05}_slack_meta.json", seq));
+    let meta = serde_json::json!({
+        "channel": "slack",
+        "sender": message.sender,
+        "channel_id": message.metadata.slack_channel_id,
+        "team_id": message.metadata.slack_team_id,
+        "thread_id": message.thread_id,
+        "message_id": message.message_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
+
+    info!(
+        "saved Slack message seq={} to {}",
+        seq,
+        incoming_dir.display()
+    );
+    Ok(())
 }
 
 pub fn process_inbound_payload(
@@ -545,7 +843,7 @@ pub fn process_inbound_payload(
     info!("processing inbound payload into workspace");
 
     let sender = payload.from.as_deref().unwrap_or("").trim();
-    if is_blacklisted_sender(sender) {
+    if is_blacklisted_sender(sender, &config.employee_directory.service_addresses) {
         info!("skipping blacklisted sender: {}", sender);
         return Ok(());
     }
@@ -558,20 +856,57 @@ pub fn process_inbound_payload(
     let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
     user_store.ensure_user_dirs(&user_paths)?;
 
+    let reply_to_raw = payload.reply_to.as_deref().unwrap_or("");
+    let from_raw = payload.from.as_deref().unwrap_or("");
+    let mut to_list = replyable_recipients(reply_to_raw);
+    if to_list.is_empty() {
+        to_list = replyable_recipients(from_raw);
+    }
+    if to_list.is_empty() {
+        info!(
+            "no replyable recipients found (reply_to='{}', from='{}')",
+            reply_to_raw, from_raw
+        );
+    }
+
+    let inbound_candidates = collect_service_address_candidates(payload);
+    let inbound_service_mailbox = mailbox::select_inbound_service_mailbox(
+        &inbound_candidates,
+        &config.employee_profile.address_set,
+    );
+    let inbound_service_mailbox = match inbound_service_mailbox {
+        Some(mailbox) => mailbox,
+        None => {
+            info!("no service address found in inbound payload; skipping");
+            return Ok(());
+        }
+    };
+
     let thread_key = thread_key(payload, raw_payload);
     let workspace = ensure_thread_workspace(
         &user_paths,
         &user.user_id,
         &thread_key,
+        &config.employee_profile,
         config.skills_source_dir.as_deref(),
     )?;
+    let reply_from = Some(inbound_service_mailbox.formatted());
+    let model_name = match config.employee_profile.model.clone() {
+        Some(model) => model,
+        None => {
+            if config.employee_profile.runner.eq_ignore_ascii_case("claude") {
+                String::new()
+            } else {
+                config.codex_model.clone()
+            }
+        }
+    };
     let thread_state_path = default_thread_state_path(&workspace);
     let message_id = payload
         .header_message_id()
         .or(payload.message_id.as_deref())
         .map(|value| value.trim().to_string());
-    let thread_state =
-        bump_thread_state(&thread_state_path, &thread_key, message_id.clone())?;
+    let thread_state = bump_thread_state(&thread_state_path, &thread_key, message_id.clone())?;
     append_inbound_payload(
         &workspace,
         payload,
@@ -589,34 +924,25 @@ pub fn process_inbound_payload(
         thread_state.epoch
     );
 
-    let reply_target = payload
-        .reply_to
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload.from.as_deref())
-        .unwrap_or("");
-    let to_list = split_recipients(reply_target);
-    if to_list.is_empty() {
-        return Err("missing reply recipient".into());
-    }
-
     let run_task = RunTaskTask {
         workspace_dir: workspace.clone(),
         input_email_dir: PathBuf::from("incoming_email"),
         input_attachments_dir: PathBuf::from("incoming_attachments"),
         memory_dir: PathBuf::from("memory"),
         reference_dir: PathBuf::from("references"),
-        model_name: config.codex_model.clone(),
+        model_name,
+        runner: config.employee_profile.runner.clone(),
         codex_disabled: config.codex_disabled,
         reply_to: to_list.clone(),
+        reply_from,
         archive_root: Some(user_paths.mail_root.clone()),
         thread_id: Some(thread_key.clone()),
         thread_epoch: Some(thread_state.epoch),
         thread_state_path: Some(thread_state_path.clone()),
+        channel: Channel::Email,
     };
 
-    let mut scheduler =
-        Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
+    let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;
     if let Err(err) = cancel_pending_thread_tasks(&mut scheduler, &workspace, thread_state.epoch) {
         warn!(
             "failed to cancel pending thread tasks for {}: {}",
@@ -624,8 +950,7 @@ pub fn process_inbound_payload(
             err
         );
     }
-    let task_id =
-        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
+    let task_id = scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
     index_store.sync_user_tasks(&user.user_id, scheduler.tasks())?;
     info!(
         "scheduler tasks enqueued user_id={} task_id={} message_id={} workspace={} thread_epoch={}",
@@ -747,20 +1072,20 @@ fn format_datetime_opt(value: Option<DateTime<Utc>>) -> String {
 
 fn task_kind_label(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::SendReply(_) => "send_email",
         TaskKind::RunTask(_) => "run_task",
         TaskKind::Noop => "noop",
     }
 }
 
-fn is_blacklisted_sender(sender: &str) -> bool {
+fn is_blacklisted_sender(sender: &str, service_addresses: &HashSet<String>) -> bool {
     if sender.is_empty() {
         return false;
     }
     let mut matched = false;
     let addresses = extract_emails(sender);
     for address in addresses {
-        if is_blacklisted_address(&address) {
+        if is_blacklisted_address(&address, service_addresses) {
             matched = true;
             break;
         }
@@ -768,11 +1093,8 @@ fn is_blacklisted_sender(sender: &str) -> bool {
     matched
 }
 
-fn is_blacklisted_address(address: &str) -> bool {
-    matches!(
-        address,
-        "agent@dowhiz.com" | "oliver@dowhiz.com"
-    )
+fn is_blacklisted_address(address: &str, service_addresses: &HashSet<String>) -> bool {
+    mailbox::is_service_address(address, service_addresses)
 }
 
 fn thread_key(payload: &PostmarkInbound, raw_payload: &[u8]) -> String {
@@ -847,10 +1169,33 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn ensure_workspace_employee_files(
+    workspace: &Path,
+    employee: &EmployeeProfile,
+) -> io::Result<()> {
+    if let Some(path) = employee.agents_path.as_ref() {
+        if path.exists() {
+            fs::copy(path, workspace.join("AGENTS.md"))?;
+        }
+    }
+    if let Some(path) = employee.claude_path.as_ref() {
+        if path.exists() {
+            fs::copy(path, workspace.join("CLAUDE.md"))?;
+        }
+    }
+    if let Some(path) = employee.soul_path.as_ref() {
+        if path.exists() {
+            fs::copy(path, workspace.join("SOUL.md"))?;
+        }
+    }
+    Ok(())
+}
+
 fn ensure_thread_workspace(
     user_paths: &crate::user_store::UserPaths,
     user_id: &str,
     thread_key: &str,
+    employee: &EmployeeProfile,
     skills_source_dir: Option<&Path>,
 ) -> Result<PathBuf, BoxError> {
     fs::create_dir_all(&user_paths.workspaces_root)?;
@@ -883,11 +1228,23 @@ fn ensure_thread_workspace(
         }
     }
 
-    // Copy skills to workspace for Codex CLI
+    ensure_workspace_employee_files(&workspace, employee)?;
+
+    // Copy skills to workspace for Codex/Claude runners.
+    let agents_skills_dir = workspace.join(".agents").join("skills");
     if let Some(skills_src) = skills_source_dir {
-        let agents_skills_dir = workspace.join(".agents").join("skills");
         if let Err(err) = copy_skills_directory(skills_src, &agents_skills_dir) {
-            error!("failed to copy skills to workspace: {}", err);
+            error!("failed to copy base skills to workspace: {}", err);
+        }
+    }
+    if let Some(employee_skills) = employee.skills_dir.as_deref() {
+        let should_copy = skills_source_dir
+            .map(|base| base != employee_skills)
+            .unwrap_or(true);
+        if should_copy {
+            if let Err(err) = copy_skills_directory(employee_skills, &agents_skills_dir) {
+                error!("failed to copy employee skills to workspace: {}", err);
+            }
         }
     }
 
@@ -907,13 +1264,7 @@ fn append_inbound_payload(
     fs::create_dir_all(&entries_email)?;
     fs::create_dir_all(&entries_attachments)?;
 
-    let fallback = format!("email_{}", seq);
-    let message_id = payload
-        .header_message_id()
-        .or(payload.message_id.as_deref())
-        .unwrap_or("");
-    let base = sanitize_token(message_id, &fallback);
-    let entry_name = format!("{:04}_{}", seq, base);
+    let entry_name = build_inbound_entry_name(payload, seq);
     let entry_email_dir = entries_email.join(&entry_name);
     let entry_attachments_dir = entries_attachments.join(&entry_name);
     fs::create_dir_all(&entry_email_dir)?;
@@ -926,12 +1277,10 @@ fn append_inbound_payload(
     )?;
 
     clear_dir_except(&incoming_attachments, &entries_attachments)?;
-    write_inbound_payload(
-        payload,
-        raw_payload,
-        &incoming_email,
-        &incoming_attachments,
-    )?;
+    write_inbound_payload(payload, raw_payload, &incoming_email, &incoming_attachments)?;
+    if let Err(err) = write_thread_history(&incoming_email, &incoming_attachments) {
+        warn!("failed to write thread history: {}", err);
+    }
     Ok(())
 }
 
@@ -975,12 +1324,7 @@ fn archive_inbound(
     let incoming_attachments = mail_dir.join("incoming_attachments");
     fs::create_dir_all(&incoming_email)?;
     fs::create_dir_all(&incoming_attachments)?;
-    write_inbound_payload(
-        payload,
-        raw_payload,
-        &incoming_email,
-        &incoming_attachments,
-    )?;
+    write_inbound_payload(payload, raw_payload, &incoming_email, &incoming_attachments)?;
     Ok(())
 }
 
@@ -996,10 +1340,9 @@ fn cancel_pending_thread_tasks<E: crate::TaskExecutor>(
         }
         match &task.kind {
             TaskKind::RunTask(run) => {
-                run.workspace_dir == workspace
-                    && run.thread_epoch.unwrap_or(0) < current_epoch
+                run.workspace_dir == workspace && run.thread_epoch.unwrap_or(0) < current_epoch
             }
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 let same_thread = send
                     .thread_state_path
                     .as_ref()
@@ -1019,8 +1362,8 @@ fn write_inbound_payload(
     incoming_attachments: &Path,
 ) -> Result<(), BoxError> {
     fs::write(incoming_email.join("postmark_payload.json"), raw_payload)?;
-    let email_text = render_email_text(payload);
-    fs::write(incoming_email.join("email.txt"), email_text)?;
+    let email_html = render_email_html(payload);
+    fs::write(incoming_email.join("email.html"), email_html)?;
 
     if let Some(attachments) = payload.attachments.as_ref() {
         for attachment in attachments {
@@ -1033,6 +1376,221 @@ fn write_inbound_payload(
         }
     }
     Ok(())
+}
+
+fn build_inbound_entry_name(payload: &PostmarkInbound, seq: u64) -> String {
+    let subject = payload.subject.as_deref().unwrap_or("");
+    let subject_token = sanitize_token(subject, "no_subject");
+    let subject_token = truncate_ascii(&subject_token, 48);
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let base = format!("{}_{}", timestamp, subject_token);
+    format!("{:04}_{}", seq, base)
+}
+
+fn truncate_ascii(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_string();
+    }
+    let mut out = value[..max_len].to_string();
+    while out.ends_with(['.', '_', '-']) {
+        out.pop();
+    }
+    if out.is_empty() {
+        value.to_string()
+    } else {
+        out
+    }
+}
+
+fn write_thread_history(
+    incoming_email: &Path,
+    incoming_attachments: &Path,
+) -> Result<(), BoxError> {
+    let entries_email = incoming_email.join("entries");
+    if !entries_email.exists() {
+        return Ok(());
+    }
+
+    let mut entry_dirs: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(&entries_email)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            entry_dirs.push(entry.path());
+        }
+    }
+    entry_dirs.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+
+    let mut output = String::new();
+    output.push_str("# Thread history (inbound)\n");
+    output.push_str("Auto-generated from incoming_email/entries. Latest entry is last.\n\n");
+
+    for entry_dir in entry_dirs {
+        let entry_name = entry_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "entry".to_string());
+        let payload_path = entry_dir.join("postmark_payload.json");
+        let summary = load_payload_summary(&payload_path);
+        let attachments_dir = incoming_attachments.join("entries").join(&entry_name);
+        let attachments = list_attachment_names(&attachments_dir).unwrap_or_default();
+        let email_file = if entry_dir.join("email.html").exists() {
+            "email.html"
+        } else if entry_dir.join("email.txt").exists() {
+            "email.txt"
+        } else {
+            "email.html"
+        };
+
+        output.push_str(&format!("## {entry_name}\n"));
+        if let Some(summary) = summary {
+            output.push_str(&format!("Subject: {}\n", summary.subject));
+            output.push_str(&format!("From: {}\n", summary.from));
+            output.push_str(&format!("To: {}\n", summary.to));
+            if !summary.cc.is_empty() {
+                output.push_str(&format!("Cc: {}\n", summary.cc));
+            }
+            if !summary.bcc.is_empty() {
+                output.push_str(&format!("Bcc: {}\n", summary.bcc));
+            }
+            if let Some(date) = summary.date.as_deref() {
+                output.push_str(&format!("Date: {}\n", date));
+            }
+            if !summary.message_id.is_empty() {
+                output.push_str(&format!("Message-ID: {}\n", summary.message_id));
+            }
+            let preview = build_preview(&summary);
+            if let Some(preview) = preview {
+                output.push_str("Preview:\n```text\n");
+                output.push_str(&preview);
+                output.push_str("\n```\n");
+            }
+        }
+
+        output.push_str("Files:\n");
+        output.push_str(&format!(
+            "- incoming_email/entries/{entry_name}/{email_file}\n"
+        ));
+        output.push_str(&format!(
+            "- incoming_email/entries/{entry_name}/postmark_payload.json\n"
+        ));
+        if !attachments.is_empty() {
+            output.push_str(&format!(
+                "- incoming_attachments/entries/{entry_name}/ ({})\n",
+                attachments.join(", ")
+            ));
+        } else {
+            output.push_str("- incoming_attachments/entries/(none)\n");
+        }
+        output.push('\n');
+    }
+
+    fs::write(incoming_email.join("thread_history.md"), output)?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct PayloadSummary {
+    subject: String,
+    from: String,
+    to: String,
+    cc: String,
+    bcc: String,
+    date: Option<String>,
+    message_id: String,
+    text_body: Option<String>,
+    html_body: Option<String>,
+}
+
+fn load_payload_summary(payload_path: &Path) -> Option<PayloadSummary> {
+    let payload_data = fs::read_to_string(payload_path).ok()?;
+    let payload_json: serde_json::Value = serde_json::from_str(&payload_data).ok()?;
+    Some(PayloadSummary {
+        subject: json_string(&payload_json, "Subject").unwrap_or_default(),
+        from: json_string(&payload_json, "From").unwrap_or_default(),
+        to: json_string(&payload_json, "To").unwrap_or_default(),
+        cc: json_string(&payload_json, "Cc").unwrap_or_default(),
+        bcc: json_string(&payload_json, "Bcc").unwrap_or_default(),
+        date: json_string(&payload_json, "Date")
+            .or_else(|| json_string(&payload_json, "ReceivedAt")),
+        message_id: json_string(&payload_json, "MessageID")
+            .or_else(|| json_string(&payload_json, "MessageId"))
+            .unwrap_or_default(),
+        text_body: json_string(&payload_json, "TextBody")
+            .or_else(|| json_string(&payload_json, "StrippedTextReply")),
+        html_body: json_string(&payload_json, "HtmlBody"),
+    })
+}
+
+fn json_string(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+fn list_attachment_names(dir: &Path) -> Result<Vec<String>, io::Error> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            names.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn build_preview(summary: &PayloadSummary) -> Option<String> {
+    let mut preview = summary
+        .text_body
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if preview.is_empty() {
+        preview = summary
+            .html_body
+            .as_deref()
+            .map(strip_html_tags)
+            .unwrap_or_default();
+    }
+    let preview = preview.trim();
+    if preview.is_empty() {
+        return None;
+    }
+    Some(truncate_preview(preview, 1200))
+}
+
+fn truncate_preview(input: &str, max_len: usize) -> String {
+    if input.len() <= max_len {
+        return input.to_string();
+    }
+    let mut end = max_len;
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &input[..end])
+}
+
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn create_unique_dir(root: &Path, base: &str) -> Result<PathBuf, io::Error> {
@@ -1055,58 +1613,398 @@ fn create_unique_dir(root: &Path, base: &str) -> Result<PathBuf, io::Error> {
     ))
 }
 
-fn render_email_text(payload: &PostmarkInbound) -> String {
-    let subject = payload.subject.as_deref().unwrap_or("");
-    let from = payload.from.as_deref().unwrap_or("");
-    let to = payload.to.as_deref().unwrap_or("");
-    let cc = payload.cc.as_deref().unwrap_or("");
-    let bcc = payload.bcc.as_deref().unwrap_or("");
-    let body = payload
-        .text_body
-        .as_deref()
-        .or(payload.stripped_text_reply.as_deref())
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.to_string())
-        .or_else(|| payload.html_body.as_deref().map(strip_html_tags))
-        .unwrap_or_default();
+fn clean_inbound_html(html: &str) -> String {
+    let document = kuchiki::parse_html().one(html);
+    remove_html_comments(&document);
+    remove_elements_by_selector(
+        &document,
+        "head, script, style, meta, link, title, noscript",
+    );
+    remove_hidden_elements(&document);
+    remove_tracking_pixels(&document);
+    remove_footer_blocks(&document);
+    sanitize_allowed_elements(&document);
+    extract_body_html(&document)
+}
 
-    let attachment_names = payload
-        .attachments
-        .as_ref()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| {
-                    let content_type = item.content_type.trim();
-                    if content_type.is_empty() {
-                        item.name.clone()
-                    } else {
-                        format!("{} ({})", item.name, content_type)
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let attachment_line = if attachment_names.is_empty() {
-        "(none)".to_string()
-    } else {
-        attachment_names.join(", ")
-    };
+fn remove_html_comments(document: &NodeRef) {
+    let nodes: Vec<NodeRef> = document.descendants().collect();
+    for node in nodes {
+        if node.as_comment().is_some() {
+            node.detach();
+        }
+    }
+}
 
-    format!(
-        "From: {from}\nTo: {to}\nCc: {cc}\nBcc: {bcc}\nSubject: {subject}\nAttachments: {attachment_line}\n\n{body}\n"
+fn remove_elements_by_selector(document: &NodeRef, selector: &str) {
+    if let Ok(nodes) = document.select(selector) {
+        for node in nodes {
+            node.as_node().detach();
+        }
+    }
+}
+
+fn remove_hidden_elements(document: &NodeRef) {
+    let nodes: Vec<NodeRef> = document.descendants().collect();
+    for node in nodes {
+        let element = match node.as_element() {
+            Some(value) => value,
+            None => continue,
+        };
+        if is_hidden_element(element) {
+            node.detach();
+        }
+    }
+}
+
+fn remove_tracking_pixels(document: &NodeRef) {
+    let nodes: Vec<NodeRef> = document.descendants().collect();
+    for node in nodes {
+        let element = match node.as_element() {
+            Some(value) => value,
+            None => continue,
+        };
+        if element.name.local.as_ref() == "img" && is_tracking_pixel(element) {
+            node.detach();
+        }
+    }
+}
+
+fn remove_footer_blocks(document: &NodeRef) {
+    let nodes: Vec<NodeRef> = document.descendants().collect();
+    for node in nodes {
+        let element = match node.as_element() {
+            Some(value) => value,
+            None => continue,
+        };
+        let tag = element.name.local.as_ref();
+        if !is_footer_candidate(tag) {
+            continue;
+        }
+        if element_has_footer_marker(element) {
+            node.detach();
+            continue;
+        }
+        let text = node.text_contents();
+        if text_contains_footer_hint(&text) {
+            node.detach();
+        }
+    }
+}
+
+fn sanitize_allowed_elements(document: &NodeRef) {
+    let nodes: Vec<NodeRef> = document.descendants().collect();
+    for node in nodes {
+        let element = match node.as_element() {
+            Some(value) => value,
+            None => continue,
+        };
+        let tag = element.name.local.as_ref();
+        if is_drop_tag(tag) {
+            node.detach();
+            continue;
+        }
+        if !is_allowed_tag(tag) {
+            unwrap_node(&node);
+            continue;
+        }
+        prune_attributes(tag, element);
+    }
+}
+
+fn extract_body_html(document: &NodeRef) -> String {
+    if let Ok(mut bodies) = document.select("body") {
+        if let Some(body) = bodies.next() {
+            let mut out = String::new();
+            for child in body.as_node().children() {
+                out.push_str(&child.to_string());
+            }
+            return out;
+        }
+    }
+    document.to_string()
+}
+
+fn unwrap_node(node: &NodeRef) {
+    if node.parent().is_none() {
+        return;
+    }
+    let children: Vec<NodeRef> = node.children().collect();
+    for child in children {
+        node.insert_before(child);
+    }
+    node.detach();
+}
+
+fn is_allowed_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "html"
+            | "body"
+            | "p"
+            | "br"
+            | "div"
+            | "span"
+            | "a"
+            | "img"
+            | "ul"
+            | "ol"
+            | "li"
+            | "strong"
+            | "em"
+            | "b"
+            | "i"
+            | "u"
+            | "blockquote"
+            | "pre"
+            | "code"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "table"
+            | "thead"
+            | "tbody"
+            | "tr"
+            | "td"
+            | "th"
     )
 }
 
-fn strip_html_tags(input: &str) -> String {
+fn is_drop_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "script" | "style" | "head" | "meta" | "link" | "title" | "noscript"
+    )
+}
+
+fn is_footer_candidate(tag: &str) -> bool {
+    matches!(
+        tag,
+        "div" | "p" | "span" | "td" | "li" | "section" | "footer"
+    )
+}
+
+fn element_has_footer_marker(element: &kuchiki::ElementData) -> bool {
+    let attrs = element.attributes.borrow();
+    for key in ["class", "id"] {
+        if let Some(value) = attrs.get(key) {
+            let lower = value.to_ascii_lowercase();
+            if lower.contains("footer")
+                || lower.contains("unsubscribe")
+                || lower.contains("notification")
+                || lower.contains("preferences")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn text_contains_footer_hint(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let hints = [
+        "unsubscribe",
+        "notification settings",
+        "manage notifications",
+        "email preferences",
+        "manage your email",
+        "view this email in your browser",
+        "view in browser",
+        "you are receiving this",
+        "to stop receiving",
+        "opt out",
+        "reply to this email directly",
+    ];
+    hints.iter().any(|hint| lower.contains(hint))
+}
+
+fn is_hidden_element(element: &kuchiki::ElementData) -> bool {
+    let attrs = element.attributes.borrow();
+    if attrs.contains("hidden") {
+        return true;
+    }
+    if let Some(value) = attrs.get("aria-hidden") {
+        if value.trim().eq_ignore_ascii_case("true") {
+            return true;
+        }
+    }
+    if let Some(style) = attrs.get("style") {
+        if style_contains_hidden(style) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_tracking_pixel(element: &kuchiki::ElementData) -> bool {
+    let attrs = element.attributes.borrow();
+    if let Some(style) = attrs.get("style") {
+        if style_contains_hidden(style) {
+            return true;
+        }
+    }
+    let src = attrs.get("src").unwrap_or("");
+    let src_lower = src.to_ascii_lowercase();
+    if src_lower.contains("tracking")
+        || src_lower.contains("pixel")
+        || src_lower.contains("beacon")
+        || src_lower.contains("open.gif")
+    {
+        return true;
+    }
+    let width = attrs.get("width").and_then(parse_dimension).or_else(|| {
+        attrs
+            .get("style")
+            .and_then(|style| style_dimension(style, "width"))
+    });
+    let height = attrs.get("height").and_then(parse_dimension).or_else(|| {
+        attrs
+            .get("style")
+            .and_then(|style| style_dimension(style, "height"))
+    });
+    matches_1x1(width, height)
+}
+
+fn matches_1x1(width: Option<u32>, height: Option<u32>) -> bool {
+    match (width, height) {
+        (Some(w), Some(h)) => w <= 1 && h <= 1,
+        (Some(w), None) => w <= 1,
+        (None, Some(h)) => h <= 1,
+        (None, None) => false,
+    }
+}
+
+fn style_contains_hidden(style: &str) -> bool {
+    let normalized: String = style
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    normalized.contains("display:none")
+        || normalized.contains("visibility:hidden")
+        || normalized.contains("opacity:0")
+        || normalized.contains("max-height:0")
+}
+
+fn style_dimension(style: &str, key: &str) -> Option<u32> {
+    for part in style.split(';') {
+        let mut iter = part.splitn(2, ':');
+        let name = iter.next().unwrap_or("").trim().to_ascii_lowercase();
+        if name == key {
+            let value = iter.next().unwrap_or("").trim();
+            return parse_dimension(value);
+        }
+    }
+    None
+}
+
+fn parse_dimension(raw: &str) -> Option<u32> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let digits: String = trimmed
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn prune_attributes(tag: &str, element: &kuchiki::ElementData) {
+    let mut attrs = element.attributes.borrow_mut();
+    let mut to_remove = Vec::new();
+    for (name, _) in attrs.map.iter() {
+        let local = name.local.as_ref();
+        let keep = match tag {
+            "a" => matches!(local, "href"),
+            "img" => matches!(local, "src" | "alt" | "width" | "height"),
+            _ => false,
+        };
+        if !keep {
+            to_remove.push(name.clone());
+        }
+    }
+    for name in to_remove {
+        attrs.map.remove(&name);
+    }
+    if tag == "a" {
+        if let Some(href) = attrs.get("href").map(|value| value.to_string()) {
+            if !is_safe_link(&href) {
+                attrs.remove("href");
+            }
+        }
+    }
+    if tag == "img" {
+        if let Some(src) = attrs.get("src").map(|value| value.to_string()) {
+            if !is_safe_image_src(&src) {
+                attrs.remove("src");
+            }
+        }
+    }
+}
+
+fn is_safe_link(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    !(lower.starts_with("javascript:") || lower.starts_with("vbscript:"))
+}
+
+fn is_safe_image_src(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    !(lower.starts_with("javascript:") || lower.starts_with("vbscript:"))
+}
+
+fn render_email_html(payload: &PostmarkInbound) -> String {
+    if let Some(html) = payload
+        .html_body
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let cleaned = clean_inbound_html(html);
+        if !cleaned.trim().is_empty() {
+            return cleaned;
+        }
+    }
+
+    let text_body = payload
+        .text_body
+        .as_deref()
+        .or(payload.stripped_text_reply.as_deref())
+        .unwrap_or("");
+    if text_body.trim().is_empty() {
+        return "<pre>(no content)</pre>".to_string();
+    }
+    wrap_text_as_html(text_body)
+}
+
+fn wrap_text_as_html(input: &str) -> String {
+    format!("<pre>{}</pre>", escape_html(input))
+}
+
+fn escape_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let mut in_tag = false;
     for ch in input.chars() {
         match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
         }
     }
     out
@@ -1131,12 +2029,71 @@ fn sanitize_token(value: &str, fallback: &str) -> String {
 }
 
 fn split_recipients(value: &str) -> Vec<String> {
-    value
-        .split(|ch| ch == ',' || ch == ';')
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_string())
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                escaped = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' | ';' if !in_quotes => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
+
+    out
+}
+
+fn replyable_recipients(raw: &str) -> Vec<String> {
+    split_recipients(raw)
+        .into_iter()
+        .filter(|recipient| contains_replyable_address(recipient))
         .collect()
+}
+
+fn contains_replyable_address(value: &str) -> bool {
+    let emails = extract_emails(value);
+    if emails.is_empty() {
+        return false;
+    }
+    emails.iter().any(|address| !is_no_reply_address(address))
+}
+
+// Only local-part markers; avoid domain-based filtering.
+const NO_REPLY_LOCAL_PARTS: [&str; 3] = ["noreply", "no-reply", "do-not-reply"];
+
+fn is_no_reply_address(address: &str) -> bool {
+    let normalized = address.trim().to_ascii_lowercase();
+    let local = normalized.split('@').next().unwrap_or("");
+    if local.is_empty() {
+        return false;
+    }
+    NO_REPLY_LOCAL_PARTS.iter().any(|marker| local == *marker)
 }
 
 fn env_flag(key: &str, default: bool) -> bool {
@@ -1151,11 +2108,37 @@ fn env_flag(key: &str, default: bool) -> bool {
 
 fn repo_skills_source_dir() -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if cwd.file_name().map(|name| name == "DoWhiz_service").unwrap_or(false) {
+    if cwd
+        .file_name()
+        .map(|name| name == "DoWhiz_service")
+        .unwrap_or(false)
+    {
         cwd.join("skills")
     } else {
         cwd.join("DoWhiz_service").join("skills")
     }
+}
+
+fn default_employee_config_path() -> PathBuf {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if cwd
+        .file_name()
+        .map(|name| name == "DoWhiz_service")
+        .unwrap_or(false)
+    {
+        cwd.join("employee.toml")
+    } else {
+        cwd.join("DoWhiz_service").join("employee.toml")
+    }
+}
+
+fn default_runtime_root() -> Result<PathBuf, io::Error> {
+    let home =
+        env::var("HOME").map_err(|_| io::Error::new(io::ErrorKind::NotFound, "HOME not set"))?;
+    Ok(PathBuf::from(home)
+        .join(".dowhiz")
+        .join("DoWhiz")
+        .join("run_task"))
 }
 
 fn resolve_path(raw: String) -> Result<PathBuf, io::Error> {
@@ -1168,16 +2151,70 @@ fn resolve_path(raw: String) -> Result<PathBuf, io::Error> {
     }
 }
 
+fn collect_service_address_candidates(payload: &PostmarkInbound) -> Vec<Option<&str>> {
+    let mut candidates = Vec::new();
+    if let Some(value) = payload.to.as_deref() {
+        candidates.push(Some(value));
+    }
+    if let Some(value) = payload.cc.as_deref() {
+        candidates.push(Some(value));
+    }
+    if let Some(value) = payload.bcc.as_deref() {
+        candidates.push(Some(value));
+    }
+    if let Some(list) = payload.to_full.as_ref() {
+        for entry in list {
+            candidates.push(Some(entry.email.as_str()));
+        }
+    }
+    if let Some(list) = payload.cc_full.as_ref() {
+        for entry in list {
+            candidates.push(Some(entry.email.as_str()));
+        }
+    }
+    if let Some(list) = payload.bcc_full.as_ref() {
+        for entry in list {
+            candidates.push(Some(entry.email.as_str()));
+        }
+    }
+    for header in [
+        "X-Original-To",
+        "Delivered-To",
+        "Envelope-To",
+        "X-Envelope-To",
+        "X-Forwarded-To",
+        "X-Original-Recipient",
+        "Original-Recipient",
+    ] {
+        for value in payload.header_values(header) {
+            candidates.push(Some(value));
+        }
+    }
+    candidates
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostmarkInbound {
     #[serde(rename = "From")]
     from: Option<String>,
     #[serde(rename = "To")]
+    #[allow(dead_code)]
     to: Option<String>,
     #[serde(rename = "Cc")]
+    #[allow(dead_code)]
     cc: Option<String>,
     #[serde(rename = "Bcc")]
+    #[allow(dead_code)]
     bcc: Option<String>,
+    #[serde(rename = "ToFull")]
+    #[allow(dead_code)]
+    to_full: Option<Vec<PostmarkRecipient>>,
+    #[serde(rename = "CcFull")]
+    #[allow(dead_code)]
+    cc_full: Option<Vec<PostmarkRecipient>>,
+    #[serde(rename = "BccFull")]
+    #[allow(dead_code)]
+    bcc_full: Option<Vec<PostmarkRecipient>>,
     #[serde(rename = "ReplyTo")]
     reply_to: Option<String>,
     #[serde(rename = "Subject")]
@@ -1209,6 +2246,31 @@ impl PostmarkInbound {
     fn header_message_id(&self) -> Option<&str> {
         self.header_value("Message-ID")
     }
+
+    fn header_values(&self, name: &str) -> Vec<&str> {
+        self.headers
+            .as_ref()
+            .map(|headers| {
+                headers
+                    .iter()
+                    .filter(|header| header.name.eq_ignore_ascii_case(name))
+                    .map(|header| header.value.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PostmarkRecipient {
+    #[serde(rename = "Email")]
+    email: String,
+    #[serde(rename = "Name")]
+    #[allow(dead_code)]
+    name: Option<String>,
+    #[serde(rename = "MailboxHash")]
+    #[allow(dead_code)]
+    mailbox_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1226,16 +2288,14 @@ struct PostmarkAttachment {
     #[serde(rename = "Content")]
     content: String,
     #[serde(rename = "ContentType")]
+    #[allow(dead_code)]
     content_type: String,
 }
 
 fn extract_message_ids(payload: &PostmarkInbound, raw_payload: &[u8]) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = HashSet::new();
-    if let Some(header_id) = payload
-        .header_message_id()
-        .and_then(normalize_message_id)
-    {
+    if let Some(header_id) = payload.header_message_id().and_then(normalize_message_id) {
         if seen.insert(header_id.clone()) {
             ids.push(header_id);
         }
@@ -1330,22 +2390,19 @@ mod tests {
             state_dir: user_root.join("state"),
             tasks_db_path: user_root.join("state/tasks.db"),
             memory_dir: user_root.join("memory"),
+            secrets_dir: user_root.join("secrets"),
             mail_root: user_root.join("mail"),
             workspaces_root: user_root.join("workspaces"),
         };
         fs::create_dir_all(&user_paths.mail_root).expect("mail root");
         fs::create_dir_all(&user_paths.workspaces_root).expect("workspaces root");
 
-        let archive_dir = user_paths
-            .mail_root
-            .join("2026")
-            .join("02")
-            .join("msg_1");
+        let archive_dir = user_paths.mail_root.join("2026").join("02").join("msg_1");
         let incoming_email = archive_dir.join("incoming_email");
         let incoming_attachments = archive_dir.join("incoming_attachments");
         fs::create_dir_all(&incoming_email).expect("incoming_email");
         fs::create_dir_all(&incoming_attachments).expect("incoming_attachments");
-        fs::write(incoming_email.join("email.txt"), "Hello").expect("email.txt");
+        fs::write(incoming_email.join("email.html"), "<pre>Hello</pre>").expect("email.html");
         let archived_payload = r#"{
   "From": "Alice <alice@example.com>",
   "To": "Bob <bob@example.com>",
@@ -1372,20 +2429,37 @@ mod tests {
         let inbound_payload: PostmarkInbound =
             serde_json::from_str(inbound_raw).expect("parse inbound");
         let thread = thread_key(&inbound_payload, inbound_raw.as_bytes());
-        let workspace =
-            ensure_thread_workspace(&user_paths, "user123", &thread, None)
-                .expect("create workspace");
+        let addresses = vec!["service@example.com".to_string()];
+        let address_set: HashSet<String> =
+            addresses.iter().map(|value| value.to_ascii_lowercase()).collect();
+        let employee = EmployeeProfile {
+            id: "test-employee".to_string(),
+            display_name: None,
+            runner: "codex".to_string(),
+            model: None,
+            addresses,
+            address_set,
+            agents_path: None,
+            claude_path: None,
+            soul_path: None,
+            skills_dir: None,
+        };
+        let workspace = ensure_thread_workspace(
+            &user_paths,
+            "user123",
+            &thread,
+            &employee,
+            None,
+        )
+        .expect("create workspace");
 
         let past_root = workspace.join("references").join("past_emails");
         let index_path = past_root.join("index.json");
         assert!(index_path.exists(), "index.json created");
 
         let index_data = fs::read_to_string(index_path).expect("read index");
-        let index_json: serde_json::Value =
-            serde_json::from_str(&index_data).expect("parse index");
-        let entries = index_json["entries"]
-            .as_array()
-            .expect("entries array");
+        let index_json: serde_json::Value = serde_json::from_str(&index_data).expect("parse index");
+        let entries = index_json["entries"].as_array().expect("entries array");
         assert_eq!(entries.len(), 1, "one archived entry");
         let entry_path = entries[0]["path"].as_str().expect("entry path");
         assert!(past_root.join(entry_path).join("incoming_email").exists());
@@ -1393,5 +2467,54 @@ mod tests {
             .join(entry_path)
             .join("attachments_manifest.json")
             .exists());
+    }
+
+    #[test]
+    fn replyable_recipients_filters_no_reply_addresses() {
+        let raw = "No Reply <noreply@example.com>, Real <user@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert_eq!(recipients, vec!["Real <user@example.com>"]);
+    }
+
+    #[test]
+    fn replyable_recipients_returns_empty_when_only_no_reply() {
+        let raw = "No Reply <no-reply@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert!(recipients.is_empty());
+    }
+
+    #[test]
+    fn replyable_recipients_keeps_quoted_display_name_commas() {
+        let raw =
+            "\"Zoom Video Communications, Inc\" <reply@example.com>, Other <other@example.com>";
+        let recipients = replyable_recipients(raw);
+        assert_eq!(
+            recipients,
+            vec![
+                "\"Zoom Video Communications, Inc\" <reply@example.com>",
+                "Other <other@example.com>"
+            ]
+        );
+    }
+
+    #[test]
+    fn no_reply_detection_matches_common_variants() {
+        assert!(is_no_reply_address("noreply@example.com"));
+        assert!(is_no_reply_address("no-reply@example.com"));
+        assert!(is_no_reply_address("do-not-reply@example.com"));
+        assert!(!is_no_reply_address("reply@example.com"));
+    }
+
+    #[test]
+    fn no_reply_detection_requires_exact_local_part() {
+        assert!(!is_no_reply_address("noreplying@example.com"));
+        assert!(!is_no_reply_address("reply-noreply@example.com"));
+        assert!(!is_no_reply_address("no-reply-bot@example.com"));
+    }
+
+    #[test]
+    fn no_reply_detection_ignores_domain_markers() {
+        assert!(!is_no_reply_address("notifications@github.com"));
+        assert!(!is_no_reply_address("octocat@users.noreply.github.com"));
     }
 }

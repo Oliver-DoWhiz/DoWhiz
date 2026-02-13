@@ -1,9 +1,14 @@
-use scheduler_module::service::{run_server, ServiceConfig};
-use scheduler_module::user_store::normalize_email;
-use scheduler_module::{Scheduler, ScheduledTask, SchedulerError, TaskExecution, TaskExecutor, TaskKind};
+use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::Transport;
 use rusqlite::OptionalExtension;
+use scheduler_module::employee_config::{EmployeeDirectory, EmployeeProfile};
+use scheduler_module::service::{run_server, ServiceConfig, DEFAULT_INBOUND_BODY_MAX_BYTES};
+use scheduler_module::user_store::normalize_email;
+use scheduler_module::{
+    ScheduledTask, Scheduler, SchedulerError, TaskExecution, TaskExecutor, TaskKind,
+};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +24,34 @@ impl TaskExecutor for NoopExecutor {
     fn execute(&self, _task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
         Ok(TaskExecution::default())
     }
+}
+
+fn test_employee_directory(addresses: Vec<String>) -> (EmployeeProfile, EmployeeDirectory) {
+    let address_set: HashSet<String> =
+        addresses.iter().map(|value| value.to_ascii_lowercase()).collect();
+    let employee = EmployeeProfile {
+        id: "test-employee".to_string(),
+        display_name: None,
+        runner: "codex".to_string(),
+        model: None,
+        addresses: addresses.clone(),
+        address_set: address_set.clone(),
+        agents_path: None,
+        claude_path: None,
+        soul_path: None,
+        skills_dir: None,
+    };
+    let mut employee_by_id = HashMap::new();
+    employee_by_id.insert(employee.id.clone(), employee.clone());
+    let mut service_addresses = HashSet::new();
+    service_addresses.extend(address_set);
+    let directory = EmployeeDirectory {
+        employees: vec![employee.clone()],
+        employee_by_id,
+        default_employee_id: Some(employee.id.clone()),
+        service_addresses,
+    };
+    (employee, directory)
 }
 
 fn load_env_from_repo() {
@@ -130,7 +163,10 @@ fn poll_outbound(
         let payload: Value = serde_json::from_str(&body)?;
         if let Some(messages) = payload.get("Messages").and_then(|value| value.as_array()) {
             for message in messages {
-                let subject = message.get("Subject").and_then(|value| value.as_str()).unwrap_or("");
+                let subject = message
+                    .get("Subject")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 if subject.contains(subject_hint) {
                     return Ok(Some(message.clone()));
                 }
@@ -177,12 +213,19 @@ fn send_smtp_inbound(
     from_addr: &str,
     to_addr: &str,
     subject: &str,
+    original_to: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let message = lettre::Message::builder()
+    let mut builder = lettre::Message::builder()
         .from(from_addr.parse()?)
         .to(to_addr.parse()?)
-        .subject(subject)
-        .body("Rust service live email test.".to_string())?;
+        .subject(subject);
+    if let Some(original_to) = original_to {
+        builder = builder.raw_header(HeaderValue::new(
+            HeaderName::new_from_ascii_str("X-Original-To"),
+            original_to.to_string(),
+        ));
+    }
+    let message = builder.body("Rust service live email test.".to_string())?;
 
     let mailer = lettre::SmtpTransport::builder_dangerous("inbound.postmarkapp.com")
         .port(25)
@@ -273,7 +316,9 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
         .map_err(|_| "POSTMARK_SERVER_TOKEN must be set for live tests")?;
     let public_url = env::var("POSTMARK_INBOUND_HOOK_URL")
         .map_err(|_| "POSTMARK_INBOUND_HOOK_URL must be set (ngrok URL)")?;
-    let from_addr = env::var("POSTMARK_TEST_FROM")
+    let from_addr =
+        env::var("POSTMARK_TEST_FROM").unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
+    let service_address = env::var("POSTMARK_TEST_SERVICE_ADDRESS")
         .unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
 
     let server_info = postmark_request("GET", "https://api.postmarkapp.com/server", &token, None)?;
@@ -300,17 +345,22 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
     let state_dir = temp.path().join("state");
     let users_root = temp.path().join("users");
 
-    let test_host =
-        env::var("RUST_SERVICE_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("RUST_SERVICE_TEST_PORT")
+    let test_host = env::var("RUST_SERVICE_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("RUST_SERVICE_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(9010);
+        .unwrap_or(9001);
 
     let codex_disabled = !env_enabled("RUN_CODEX_E2E");
+    let (employee_profile, employee_directory) =
+        test_employee_directory(vec![service_address.clone()]);
     let config = ServiceConfig {
         host: test_host.clone(),
         port,
+        employee_id: employee_profile.id.clone(),
+        employee_config_path: workspace_root.join("employee.toml"),
+        employee_profile,
+        employee_directory,
         workspace_root: workspace_root.clone(),
         scheduler_state_path: state_dir.join("tasks.db"),
         processed_ids_path: state_dir.join("postmark_processed_ids.txt"),
@@ -322,7 +372,10 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
         scheduler_poll_interval: Duration::from_secs(1),
         scheduler_max_concurrency: 10,
         scheduler_user_max_concurrency: 3,
+        inbound_body_max_bytes: DEFAULT_INBOUND_BODY_MAX_BYTES,
         skills_source_dir: None,
+        slack_bot_token: None,
+        slack_bot_user_id: None,
     };
 
     let rt = Runtime::new()?;
@@ -339,7 +392,9 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
     });
 
     let base_url = public_url.trim_end_matches('/');
-    let base_url = base_url.strip_suffix("/postmark/inbound").unwrap_or(base_url);
+    let base_url = base_url
+        .strip_suffix("/postmark/inbound")
+        .unwrap_or(base_url);
     check_public_health(base_url, &test_host, port)?;
     let hook_url = format!("{}/postmark/inbound", base_url);
     println!("Setting Postmark inbound hook to {}", hook_url);
@@ -352,7 +407,12 @@ fn rust_service_real_email_end_to_end() -> Result<(), Box<dyn std::error::Error>
 
     let subject = format!("Rust service live test {}", timestamp_suffix());
     println!("Sending inbound SMTP message with subject: {}", subject);
-    send_smtp_inbound(&from_addr, &inbound_address, &subject)?;
+    send_smtp_inbound(
+        &from_addr,
+        &inbound_address,
+        &subject,
+        Some(&service_address),
+    )?;
     println!("Inbound message sent; waiting for workspace output...");
 
     let workspace_timeout = if env_enabled("RUN_CODEX_E2E") {

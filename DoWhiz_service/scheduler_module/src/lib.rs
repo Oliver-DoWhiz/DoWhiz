@@ -1,9 +1,8 @@
 use chrono::{DateTime, Local, Utc};
 use cron::Schedule as CronSchedule;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -13,22 +12,46 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 pub(crate) mod thread_state;
-use crate::thread_state::{current_thread_epoch, default_thread_state_path, find_thread_state_path};
-use crate::memory_store::{resolve_user_memory_dir, sync_user_memory_to_workspace, sync_workspace_memory_to_user};
+pub(crate) mod mailbox;
+pub mod employee_config;
+pub mod channel;
+pub mod adapters;
+use crate::memory_store::{
+    resolve_user_memory_dir, sync_user_memory_to_workspace, sync_workspace_memory_to_user,
+};
+use crate::secrets_store::{
+    resolve_user_secrets_path, sync_user_secrets_to_workspace, sync_workspace_secrets_to_user,
+};
+use crate::thread_state::{
+    current_thread_epoch, default_thread_state_path, find_thread_state_path,
+};
+
+use crate::channel::Channel;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskKind {
-    SendEmail(SendEmailTask),
+    /// Send a reply message (email, Slack, etc.)
+    /// Note: Serializes as "send_email" for backward compatibility
+    #[serde(rename = "send_email")]
+    SendReply(SendReplyTask),
     RunTask(RunTaskTask),
     Noop,
 }
 
+/// Task for sending an outbound reply message to any channel.
+///
+/// Supports email (Postmark), Slack, Telegram, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendEmailTask {
+pub struct SendReplyTask {
+    /// The channel to send this message on (defaults to Email for backward compat)
+    #[serde(default)]
+    pub channel: Channel,
     pub subject: String,
     pub html_path: PathBuf,
     pub attachments_dir: PathBuf,
+    #[serde(default)]
+    pub from: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -54,9 +77,13 @@ pub struct RunTaskTask {
     #[serde(alias = "references_dir")]
     pub reference_dir: PathBuf,
     pub model_name: String,
+    #[serde(default = "default_runner")]
+    pub runner: String,
     pub codex_disabled: bool,
     #[serde(default)]
     pub reply_to: Vec<String>,
+    #[serde(default)]
+    pub reply_from: Option<String>,
     #[serde(default)]
     pub archive_root: Option<PathBuf>,
     #[serde(default)]
@@ -65,13 +92,25 @@ pub struct RunTaskTask {
     pub thread_epoch: Option<u64>,
     #[serde(default)]
     pub thread_state_path: Option<PathBuf>,
+    /// The channel to reply on (Email, Slack, etc.)
+    #[serde(default)]
+    pub channel: Channel,
+}
+
+fn default_runner() -> String {
+    "codex".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Schedule {
-    Cron { expression: String, next_run: DateTime<Utc> },
-    OneShot { run_at: DateTime<Utc> },
+    Cron {
+        expression: String,
+        next_run: DateTime<Utc>,
+    },
+    OneShot {
+        run_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +151,8 @@ pub enum SchedulerError {
 pub struct TaskExecution {
     pub follow_up_tasks: Vec<run_task_module::ScheduledTaskRequest>,
     pub follow_up_error: Option<String>,
+    pub scheduler_actions: Vec<run_task_module::SchedulerActionRequest>,
+    pub scheduler_actions_error: Option<String>,
 }
 
 impl TaskExecution {
@@ -130,7 +171,7 @@ pub struct ModuleExecutor;
 impl TaskExecutor for ModuleExecutor {
     fn execute(&self, task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
         match task {
-            TaskKind::SendEmail(task) => {
+            TaskKind::SendReply(task) => {
                 if let Some(expected_epoch) = task.thread_epoch {
                     let state_path = task
                         .thread_state_path
@@ -150,40 +191,15 @@ impl TaskExecutor for ModuleExecutor {
                         }
                     }
                 }
-                let params = send_emails_module::SendEmailParams {
-                    subject: task.subject.clone(),
-                    html_path: task.html_path.clone(),
-                    attachments_dir: task.attachments_dir.clone(),
-                    to: task.to.clone(),
-                    cc: task.cc.clone(),
-                    bcc: task.bcc.clone(),
-                    in_reply_to: task.in_reply_to.clone(),
-                    references: task.references.clone(),
-                };
-                let response = send_emails_module::send_email(&params)
-                    .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
-                if let Some(archive_root) = task.archive_root.as_ref() {
-                    dotenvy::dotenv().ok();
-                    let mut from =
-                        env::var("OUTBOUND_FROM").unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
-                    if from.trim().is_empty() {
-                        from = "oliver@dowhiz.com".to_string();
+
+                // Dispatch to the appropriate adapter based on channel
+                match task.channel {
+                    Channel::Slack => {
+                        execute_slack_send(task)?;
                     }
-                    if let Err(err) = crate::past_emails::archive_outbound(
-                        archive_root,
-                        &task.subject,
-                        &task.html_path,
-                        &task.attachments_dir,
-                        &task.to,
-                        &task.cc,
-                        &task.bcc,
-                        task.in_reply_to.as_deref(),
-                        task.references.as_deref(),
-                        &response.message_id,
-                        &response.submitted_at,
-                        &from,
-                    ) {
-                        warn!("failed to archive outbound email: {}", err);
+                    Channel::Email | Channel::Telegram => {
+                        // Email (and Telegram as fallback) use Postmark
+                        execute_email_send(task)?;
                     }
                 }
                 Ok(TaskExecution::empty())
@@ -191,12 +207,24 @@ impl TaskExecutor for ModuleExecutor {
             TaskKind::RunTask(task) => {
                 let workspace_memory_dir = task.workspace_dir.join(&task.memory_dir);
                 let user_memory_dir = resolve_user_memory_dir(task);
+                let user_secrets_path = resolve_user_secrets_path(task);
                 if let Some(user_memory_dir) = user_memory_dir.as_ref() {
-                    sync_user_memory_to_workspace(user_memory_dir, &workspace_memory_dir)
-                        .map_err(|err| SchedulerError::TaskFailed(format!("memory sync failed: {}", err)))?;
+                    sync_user_memory_to_workspace(user_memory_dir, &workspace_memory_dir).map_err(
+                        |err| SchedulerError::TaskFailed(format!("memory sync failed: {}", err)),
+                    )?;
                 } else {
                     warn!(
                         "unable to resolve user memory dir for workspace {}",
+                        task.workspace_dir.display()
+                    );
+                }
+                if let Some(user_secrets_path) = user_secrets_path.as_ref() {
+                    sync_user_secrets_to_workspace(user_secrets_path, &task.workspace_dir).map_err(
+                        |err| SchedulerError::TaskFailed(format!("secrets sync failed: {}", err)),
+                    )?;
+                } else {
+                    warn!(
+                        "unable to resolve user secrets for workspace {}",
                         task.workspace_dir.display()
                     );
                 }
@@ -206,23 +234,131 @@ impl TaskExecutor for ModuleExecutor {
                     input_attachments_dir: task.input_attachments_dir.clone(),
                     memory_dir: task.memory_dir.clone(),
                     reference_dir: task.reference_dir.clone(),
+                    reply_to: task.reply_to.clone(),
                     model_name: task.model_name.clone(),
+                    runner: task.runner.clone(),
                     codex_disabled: task.codex_disabled,
                 };
                 let output = run_task_module::run_task(&params)
                     .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
                 if let Some(user_memory_dir) = user_memory_dir.as_ref() {
-                    sync_workspace_memory_to_user(&workspace_memory_dir, user_memory_dir)
-                        .map_err(|err| SchedulerError::TaskFailed(format!("memory sync failed: {}", err)))?;
+                    sync_workspace_memory_to_user(&workspace_memory_dir, user_memory_dir).map_err(
+                        |err| SchedulerError::TaskFailed(format!("memory sync failed: {}", err)),
+                    )?;
+                }
+                if let Some(user_secrets_path) = user_secrets_path.as_ref() {
+                    sync_workspace_secrets_to_user(&task.workspace_dir, user_secrets_path).map_err(
+                        |err| SchedulerError::TaskFailed(format!("secrets sync failed: {}", err)),
+                    )?;
                 }
                 Ok(TaskExecution {
                     follow_up_tasks: output.scheduled_tasks,
                     follow_up_error: output.scheduled_tasks_error,
+                    scheduler_actions: output.scheduler_actions,
+                    scheduler_actions_error: output.scheduler_actions_error,
                 })
             }
             TaskKind::Noop => Ok(TaskExecution::empty()),
         }
     }
+}
+
+/// Execute a SendReplyTask via email (Postmark).
+fn execute_email_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    let params = send_emails_module::SendEmailParams {
+        subject: task.subject.clone(),
+        html_path: task.html_path.clone(),
+        attachments_dir: task.attachments_dir.clone(),
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: task.cc.clone(),
+        bcc: task.bcc.clone(),
+        in_reply_to: task.in_reply_to.clone(),
+        references: task.references.clone(),
+    };
+    let response = send_emails_module::send_email(&params)
+        .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
+
+    if let Some(archive_root) = task.archive_root.as_ref() {
+        dotenvy::dotenv().ok();
+        let from = task
+            .from
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        if let Err(err) = crate::past_emails::archive_outbound(
+            archive_root,
+            &task.subject,
+            &task.html_path,
+            &task.attachments_dir,
+            &task.to,
+            &task.cc,
+            &task.bcc,
+            task.in_reply_to.as_deref(),
+            task.references.as_deref(),
+            &response.message_id,
+            &response.submitted_at,
+            from,
+        ) {
+            warn!("failed to archive outbound email: {}", err);
+        }
+    }
+    Ok(())
+}
+
+/// Execute a SendReplyTask via Slack.
+fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    use crate::adapters::slack::SlackOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter, OutboundMessage};
+
+    dotenvy::dotenv().ok();
+    let bot_token = std::env::var("SLACK_BOT_TOKEN")
+        .map_err(|_| SchedulerError::TaskFailed("SLACK_BOT_TOKEN not set".to_string()))?;
+
+    let adapter = SlackOutboundAdapter::new(bot_token);
+
+    // Read text content from html_path if it exists
+    let text_body = if task.html_path.exists() {
+        fs::read_to_string(&task.html_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let message = OutboundMessage {
+        channel: Channel::Slack,
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: vec![],
+        bcc: vec![],
+        subject: task.subject.clone(),
+        text_body,
+        html_body: String::new(),
+        html_path: Some(task.html_path.clone()),
+        attachments_dir: Some(task.attachments_dir.clone()),
+        thread_id: task.in_reply_to.clone(), // Use in_reply_to as thread_ts for Slack
+        metadata: ChannelMetadata {
+            slack_channel_id: task.to.first().cloned(),
+            ..Default::default()
+        },
+    };
+
+    let result = adapter.send(&message).map_err(|err| {
+        SchedulerError::TaskFailed(format!("Slack send failed: {}", err))
+    })?;
+
+    if !result.success {
+        return Err(SchedulerError::TaskFailed(format!(
+            "Slack API error: {}",
+            result.error.unwrap_or_default()
+        )));
+    }
+
+    info!(
+        "sent Slack message to {:?}, message_id={}",
+        task.to, result.message_id
+    );
+    Ok(())
 }
 
 pub struct Scheduler<E: TaskExecutor> {
@@ -298,7 +434,8 @@ impl<E: TaskExecutor> Scheduler<E> {
     ) -> Result<Uuid, SchedulerError> {
         let local_now = Local::now();
         let utc_now = local_now.with_timezone(&Utc);
-        let chrono_delay = chrono::Duration::from_std(delay).map_err(|_| SchedulerError::DurationOutOfRange)?;
+        let chrono_delay =
+            chrono::Duration::from_std(delay).map_err(|_| SchedulerError::DurationOutOfRange)?;
         let run_at = utc_now + chrono_delay;
 
         let task = ScheduledTask {
@@ -366,6 +503,16 @@ impl<E: TaskExecutor> Scheduler<E> {
     fn execute_task_at_index(&mut self, index: usize) -> Result<(), SchedulerError> {
         let task_id = self.tasks[index].id;
         let task_kind = self.tasks[index].kind.clone();
+        if let TaskKind::RunTask(task) = &self.tasks[index].kind {
+            if let Err(err) = write_scheduler_snapshot(&task.workspace_dir, &self.tasks, Utc::now())
+            {
+                warn!(
+                    "failed to write scheduler snapshot for {}: {}",
+                    task.workspace_dir.display(),
+                    err
+                );
+            }
+        }
         let started_at = Utc::now();
         let execution_id = self.store.record_execution_start(task_id, started_at)?;
         let result = self.executor.execute(&task_kind);
@@ -373,10 +520,14 @@ impl<E: TaskExecutor> Scheduler<E> {
 
         match result {
             Ok(execution) => {
-                self.store.record_execution_finish(execution_id, executed_at, "success", None)?;
+                self.store
+                    .record_execution_finish(execution_id, executed_at, "success", None)?;
                 self.tasks[index].last_run = Some(executed_at);
                 match &mut self.tasks[index].schedule {
-                    Schedule::Cron { expression, next_run } => {
+                    Schedule::Cron {
+                        expression,
+                        next_run,
+                    } => {
                         *next_run = next_run_after(expression, executed_at)?;
                     }
                     Schedule::OneShot { .. } => {
@@ -400,6 +551,18 @@ impl<E: TaskExecutor> Scheduler<E> {
                     if let Err(err) = schedule_auto_reply(self, task) {
                         warn!(
                             "failed to schedule auto reply from {}: {}",
+                            task.workspace_dir.display(),
+                            err
+                        );
+                    }
+                    if let Some(err) = execution.scheduler_actions_error.as_deref() {
+                        warn!("scheduler actions parse error: {}", err);
+                    }
+                    if let Err(err) =
+                        apply_scheduler_actions(self, task, &execution.scheduler_actions)
+                    {
+                        warn!(
+                            "failed to apply scheduler actions from {}: {}",
                             task.workspace_dir.display(),
                             err
                         );
@@ -432,7 +595,6 @@ impl<E: TaskExecutor> Scheduler<E> {
         }
         Ok(())
     }
-
 }
 
 impl ScheduledTask {
@@ -469,6 +631,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'email',
     enabled INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     last_run TEXT,
@@ -483,6 +646,7 @@ CREATE TABLE IF NOT EXISTS send_email_tasks (
     subject TEXT NOT NULL,
     html_path TEXT NOT NULL,
     attachments_dir TEXT NOT NULL,
+    from_address TEXT,
     in_reply_to TEXT,
     references_header TEXT,
     archive_root TEXT,
@@ -497,6 +661,14 @@ CREATE TABLE IF NOT EXISTS send_email_recipients (
     address TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS send_slack_tasks (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    slack_channel_id TEXT NOT NULL,
+    thread_ts TEXT,
+    text_path TEXT NOT NULL,
+    workspace_dir TEXT
+);
+
 CREATE TABLE IF NOT EXISTS run_task_tasks (
     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
     workspace_dir TEXT NOT NULL,
@@ -505,8 +677,10 @@ CREATE TABLE IF NOT EXISTS run_task_tasks (
     memory_dir TEXT NOT NULL,
     reference_dir TEXT NOT NULL,
     model_name TEXT NOT NULL,
+    runner TEXT NOT NULL,
     codex_disabled INTEGER NOT NULL,
     reply_to TEXT NOT NULL,
+    reply_from TEXT,
     archive_root TEXT,
     thread_id TEXT,
     thread_epoch INTEGER,
@@ -537,6 +711,12 @@ fn ensure_send_email_task_columns(conn: &Connection) -> Result<(), SchedulerErro
             [],
         )?;
     }
+    if !columns.contains("from_address") {
+        conn.execute(
+            "ALTER TABLE send_email_tasks ADD COLUMN from_address TEXT",
+            [],
+        )?;
+    }
     if !columns.contains("references_header") {
         conn.execute(
             "ALTER TABLE send_email_tasks ADD COLUMN references_header TEXT",
@@ -564,6 +744,37 @@ fn ensure_send_email_task_columns(conn: &Connection) -> Result<(), SchedulerErro
     Ok(())
 }
 
+fn ensure_tasks_columns(conn: &Connection) -> Result<(), SchedulerError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(tasks)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+
+    if !columns.contains("channel") {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN channel TEXT NOT NULL DEFAULT 'email'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_send_slack_tasks_table(conn: &Connection) -> Result<(), SchedulerError> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS send_slack_tasks (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+            slack_channel_id TEXT NOT NULL,
+            thread_ts TEXT,
+            text_path TEXT NOT NULL,
+            workspace_dir TEXT
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_run_task_task_columns(conn: &Connection) -> Result<(), SchedulerError> {
     let mut stmt = conn.prepare("PRAGMA table_info(run_task_tasks)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -578,11 +789,20 @@ fn ensure_run_task_task_columns(conn: &Connection) -> Result<(), SchedulerError>
             [],
         )?;
     }
-    if !columns.contains("thread_id") {
+    if !columns.contains("runner") {
         conn.execute(
-            "ALTER TABLE run_task_tasks ADD COLUMN thread_id TEXT",
+            "ALTER TABLE run_task_tasks ADD COLUMN runner TEXT",
             [],
         )?;
+    }
+    if !columns.contains("reply_from") {
+        conn.execute(
+            "ALTER TABLE run_task_tasks ADD COLUMN reply_from TEXT",
+            [],
+        )?;
+    }
+    if !columns.contains("thread_id") {
+        conn.execute("ALTER TABLE run_task_tasks ADD COLUMN thread_id TEXT", [])?;
     }
     if !columns.contains("thread_epoch") {
         conn.execute(
@@ -614,7 +834,7 @@ impl SqliteSchedulerStore {
     fn load_tasks(&self) -> Result<Vec<ScheduledTask>, SchedulerError> {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
-            "SELECT id, kind, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at
+            "SELECT id, kind, channel, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at
              FROM tasks
              ORDER BY created_at",
         )?;
@@ -622,13 +842,14 @@ impl SqliteSchedulerStore {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
 
@@ -637,6 +858,7 @@ impl SqliteSchedulerStore {
             let (
                 id_raw,
                 kind_raw,
+                channel_raw,
                 enabled_raw,
                 created_at_raw,
                 last_run_raw,
@@ -645,6 +867,7 @@ impl SqliteSchedulerStore {
                 next_run_raw,
                 run_at_raw,
             ) = row?;
+            let channel: Channel = channel_raw.parse().unwrap_or_default();
             let id = Uuid::parse_str(&id_raw)?;
             let created_at = parse_datetime(&created_at_raw)?;
             let last_run = parse_optional_datetime(last_run_raw.as_deref())?;
@@ -663,7 +886,10 @@ impl SqliteSchedulerStore {
                         ))
                     })?;
                     let next_run = parse_datetime(&next_run_raw)?;
-                    Schedule::Cron { expression, next_run }
+                    Schedule::Cron {
+                        expression,
+                        next_run,
+                    }
                 }
                 "one_shot" => {
                     let run_at_raw = run_at_raw.ok_or_else(|| {
@@ -683,8 +909,17 @@ impl SqliteSchedulerStore {
                 }
             };
             let kind = match kind_raw.as_str() {
-                "send_email" => TaskKind::SendEmail(self.load_send_email_task(&conn, &id_raw)?),
-                "run_task" => TaskKind::RunTask(self.load_run_task_task(&conn, &id_raw)?),
+                "send_email" => {
+                    // Dispatch to appropriate loader based on channel
+                    let send_task = match channel {
+                        Channel::Slack => self.load_send_slack_task(&conn, &id_raw)?,
+                        Channel::Email | Channel::Telegram => {
+                            self.load_send_email_task(&conn, &id_raw)?
+                        }
+                    };
+                    TaskKind::SendReply(send_task)
+                }
+                "run_task" => TaskKind::RunTask(self.load_run_task_task(&conn, &id_raw, channel)?),
                 "noop" => TaskKind::Noop,
                 other => {
                     return Err(SchedulerError::Storage(format!(
@@ -709,12 +944,14 @@ impl SqliteSchedulerStore {
         let mut conn = self.open()?;
         let tx = conn.transaction()?;
         let (schedule_type, cron_expression, next_run, run_at) = schedule_columns(&task.schedule);
+        let channel = task_kind_channel(&task.kind);
         tx.execute(
-            "INSERT INTO tasks (id, kind, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO tasks (id, kind, channel, enabled, created_at, last_run, schedule_type, cron_expression, next_run, run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 task.id.to_string(),
                 task_kind_label(&task.kind),
+                channel.to_string(),
                 bool_to_int(task.enabled),
                 format_datetime(task.created_at.clone()),
                 task.last_run.as_ref().map(|value| format_datetime(value.clone())),
@@ -726,49 +963,21 @@ impl SqliteSchedulerStore {
         )?;
 
         match &task.kind {
-            TaskKind::SendEmail(send) => {
-                tx.execute(
-                    "INSERT INTO send_email_tasks (task_id, subject, html_path, attachments_dir, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        task.id.to_string(),
-                        send.subject.as_str(),
-                        send.html_path.to_string_lossy().into_owned(),
-                        send.attachments_dir.to_string_lossy().into_owned(),
-                        send.in_reply_to.as_deref(),
-                        send.references.as_deref(),
-                        send.archive_root
-                            .as_ref()
-                            .map(|value| value.to_string_lossy().into_owned()),
-                        send.thread_epoch.map(|value| value as i64),
-                        send.thread_state_path
-                            .as_ref()
-                            .map(|value| value.to_string_lossy().into_owned()),
-                    ],
-                )?;
-                insert_recipients(
-                    &tx,
-                    &task.id.to_string(),
-                    "to",
-                    &send.to,
-                )?;
-                insert_recipients(
-                    &tx,
-                    &task.id.to_string(),
-                    "cc",
-                    &send.cc,
-                )?;
-                insert_recipients(
-                    &tx,
-                    &task.id.to_string(),
-                    "bcc",
-                    &send.bcc,
-                )?;
+            TaskKind::SendReply(send) => {
+                // Dispatch to appropriate child table based on channel
+                match send.channel {
+                    Channel::Slack => {
+                        self.insert_send_slack_task(&tx, &task.id.to_string(), send)?;
+                    }
+                    Channel::Email | Channel::Telegram => {
+                        self.insert_send_email_task(&tx, &task.id.to_string(), send)?;
+                    }
+                }
             }
             TaskKind::RunTask(run) => {
                 tx.execute(
-                    "INSERT INTO run_task_tasks (task_id, workspace_dir, input_email_dir, input_attachments_dir, memory_dir, reference_dir, model_name, codex_disabled, reply_to, archive_root, thread_id, thread_epoch, thread_state_path)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    "INSERT INTO run_task_tasks (task_id, workspace_dir, input_email_dir, input_attachments_dir, memory_dir, reference_dir, model_name, runner, codex_disabled, reply_to, reply_from, archive_root, thread_id, thread_epoch, thread_state_path)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         task.id.to_string(),
                         run.workspace_dir.to_string_lossy().into_owned(),
@@ -777,8 +986,10 @@ impl SqliteSchedulerStore {
                         run.memory_dir.to_string_lossy().into_owned(),
                         run.reference_dir.to_string_lossy().into_owned(),
                         run.model_name.as_str(),
+                        run.runner.as_str(),
                         bool_to_int(run.codex_disabled),
                         join_recipients(&run.reply_to),
+                        run.reply_from.as_deref(),
                         run.archive_root
                             .as_ref()
                             .map(|value| value.to_string_lossy().into_owned()),
@@ -811,7 +1022,9 @@ impl SqliteSchedulerStore {
              WHERE id = ?7",
             params![
                 bool_to_int(task.enabled),
-                task.last_run.as_ref().map(|value| format_datetime(value.clone())),
+                task.last_run
+                    .as_ref()
+                    .map(|value| format_datetime(value.clone())),
                 schedule_type,
                 cron_expression,
                 next_run,
@@ -860,14 +1073,70 @@ impl SqliteSchedulerStore {
         Ok(())
     }
 
+    fn insert_send_email_task(
+        &self,
+        tx: &Transaction,
+        task_id: &str,
+        send: &SendReplyTask,
+    ) -> Result<(), SchedulerError> {
+        tx.execute(
+            "INSERT INTO send_email_tasks (task_id, subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                task_id,
+                send.subject.as_str(),
+                send.html_path.to_string_lossy().into_owned(),
+                send.attachments_dir.to_string_lossy().into_owned(),
+                send.from.as_deref(),
+                send.in_reply_to.as_deref(),
+                send.references.as_deref(),
+                send.archive_root
+                    .as_ref()
+                    .map(|value| value.to_string_lossy().into_owned()),
+                send.thread_epoch.map(|value| value as i64),
+                send.thread_state_path
+                    .as_ref()
+                    .map(|value| value.to_string_lossy().into_owned()),
+            ],
+        )?;
+        insert_recipients(tx, task_id, "to", &send.to)?;
+        insert_recipients(tx, task_id, "cc", &send.cc)?;
+        insert_recipients(tx, task_id, "bcc", &send.bcc)?;
+        Ok(())
+    }
+
+    fn insert_send_slack_task(
+        &self,
+        tx: &Transaction,
+        task_id: &str,
+        send: &SendReplyTask,
+    ) -> Result<(), SchedulerError> {
+        // For Slack, we use to[0] as channel_id and html_path as text_path
+        let slack_channel_id = send.to.first().cloned().unwrap_or_default();
+        let thread_ts = send.in_reply_to.clone();
+        let workspace_dir = send.archive_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+        tx.execute(
+            "INSERT INTO send_slack_tasks (task_id, slack_channel_id, thread_ts, text_path, workspace_dir)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                task_id,
+                slack_channel_id,
+                thread_ts,
+                send.html_path.to_string_lossy().into_owned(),
+                workspace_dir,
+            ],
+        )?;
+        Ok(())
+    }
+
     fn load_send_email_task(
         &self,
         conn: &Connection,
         task_id: &str,
-    ) -> Result<SendEmailTask, SchedulerError> {
+    ) -> Result<SendReplyTask, SchedulerError> {
         let row = conn
             .query_row(
-                "SELECT subject, html_path, attachments_dir, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path
+                "SELECT subject, html_path, attachments_dir, from_address, in_reply_to, references_header, archive_root, thread_epoch, thread_state_path
                  FROM send_email_tasks
                  WHERE task_id = ?1",
                 params![task_id],
@@ -879,8 +1148,9 @@ impl SqliteSchedulerStore {
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<i64>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -889,17 +1159,14 @@ impl SqliteSchedulerStore {
             subject,
             html_path,
             attachments_dir,
+            from_raw,
             in_reply_to_raw,
             references_raw,
             archive_root,
             thread_epoch_raw,
             thread_state_path,
-        ) =
-            row.ok_or_else(|| {
-            SchedulerError::Storage(format!(
-                "missing send_email_tasks row for task {}",
-                task_id
-            ))
+        ) = row.ok_or_else(|| {
+            SchedulerError::Storage(format!("missing send_email_tasks row for task {}", task_id))
         })?;
 
         let mut to = Vec::new();
@@ -924,10 +1191,12 @@ impl SqliteSchedulerStore {
             }
         }
 
-        Ok(SendEmailTask {
+        Ok(SendReplyTask {
+            channel: Channel::Email,
             subject,
             html_path: PathBuf::from(html_path),
             attachments_dir: PathBuf::from(attachments_dir),
+            from: normalize_header_value(from_raw),
             to,
             cc,
             bcc,
@@ -939,14 +1208,57 @@ impl SqliteSchedulerStore {
         })
     }
 
+    fn load_send_slack_task(
+        &self,
+        conn: &Connection,
+        task_id: &str,
+    ) -> Result<SendReplyTask, SchedulerError> {
+        let row = conn
+            .query_row(
+                "SELECT slack_channel_id, thread_ts, text_path, workspace_dir
+                 FROM send_slack_tasks
+                 WHERE task_id = ?1",
+                params![task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let (slack_channel_id, thread_ts, text_path, workspace_dir) = row.ok_or_else(|| {
+            SchedulerError::Storage(format!("missing send_slack_tasks row for task {}", task_id))
+        })?;
+
+        Ok(SendReplyTask {
+            channel: Channel::Slack,
+            subject: String::new(), // Slack doesn't use subject
+            html_path: PathBuf::from(text_path),
+            attachments_dir: PathBuf::new(), // Slack attachments handled differently
+            from: None,
+            to: vec![slack_channel_id], // channel_id stored in to[0]
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            in_reply_to: thread_ts, // thread_ts stored in in_reply_to
+            references: None,
+            archive_root: workspace_dir.map(PathBuf::from),
+            thread_epoch: None,
+            thread_state_path: None,
+        })
+    }
+
     fn load_run_task_task(
         &self,
         conn: &Connection,
         task_id: &str,
+        channel: Channel,
     ) -> Result<RunTaskTask, SchedulerError> {
         let row = conn
             .query_row(
-                "SELECT workspace_dir, input_email_dir, input_attachments_dir, memory_dir, reference_dir, model_name, codex_disabled, reply_to, archive_root, thread_id, thread_epoch, thread_state_path
+                "SELECT workspace_dir, input_email_dir, input_attachments_dir, memory_dir, reference_dir, model_name, runner, codex_disabled, reply_to, reply_from, archive_root, thread_id, thread_epoch, thread_state_path
                  FROM run_task_tasks
                  WHERE task_id = ?1",
                 params![task_id],
@@ -958,12 +1270,14 @@ impl SqliteSchedulerStore {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, String>(7)?,
-                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, String>(8)?,
                         row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, Option<String>>(10)?,
                         row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
                     ))
                 },
             )
@@ -975,17 +1289,16 @@ impl SqliteSchedulerStore {
             memory_dir,
             reference_dir,
             model_name,
+            runner,
             codex_disabled,
             reply_to_raw,
+            reply_from,
             archive_root,
             thread_id,
             thread_epoch_raw,
             thread_state_path,
         ) = row.ok_or_else(|| {
-            SchedulerError::Storage(format!(
-                "missing run_task_tasks row for task {}",
-                task_id
-            ))
+            SchedulerError::Storage(format!("missing run_task_tasks row for task {}", task_id))
         })?;
 
         Ok(RunTaskTask {
@@ -995,12 +1308,20 @@ impl SqliteSchedulerStore {
             memory_dir: PathBuf::from(memory_dir),
             reference_dir: PathBuf::from(reference_dir),
             model_name,
+            runner: runner
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "codex".to_string()),
             codex_disabled: codex_disabled != 0,
             reply_to: split_recipients(&reply_to_raw),
+            reply_from: normalize_header_value(reply_from),
             archive_root: normalize_optional_path(archive_root),
             thread_id,
             thread_epoch: thread_epoch_raw.map(|value| value as u64),
             thread_state_path: normalize_optional_path(thread_state_path),
+            channel,
         })
     }
 
@@ -1011,7 +1332,9 @@ impl SqliteSchedulerStore {
         let conn = Connection::open(&self.path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(SCHEDULER_SCHEMA)?;
+        ensure_tasks_columns(&conn)?;
         ensure_send_email_task_columns(&conn)?;
+        ensure_send_slack_tasks_table(&conn)?;
         ensure_run_task_task_columns(&conn)?;
         Ok(conn)
     }
@@ -1019,9 +1342,17 @@ impl SqliteSchedulerStore {
 
 fn task_kind_label(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::SendEmail(_) => "send_email",
+        TaskKind::SendReply(_) => "send_email",
         TaskKind::RunTask(_) => "run_task",
         TaskKind::Noop => "noop",
+    }
+}
+
+fn task_kind_channel(kind: &TaskKind) -> Channel {
+    match kind {
+        TaskKind::SendReply(send) => send.channel.clone(),
+        TaskKind::RunTask(run) => run.channel.clone(),
+        TaskKind::Noop => Channel::default(),
     }
 }
 
@@ -1029,7 +1360,10 @@ fn schedule_columns(
     schedule: &Schedule,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
     match schedule {
-        Schedule::Cron { expression, next_run } => (
+        Schedule::Cron {
+            expression,
+            next_run,
+        } => (
             "cron".to_string(),
             Some(expression.clone()),
             Some(format_datetime(next_run.clone())),
@@ -1128,6 +1462,174 @@ fn snapshot_reply_draft(task: &RunTaskTask) -> Result<(), SchedulerError> {
     Ok(())
 }
 
+const SCHEDULER_SNAPSHOT_FILENAME: &str = "scheduler_snapshot.json";
+const SCHEDULER_SNAPSHOT_WINDOW_DAYS: i64 = 7;
+
+#[derive(Debug, Serialize)]
+struct SchedulerSnapshot {
+    generated_at: DateTime<Utc>,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    total_enabled: usize,
+    upcoming: Vec<SchedulerSnapshotTask>,
+    omitted_past_due: usize,
+    omitted_after_window: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SchedulerSnapshotTask {
+    id: String,
+    kind: String,
+    schedule: SchedulerSnapshotSchedule,
+    next_run: DateTime<Utc>,
+    last_run: Option<DateTime<Utc>>,
+    status: String,
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SchedulerSnapshotSchedule {
+    Cron {
+        expression: String,
+        next_run: DateTime<Utc>,
+    },
+    OneShot {
+        run_at: DateTime<Utc>,
+    },
+}
+
+fn write_scheduler_snapshot(
+    workspace_dir: &Path,
+    tasks: &[ScheduledTask],
+    now: DateTime<Utc>,
+) -> Result<(), SchedulerError> {
+    let snapshot = build_scheduler_snapshot(tasks, now);
+    let payload = serde_json::to_string_pretty(&snapshot)
+        .map_err(|err| SchedulerError::Storage(format!("snapshot json error: {}", err)))?;
+    let path = workspace_dir.join(SCHEDULER_SNAPSHOT_FILENAME);
+    fs::write(path, payload)?;
+    Ok(())
+}
+
+fn build_scheduler_snapshot(tasks: &[ScheduledTask], now: DateTime<Utc>) -> SchedulerSnapshot {
+    let window_end = now + chrono::Duration::days(SCHEDULER_SNAPSHOT_WINDOW_DAYS);
+    let mut upcoming = Vec::new();
+    let mut omitted_past_due = 0usize;
+    let mut omitted_after_window = 0usize;
+    let mut total_enabled = 0usize;
+
+    for task in tasks {
+        if !task.enabled {
+            continue;
+        }
+        total_enabled += 1;
+        let next_run = schedule_next_run_at(&task.schedule);
+        if next_run < now {
+            omitted_past_due += 1;
+            continue;
+        }
+        if next_run > window_end {
+            omitted_after_window += 1;
+            continue;
+        }
+        upcoming.push(SchedulerSnapshotTask {
+            id: task.id.to_string(),
+            kind: task_kind_label(&task.kind).to_string(),
+            schedule: snapshot_schedule(&task.schedule),
+            next_run,
+            last_run: task.last_run,
+            status: task_status_label(task, now),
+            label: task_label(&task.kind),
+        });
+    }
+
+    upcoming.sort_by_key(|task| task.next_run);
+
+    SchedulerSnapshot {
+        generated_at: now,
+        window_start: now,
+        window_end,
+        total_enabled,
+        upcoming,
+        omitted_past_due,
+        omitted_after_window,
+    }
+}
+
+fn snapshot_schedule(schedule: &Schedule) -> SchedulerSnapshotSchedule {
+    match schedule {
+        Schedule::Cron {
+            expression,
+            next_run,
+        } => SchedulerSnapshotSchedule::Cron {
+            expression: expression.clone(),
+            next_run: next_run.clone(),
+        },
+        Schedule::OneShot { run_at } => SchedulerSnapshotSchedule::OneShot {
+            run_at: run_at.clone(),
+        },
+    }
+}
+
+fn schedule_next_run_at(schedule: &Schedule) -> DateTime<Utc> {
+    match schedule {
+        Schedule::Cron { next_run, .. } => next_run.clone(),
+        Schedule::OneShot { run_at } => run_at.clone(),
+    }
+}
+
+fn task_status_label(task: &ScheduledTask, now: DateTime<Utc>) -> String {
+    if !task.enabled {
+        if task.last_run.is_some() {
+            return "completed".to_string();
+        }
+        return "disabled".to_string();
+    }
+    if task.is_due(now) {
+        "due".to_string()
+    } else {
+        "scheduled".to_string()
+    }
+}
+
+fn task_label(kind: &TaskKind) -> Option<String> {
+    match kind {
+        TaskKind::SendReply(task) => {
+            if task.subject.trim().is_empty() {
+                None
+            } else {
+                Some(truncate_label(task.subject.trim(), 120))
+            }
+        }
+        TaskKind::RunTask(task) => {
+            if let Some(thread_id) = task
+                .thread_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                Some(truncate_label(thread_id, 120))
+            } else {
+                task.workspace_dir
+                    .file_name()
+                    .map(|value| truncate_label(&value.to_string_lossy(), 120))
+            }
+        }
+        TaskKind::Noop => None,
+    }
+}
+
+fn truncate_label(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_string();
+    }
+    let mut end = max_len.saturating_sub(1);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
 fn thread_epoch_matches(task: &RunTaskTask) -> bool {
     let expected = match task.thread_epoch {
         Some(value) => value,
@@ -1207,11 +1709,14 @@ fn schedule_auto_reply<E: TaskExecutor>(
     }
     let attachments_dir = task.workspace_dir.join("reply_email_attachments");
     let reply_context = load_reply_context(&task.workspace_dir);
+    let reply_from = task.reply_from.clone().or(reply_context.from.clone());
 
-    let send_task = SendEmailTask {
+    let send_task = SendReplyTask {
+        channel: task.channel.clone(),
         subject: reply_context.subject,
         html_path,
         attachments_dir,
+        from: reply_from,
         to: task.reply_to.clone(),
         cc: Vec::new(),
         bcc: Vec::new(),
@@ -1222,14 +1727,13 @@ fn schedule_auto_reply<E: TaskExecutor>(
         thread_state_path: task.thread_state_path.clone(),
     };
 
-    let task_id = scheduler.add_one_shot_in(
-        Duration::from_secs(0),
-        TaskKind::SendEmail(send_task),
-    )?;
+    let task_id =
+        scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendReply(send_task))?;
     info!(
-        "scheduled auto reply task {} from {}",
+        "scheduled auto reply task {} from {} via {:?}",
         task_id,
-        task.workspace_dir.display()
+        task.workspace_dir.display(),
+        task.channel
     );
     Ok(true)
 }
@@ -1295,10 +1799,22 @@ fn schedule_send_email<E: TaskExecutor>(
         return Ok(false);
     }
 
-    let send_task = SendEmailTask {
+    let reply_context = load_reply_context(&task.workspace_dir);
+    let from = request
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|value: &&str| !value.is_empty())
+        .map(|value: &str| value.to_string())
+        .or_else(|| task.reply_from.clone())
+        .or_else(|| reply_context.from.clone());
+
+    let send_task = SendReplyTask {
+        channel: task.channel.clone(),
         subject: request.subject.clone(),
         html_path,
         attachments_dir,
+        from,
         to,
         cc: request.cc.clone(),
         bcc: request.bcc.clone(),
@@ -1312,13 +1828,13 @@ fn schedule_send_email<E: TaskExecutor>(
     if let Some(run_at_raw) = request.run_at.as_deref() {
         match parse_datetime(run_at_raw) {
             Ok(run_at) => {
-                let task_id =
-                    scheduler.add_one_shot_at(run_at, TaskKind::SendEmail(send_task))?;
+                let task_id = scheduler.add_one_shot_at(run_at, TaskKind::SendReply(send_task))?;
                 info!(
-                    "scheduled follow-up send_email task {} from {} run_at={}",
+                    "scheduled follow-up send_email task {} from {} run_at={} via {:?}",
                     task_id,
                     task.workspace_dir.display(),
-                    run_at.to_rfc3339()
+                    run_at.to_rfc3339(),
+                    task.channel
                 );
                 return Ok(true);
             }
@@ -1336,8 +1852,8 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let delay_seconds = request
         .delay_seconds
-        .or_else(|| request.delay_minutes.map(|value| value.saturating_mul(60)));
-    let delay_seconds = match delay_seconds {
+        .or_else(|| request.delay_minutes.map(|value: i64| value.saturating_mul(60)));
+    let delay_seconds: u64 = match delay_seconds {
         Some(value) => value.max(0) as u64,
         None => {
             warn!(
@@ -1350,7 +1866,7 @@ fn schedule_send_email<E: TaskExecutor>(
 
     let task_id = scheduler.add_one_shot_in(
         Duration::from_secs(delay_seconds),
-        TaskKind::SendEmail(send_task),
+        TaskKind::SendReply(send_task),
     )?;
     info!(
         "scheduled follow-up send_email task {} from {} delay_seconds={}",
@@ -1359,6 +1875,160 @@ fn schedule_send_email<E: TaskExecutor>(
         delay_seconds
     );
     Ok(true)
+}
+
+fn apply_scheduler_actions<E: TaskExecutor>(
+    scheduler: &mut Scheduler<E>,
+    task: &RunTaskTask,
+    actions: &[run_task_module::SchedulerActionRequest],
+) -> Result<(), SchedulerError> {
+    if actions.is_empty() {
+        return Ok(());
+    }
+    let now = Utc::now();
+    let mut canceled = 0usize;
+    let mut rescheduled = 0usize;
+    let mut created = 0usize;
+    let mut skipped = 0usize;
+
+    for action in actions {
+        match action {
+            run_task_module::SchedulerActionRequest::Cancel { task_ids } => {
+                let (ids, invalid) = parse_action_task_ids(task_ids);
+                if !invalid.is_empty() {
+                    warn!("scheduler actions invalid task ids: {:?}", invalid);
+                }
+                if ids.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                canceled += scheduler.disable_tasks_by(|task| ids.contains(&task.id))?;
+            }
+            run_task_module::SchedulerActionRequest::Reschedule { task_id, schedule } => {
+                let task_id = match Uuid::parse_str(task_id) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        warn!("scheduler actions invalid task id: {}", task_id);
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                let target = scheduler.tasks.iter_mut().find(|task| task.id == task_id);
+                let target = match target {
+                    Some(target) => target,
+                    None => {
+                        warn!("scheduler actions task not found: {}", task_id);
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                match resolve_schedule_request(schedule, now) {
+                    Ok(new_schedule) => {
+                        target.schedule = new_schedule;
+                        target.enabled = true;
+                        scheduler.store.update_task(target)?;
+                        rescheduled += 1;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "scheduler actions invalid schedule for {}: {}",
+                            task_id, err
+                        );
+                        skipped += 1;
+                    }
+                }
+            }
+            run_task_module::SchedulerActionRequest::CreateRunTask {
+                schedule,
+                model_name,
+                codex_disabled,
+                reply_to,
+            } => {
+                let schedule = match resolve_schedule_request(schedule, now) {
+                    Ok(schedule) => schedule,
+                    Err(err) => {
+                        warn!(
+                            "scheduler actions invalid create_run_task schedule: {}",
+                            err
+                        );
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                let mut new_task = task.clone();
+                if let Some(model_name) =
+                    model_name.as_ref().filter(|value| !value.trim().is_empty())
+                {
+                    new_task.model_name = model_name.to_string();
+                }
+                if let Some(codex_disabled) = codex_disabled {
+                    new_task.codex_disabled = *codex_disabled;
+                }
+                if !reply_to.is_empty() {
+                    new_task.reply_to = reply_to.clone();
+                }
+                match schedule {
+                    Schedule::Cron { expression, .. } => {
+                        scheduler.add_cron_task(&expression, TaskKind::RunTask(new_task))?;
+                        created += 1;
+                    }
+                    Schedule::OneShot { run_at } => {
+                        scheduler.add_one_shot_at(run_at, TaskKind::RunTask(new_task))?;
+                        created += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    info!(
+        "scheduler actions applied workspace={} canceled={} rescheduled={} created={} skipped={}",
+        task.workspace_dir.display(),
+        canceled,
+        rescheduled,
+        created,
+        skipped
+    );
+    Ok(())
+}
+
+fn parse_action_task_ids(task_ids: &[String]) -> (HashSet<Uuid>, Vec<String>) {
+    let mut ids = HashSet::new();
+    let mut invalid = Vec::new();
+    for raw in task_ids {
+        match Uuid::parse_str(raw) {
+            Ok(id) => {
+                ids.insert(id);
+            }
+            Err(_) => invalid.push(raw.clone()),
+        }
+    }
+    (ids, invalid)
+}
+
+fn resolve_schedule_request(
+    schedule: &run_task_module::ScheduleRequest,
+    now: DateTime<Utc>,
+) -> Result<Schedule, SchedulerError> {
+    match schedule {
+        run_task_module::ScheduleRequest::Cron { expression } => {
+            validate_cron_expression(expression)?;
+            let next_run = next_run_after(expression, now)?;
+            Ok(Schedule::Cron {
+                expression: expression.clone(),
+                next_run,
+            })
+        }
+        run_task_module::ScheduleRequest::OneShot { run_at } => {
+            let run_at = parse_datetime(run_at)?;
+            if run_at < now {
+                return Err(SchedulerError::TaskFailed(
+                    "one_shot run_at is in the past".to_string(),
+                ));
+            }
+            Ok(Schedule::OneShot { run_at })
+        }
+    }
 }
 
 fn resolve_rel_path(root: &Path, raw: &str) -> Option<PathBuf> {
@@ -1370,7 +2040,10 @@ fn resolve_rel_path(root: &Path, raw: &str) -> Option<PathBuf> {
     if rel.is_absolute() {
         return None;
     }
-    if rel.components().any(|comp| matches!(comp, Component::ParentDir)) {
+    if rel
+        .components()
+        .any(|comp| matches!(comp, Component::ParentDir))
+    {
         return None;
     }
     Some(root.join(rel))
@@ -1381,12 +2054,22 @@ struct ReplyContext {
     subject: String,
     in_reply_to: Option<String>,
     references: Option<String>,
+    from: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PostmarkInboundLite {
     #[serde(rename = "Subject")]
     subject: Option<String>,
+    #[serde(rename = "To")]
+    #[allow(dead_code)]
+    to: Option<String>,
+    #[serde(rename = "Cc")]
+    #[allow(dead_code)]
+    cc: Option<String>,
+    #[serde(rename = "Bcc")]
+    #[allow(dead_code)]
+    bcc: Option<String>,
     #[serde(rename = "MessageID", alias = "MessageId")]
     message_id: Option<String>,
     #[serde(rename = "Headers")]
@@ -1432,12 +2115,14 @@ fn load_reply_context(workspace_dir: &Path) -> ReplyContext {
             subject,
             in_reply_to,
             references,
+            from: None,
         }
     } else {
         ReplyContext {
             subject: reply_subject(""),
             in_reply_to: None,
             references: None,
+            from: None,
         }
     }
 }
@@ -1484,11 +2169,166 @@ fn reply_headers(payload: &PostmarkInboundLite) -> (Option<String>, Option<Strin
 }
 
 fn references_contains(references: &str, message_id: &str) -> bool {
-    references.split_whitespace().any(|entry| entry == message_id)
+    references
+        .split_whitespace()
+        .any(|entry| entry == message_id)
 }
 
-pub mod service;
 pub mod index_store;
-pub mod user_store;
-pub mod past_emails;
 pub mod memory_store;
+pub mod past_emails;
+pub mod secrets_store;
+pub mod service;
+pub mod user_store;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[derive(Default)]
+    struct NoopExecutor;
+
+    impl TaskExecutor for NoopExecutor {
+        fn execute(&self, _task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
+            Ok(TaskExecution::empty())
+        }
+    }
+
+    fn base_run_task(workspace: &Path, mail_root: &Path) -> RunTaskTask {
+        RunTaskTask {
+            workspace_dir: workspace.to_path_buf(),
+            input_email_dir: PathBuf::from("incoming_email"),
+            input_attachments_dir: PathBuf::from("incoming_attachments"),
+            memory_dir: PathBuf::from("memory"),
+            reference_dir: PathBuf::from("references"),
+            model_name: "gpt-test".to_string(),
+            runner: "codex".to_string(),
+            codex_disabled: false,
+            reply_to: vec!["user@example.com".to_string()],
+            reply_from: None,
+            archive_root: Some(mail_root.to_path_buf()),
+            thread_id: Some("thread-test".to_string()),
+            thread_epoch: Some(1),
+            thread_state_path: Some(workspace.join("thread_state.json")),
+            channel: Channel::default(),
+        }
+    }
+
+    #[test]
+    fn build_scheduler_snapshot_limits_to_window() {
+        let now = Utc::now();
+        let in_window = ScheduledTask {
+            id: Uuid::new_v4(),
+            kind: TaskKind::Noop,
+            schedule: Schedule::OneShot {
+                run_at: now + chrono::Duration::days(1),
+            },
+            enabled: true,
+            created_at: now,
+            last_run: None,
+        };
+        let out_window = ScheduledTask {
+            id: Uuid::new_v4(),
+            kind: TaskKind::Noop,
+            schedule: Schedule::OneShot {
+                run_at: now + chrono::Duration::days(10),
+            },
+            enabled: true,
+            created_at: now,
+            last_run: None,
+        };
+
+        let snapshot = build_scheduler_snapshot(&[in_window, out_window], now);
+        assert_eq!(snapshot.upcoming.len(), 1);
+        assert_eq!(snapshot.omitted_after_window, 1);
+        assert_eq!(snapshot.total_enabled, 2);
+    }
+
+    #[test]
+    fn apply_scheduler_actions_cancels_and_reschedules() {
+        let temp = TempDir::new().expect("tempdir");
+        let tasks_db = temp.path().join("tasks.db");
+        let mut scheduler = Scheduler::load(&tasks_db, NoopExecutor::default()).expect("load");
+        let now = Utc::now();
+
+        let cancel_id = scheduler
+            .add_one_shot_at(now + chrono::Duration::days(1), TaskKind::Noop)
+            .expect("cancel task");
+        let resched_id = scheduler
+            .add_one_shot_at(now + chrono::Duration::days(2), TaskKind::Noop)
+            .expect("resched task");
+
+        let workspace = temp.path().join("workspaces").join("thread_1");
+        let mail_root = temp.path().join("mail");
+        fs::create_dir_all(&workspace).expect("workspace");
+        fs::create_dir_all(&mail_root).expect("mail");
+        let run_task = base_run_task(&workspace, &mail_root);
+
+        let new_run_at = (now + chrono::Duration::days(3)).to_rfc3339();
+        let actions = vec![
+            run_task_module::SchedulerActionRequest::Cancel {
+                task_ids: vec![cancel_id.to_string()],
+            },
+            run_task_module::SchedulerActionRequest::Reschedule {
+                task_id: resched_id.to_string(),
+                schedule: run_task_module::ScheduleRequest::OneShot { run_at: new_run_at },
+            },
+        ];
+
+        apply_scheduler_actions(&mut scheduler, &run_task, &actions).expect("apply actions");
+
+        let canceled = scheduler
+            .tasks
+            .iter()
+            .find(|task| task.id == cancel_id)
+            .expect("cancel task found");
+        assert!(!canceled.enabled);
+
+        let rescheduled = scheduler
+            .tasks
+            .iter()
+            .find(|task| task.id == resched_id)
+            .expect("resched task found");
+        match &rescheduled.schedule {
+            Schedule::OneShot { run_at } => {
+                assert!(*run_at >= now + chrono::Duration::days(3));
+            }
+            _ => panic!("expected one_shot schedule"),
+        }
+        assert!(rescheduled.enabled);
+    }
+
+    #[test]
+    fn apply_scheduler_actions_creates_run_task() {
+        let temp = TempDir::new().expect("tempdir");
+        let tasks_db = temp.path().join("tasks.db");
+        let mut scheduler = Scheduler::load(&tasks_db, NoopExecutor::default()).expect("load");
+        let now = Utc::now();
+
+        let workspace = temp.path().join("workspaces").join("thread_1");
+        let mail_root = temp.path().join("mail");
+        fs::create_dir_all(&workspace).expect("workspace");
+        fs::create_dir_all(&mail_root).expect("mail");
+        let run_task = base_run_task(&workspace, &mail_root);
+
+        let run_at = (now + chrono::Duration::hours(2)).to_rfc3339();
+        let actions = vec![run_task_module::SchedulerActionRequest::CreateRunTask {
+            schedule: run_task_module::ScheduleRequest::OneShot { run_at },
+            model_name: None,
+            codex_disabled: None,
+            reply_to: Vec::new(),
+        }];
+
+        apply_scheduler_actions(&mut scheduler, &run_task, &actions).expect("apply actions");
+
+        assert_eq!(scheduler.tasks.len(), 1);
+        match &scheduler.tasks[0].kind {
+            TaskKind::RunTask(task) => {
+                assert_eq!(task.workspace_dir, workspace);
+                assert_eq!(task.model_name, "gpt-test");
+            }
+            _ => panic!("expected run_task kind"),
+        }
+    }
+}

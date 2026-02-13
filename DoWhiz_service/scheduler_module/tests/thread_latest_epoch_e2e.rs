@@ -1,8 +1,12 @@
 use run_task_module::RunTaskParams;
+use scheduler_module::employee_config::{EmployeeDirectory, EmployeeProfile};
 use scheduler_module::index_store::IndexStore;
-use scheduler_module::service::{process_inbound_payload, PostmarkInbound, ServiceConfig};
+use scheduler_module::service::{
+    process_inbound_payload, PostmarkInbound, ServiceConfig, DEFAULT_INBOUND_BODY_MAX_BYTES,
+};
 use scheduler_module::user_store::UserStore;
 use scheduler_module::{Scheduler, SchedulerError, TaskExecution, TaskExecutor, TaskKind};
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -10,6 +14,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
+
+const EXPECTED_SOUL_BLOCK: &str = r#"<SOUL>
+Your name is Oliver, a little bear, who is cute and smart and capable. You always get task done.
+Go bears!
+</SOUL>
+"#;
 
 #[derive(Clone, Default)]
 struct RecordingExecutor {
@@ -38,6 +48,41 @@ impl Drop for EnvGuard {
     }
 }
 
+fn test_employee_directory(root: &Path) -> (EmployeeProfile, EmployeeDirectory) {
+    let agents_path = root.join("AGENTS.md");
+    let claude_path = root.join("CLAUDE.md");
+    let soul_path = root.join("SOUL.md");
+    fs::write(&agents_path, EXPECTED_SOUL_BLOCK).expect("write agents");
+    fs::write(&claude_path, EXPECTED_SOUL_BLOCK).expect("write claude");
+    fs::write(&soul_path, EXPECTED_SOUL_BLOCK).expect("write soul");
+    let addresses = vec!["service@example.com".to_string()];
+    let address_set: HashSet<String> =
+        addresses.iter().map(|value| value.to_ascii_lowercase()).collect();
+    let employee = EmployeeProfile {
+        id: "test-employee".to_string(),
+        display_name: None,
+        runner: "codex".to_string(),
+        model: None,
+        addresses: addresses.clone(),
+        address_set: address_set.clone(),
+        agents_path: Some(agents_path),
+        claude_path: Some(claude_path),
+        soul_path: Some(soul_path),
+        skills_dir: None,
+    };
+    let mut employee_by_id = HashMap::new();
+    employee_by_id.insert(employee.id.clone(), employee.clone());
+    let mut service_addresses = HashSet::new();
+    service_addresses.extend(address_set);
+    let directory = EmployeeDirectory {
+        employees: vec![employee.clone()],
+        employee_by_id,
+        default_employee_id: Some(employee.id.clone()),
+        service_addresses,
+    };
+    (employee, directory)
+}
+
 impl TaskExecutor for RecordingExecutor {
     fn execute(&self, task: &TaskKind) -> Result<TaskExecution, SchedulerError> {
         match task {
@@ -48,7 +93,9 @@ impl TaskExecutor for RecordingExecutor {
                     input_attachments_dir: run.input_attachments_dir.clone(),
                     memory_dir: run.memory_dir.clone(),
                     reference_dir: run.reference_dir.clone(),
+                    reply_to: run.reply_to.clone(),
                     model_name: run.model_name.clone(),
+                    runner: run.runner.clone(),
                     codex_disabled: run.codex_disabled,
                 };
                 let output = run_task_module::run_task(&params)
@@ -56,9 +103,11 @@ impl TaskExecutor for RecordingExecutor {
                 Ok(TaskExecution {
                     follow_up_tasks: output.scheduled_tasks,
                     follow_up_error: output.scheduled_tasks_error,
+                    scheduler_actions: output.scheduler_actions,
+                    scheduler_actions_error: output.scheduler_actions_error,
                 })
             }
-            TaskKind::SendEmail(send) => {
+            TaskKind::SendReply(send) => {
                 self.sent_subjects
                     .lock()
                     .expect("sent_subjects lock poisoned")
@@ -73,8 +122,26 @@ impl TaskExecutor for RecordingExecutor {
 fn write_fake_codex(bin_dir: &Path) -> io::Result<()> {
     let script = r#"#!/bin/sh
 set -e
-if [ -f "incoming_email/email.txt" ]; then
-  subject=$(grep -m1 '^Subject:' incoming_email/email.txt | sed 's/^Subject: //')
+if [ -f "incoming_email/postmark_payload.json" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    subject=$(python3 - <<'PY'
+import json
+with open("incoming_email/postmark_payload.json", "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+print(payload.get("Subject", "(no subject)"))
+PY
+    )
+  elif command -v python >/dev/null 2>&1; then
+    subject=$(python - <<'PY'
+import json
+with open("incoming_email/postmark_payload.json", "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+print(payload.get("Subject", "(no subject)"))
+PY
+    )
+  else
+    subject="(no subject)"
+  fi
 else
   subject="(no subject)"
 fi
@@ -125,11 +192,17 @@ fn thread_latest_epoch_end_to_end() {
     let _path_guard = EnvGuard::set("PATH", path_value);
     let _api_guard = EnvGuard::set("AZURE_OPENAI_API_KEY_BACKUP", "test-key");
     let _endpoint_guard = EnvGuard::set("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.test");
+    let _docker_guard = EnvGuard::set("RUN_TASK_DOCKER_IMAGE", "");
     let _home_guard = EnvGuard::set("HOME", &home_root);
 
+    let (employee_profile, employee_directory) = test_employee_directory(root);
     let config = ServiceConfig {
         host: "127.0.0.1".to_string(),
         port: 0,
+        employee_id: employee_profile.id.clone(),
+        employee_config_path: root.join("employee.toml"),
+        employee_profile,
+        employee_directory,
         workspace_root: root.join("workspaces"),
         scheduler_state_path: state_root.join("tasks.db"),
         processed_ids_path: state_root.join("processed_ids.txt"),
@@ -141,7 +214,10 @@ fn thread_latest_epoch_end_to_end() {
         scheduler_poll_interval: Duration::from_millis(50),
         scheduler_max_concurrency: 2,
         scheduler_user_max_concurrency: 1,
+        inbound_body_max_bytes: DEFAULT_INBOUND_BODY_MAX_BYTES,
         skills_source_dir: None,
+        slack_bot_token: None,
+        slack_bot_user_id: None,
     };
 
     let user_store = UserStore::new(&config.users_db_path).expect("user store");
@@ -154,8 +230,7 @@ fn thread_latest_epoch_end_to_end() {
   "TextBody": "First message",
   "Headers": [{"Name": "Message-ID", "Value": "<msg-1@example.com>"}]
 }"#;
-    let payload_1: PostmarkInbound =
-        serde_json::from_str(inbound_raw_1).expect("parse inbound 1");
+    let payload_1: PostmarkInbound = serde_json::from_str(inbound_raw_1).expect("parse inbound 1");
     process_inbound_payload(
         &config,
         &user_store,
@@ -178,7 +253,7 @@ fn thread_latest_epoch_end_to_end() {
     let pending_send = scheduler
         .tasks()
         .iter()
-        .filter(|task| matches!(task.kind, TaskKind::SendEmail(_)) && task.enabled)
+        .filter(|task| matches!(task.kind, TaskKind::SendReply(_)) && task.enabled)
         .count();
     assert_eq!(pending_send, 1, "pending send should exist");
 
@@ -192,8 +267,7 @@ fn thread_latest_epoch_end_to_end() {
     {"Name": "References", "Value": "<msg-1@example.com>"}
   ]
 }"#;
-    let payload_2: PostmarkInbound =
-        serde_json::from_str(inbound_raw_2).expect("parse inbound 2");
+    let payload_2: PostmarkInbound = serde_json::from_str(inbound_raw_2).expect("parse inbound 2");
     process_inbound_payload(
         &config,
         &user_store,
@@ -208,7 +282,7 @@ fn thread_latest_epoch_end_to_end() {
     let enabled_sends_after_cancel = scheduler
         .tasks()
         .iter()
-        .filter(|task| matches!(task.kind, TaskKind::SendEmail(_)) && task.enabled)
+        .filter(|task| matches!(task.kind, TaskKind::SendReply(_)) && task.enabled)
         .count();
     assert_eq!(
         enabled_sends_after_cancel, 0,
@@ -232,9 +306,18 @@ fn thread_latest_epoch_end_to_end() {
         "latest reply should use second email"
     );
 
+    let agents_path = workspace.join("AGENTS.md");
+    let claude_path = workspace.join("CLAUDE.md");
+    assert_eq!(
+        fs::read_to_string(&agents_path).expect("read AGENTS.md"),
+        EXPECTED_SOUL_BLOCK
+    );
+    assert_eq!(
+        fs::read_to_string(&claude_path).expect("read CLAUDE.md"),
+        EXPECTED_SOUL_BLOCK
+    );
+
     let drafts_dir = workspace.join("drafts");
-    let drafts_count = fs::read_dir(drafts_dir)
-        .expect("drafts dir")
-        .count();
+    let drafts_count = fs::read_dir(drafts_dir).expect("drafts dir").count();
     assert!(drafts_count >= 2, "draft history should be preserved");
 }

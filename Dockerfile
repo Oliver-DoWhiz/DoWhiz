@@ -17,20 +17,39 @@ RUN cargo build --locked -p scheduler_module --bin rust_service --release \
 
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Work around occasional Debian keyring signature issues in some build environments.
+RUN mkdir -p /tmp/apt-cache/partial \
+  && apt-get update -o Acquire::AllowInsecureRepositories=true \
+    -o Acquire::AllowDowngradeToInsecureRepositories=true \
+  && apt-get install -y --no-install-recommends --allow-unauthenticated \
+    -o Dir::Cache::Archives=/tmp/apt-cache \
+    debian-archive-keyring \
     ca-certificates \
+  && rm -rf /var/lib/apt/lists/* /tmp/apt-cache
+
+RUN if [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
+    fi \
+  && if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
+    fi \
+  && mkdir -p /tmp/apt-cache/partial \
+  && apt-get update && apt-get install -y --no-install-recommends \
+    -o Dir::Cache::Archives=/tmp/apt-cache \
     libsqlite3-0 \
     libssl3 \
     curl \
-  && rm -rf /var/lib/apt/lists/*
+    git \
+    gh \
+  && rm -rf /var/lib/apt/lists/* /tmp/apt-cache
 
 # Install Node.js 20.x (LTS)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
-# Install global npm packages (playwright-cli and Codex CLI)
-RUN npm install -g @playwright/cli@latest @openai/codex@latest
+# Install global npm packages (playwright-cli, Codex CLI, Claude CLI)
+RUN npm install -g @playwright/cli@latest @openai/codex@latest @anthropic-ai/claude-code@latest
 
 # Install Playwright browsers (Chromium only to save space)
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
@@ -53,15 +72,20 @@ RUN useradd -r -u 10001 -g nogroup app && \
 
 COPY --from=builder /app/DoWhiz_service/target/release/rust_service /app/rust_service
 
+# Copy employee configuration and personas
+COPY DoWhiz_service/employee.toml /app/DoWhiz_service/employee.toml
+COPY DoWhiz_service/employees/ /app/DoWhiz_service/employees/
+
 # Copy skills directory for Codex
 COPY DoWhiz_service/skills/ /app/DoWhiz_service/skills/
 
-RUN chown -R app:nogroup /app/DoWhiz_service/skills
+RUN chown -R app:nogroup /app/DoWhiz_service
 
 USER app
 
 ENV RUST_SERVICE_HOST=0.0.0.0
 ENV RUST_SERVICE_PORT=9001
+ENV HOME=/app
 ENV WORKSPACE_ROOT=/app/.workspace/run_task/workspaces
 ENV SCHEDULER_STATE_PATH=/app/.workspace/run_task/state/tasks.db
 ENV PROCESSED_IDS_PATH=/app/.workspace/run_task/state/postmark_processed_ids.txt
@@ -73,4 +97,3 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 EXPOSE 9001
 
 ENTRYPOINT ["/app/rust_service"]
-CMD ["--host", "0.0.0.0", "--port", "9001"]

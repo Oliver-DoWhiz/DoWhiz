@@ -109,7 +109,10 @@ fn poll_outbound(
         let payload: serde_json::Value = serde_json::from_str(&body)?;
         if let Some(messages) = payload.get("Messages").and_then(|value| value.as_array()) {
             for message in messages {
-                let subject = message.get("Subject").and_then(|value| value.as_str()).unwrap_or("");
+                let subject = message
+                    .get("Subject")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 if subject.contains(subject_hint) {
                     return Ok(Some(message.clone()));
                 }
@@ -188,7 +191,6 @@ fn send_payload_includes_recipients_and_attachments() -> Result<(), Box<dyn std:
 
     let _env = EnvGuard::set(&[
         ("POSTMARK_SERVER_TOKEN", "test-token"),
-        ("OUTBOUND_FROM", "sender@example.com"),
         ("POSTMARK_API_BASE_URL", api_base_url.as_str()),
     ]);
 
@@ -196,6 +198,7 @@ fn send_payload_includes_recipients_and_attachments() -> Result<(), Box<dyn std:
         subject: "Test subject".to_string(),
         html_path: html_path.clone(),
         attachments_dir: attachments_dir.clone(),
+        from: Some("sender@example.com".to_string()),
         to: vec!["to1@example.com".to_string(), "to2@example.com".to_string()],
         cc: vec!["cc@example.com".to_string()],
         bcc: vec!["bcc@example.com".to_string()],
@@ -222,7 +225,8 @@ fn live_postmark_delivery_with_attachments() -> Result<(), Box<dyn std::error::E
 
     let token = env::var("POSTMARK_SERVER_TOKEN")
         .expect("POSTMARK_SERVER_TOKEN must be set for live tests");
-    let from = env::var("OUTBOUND_FROM").unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
+    let from =
+        env::var("POSTMARK_TEST_FROM").unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
     let to_addr =
         env::var("POSTMARK_TEST_TO").unwrap_or_else(|_| "mini-mouse@deep-tutor.com".to_string());
     let cc_addr = env::var("POSTMARK_TEST_CC").ok();
@@ -241,15 +245,13 @@ fn live_postmark_delivery_with_attachments() -> Result<(), Box<dyn std::error::E
 
     let subject = unique_subject("MVP Rust Postmark live test");
 
-    let _env = EnvGuard::set(&[
-        ("POSTMARK_SERVER_TOKEN", &token),
-        ("OUTBOUND_FROM", &from),
-    ]);
+    let _env = EnvGuard::set(&[("POSTMARK_SERVER_TOKEN", &token)]);
 
     let request = SendEmailParams {
         subject: subject.clone(),
         html_path: html_path.clone(),
         attachments_dir: attachments_dir.clone(),
+        from: Some(from.clone()),
         to: vec![to_addr.clone()],
         cc: cc_addr.clone().map(|addr| vec![addr]).unwrap_or_default(),
         bcc: bcc_addr.clone().map(|addr| vec![addr]).unwrap_or_default(),
@@ -286,13 +288,13 @@ fn send_email_requires_recipient() {
 
     let _env = EnvGuard::set(&[
         ("POSTMARK_SERVER_TOKEN", "test-token"),
-        ("OUTBOUND_FROM", "sender@example.com"),
     ]);
 
     let params = SendEmailParams {
         subject: "Test subject".to_string(),
         html_path,
         attachments_dir: temp.path().join("reply_email_attachments"),
+        from: Some("sender@example.com".to_string()),
         to: Vec::new(),
         cc: Vec::new(),
         bcc: Vec::new(),
@@ -301,7 +303,10 @@ fn send_email_requires_recipient() {
     };
 
     let err = send_email(&params).expect_err("expected missing recipient error");
-    assert!(matches!(err, send_emails_module::SendEmailError::MissingRecipient));
+    assert!(matches!(
+        err,
+        send_emails_module::SendEmailError::MissingRecipient
+    ));
 }
 
 #[test]
@@ -317,6 +322,7 @@ fn send_email_requires_token() {
         subject: "Test subject".to_string(),
         html_path,
         attachments_dir: temp.path().join("reply_email_attachments"),
+        from: Some("sender@example.com".to_string()),
         to: vec!["to@example.com".to_string()],
         cc: Vec::new(),
         bcc: Vec::new(),
