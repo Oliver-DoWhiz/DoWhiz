@@ -13,6 +13,9 @@ const CODEX_CONFIG_BLOCK_TEMPLATE: &str = r#"# IMPORTANT: Use your Azure *deploy
 model = "{model_name}"
 model_provider = "azure"
 model_reasoning_effort = "xhigh"
+web_search = "live"
+ask_for_approval = "never"
+sandbox = "{sandbox_mode}"
 
 [model_providers.azure]
 name = "Azure OpenAI"
@@ -20,6 +23,10 @@ base_url = "{azure_endpoint}"
 env_key = "AZURE_OPENAI_API_KEY_BACKUP"
 wire_api = "responses"
 "#;
+const DEFAULT_CLAUDE_MODEL: &str = "claude-opus-4-5";
+const CLAUDE_FOUNDRY_RESOURCE_DEFAULT: &str = "knowhiz-service-openai-backup-2";
+const DOCKER_WORKSPACE_DIR: &str = "/workspace";
+const DOCKER_CODEX_HOME_DIR: &str = ".codex";
 const SCHEDULED_TASKS_BEGIN: &str = "SCHEDULED_TASKS_JSON_BEGIN";
 const SCHEDULED_TASKS_END: &str = "SCHEDULED_TASKS_JSON_END";
 const SCHEDULER_ACTIONS_BEGIN: &str = "SCHEDULER_ACTIONS_JSON_BEGIN";
@@ -58,7 +65,9 @@ pub struct RunTaskParams {
     pub input_attachments_dir: PathBuf,
     pub memory_dir: PathBuf,
     pub reference_dir: PathBuf,
+    pub reply_to: Vec<String>,
     pub model_name: String,
+    pub runner: String,
     pub codex_disabled: bool,
 }
 
@@ -70,6 +79,7 @@ struct RunTaskRequest<'a> {
     memory_dir: &'a Path,
     reference_dir: &'a Path,
     model_name: &'a str,
+    reply_to: &'a [String],
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +121,8 @@ pub struct ScheduledSendEmailTask {
     pub subject: String,
     pub html_path: String,
     pub attachments_dir: Option<String>,
+    #[serde(default)]
+    pub from: Option<String>,
     #[serde(default)]
     pub to: Vec<String>,
     #[serde(default)]
@@ -174,6 +186,19 @@ pub enum RunTaskError {
         status: Option<i32>,
         output: String,
     },
+    ClaudeNotFound,
+    ClaudeInstallFailed {
+        output: String,
+    },
+    ClaudeFailed {
+        status: Option<i32>,
+        output: String,
+    },
+    DockerNotFound,
+    DockerFailed {
+        status: Option<i32>,
+        output: String,
+    },
     GitHubAuthCommandNotFound {
         command: &'static str,
     },
@@ -184,6 +209,7 @@ pub enum RunTaskError {
     },
     OutputMissing {
         path: PathBuf,
+        output: String,
     },
 }
 
@@ -207,6 +233,23 @@ impl fmt::Display for RunTaskError {
                 "Codex CLI failed (status: {:?}). Output tail:\n{}",
                 status, output
             ),
+            RunTaskError::ClaudeNotFound => write!(f, "Claude CLI not found on PATH."),
+            RunTaskError::ClaudeInstallFailed { output } => write!(
+                f,
+                "Claude CLI install failed. Output tail:\n{}",
+                output
+            ),
+            RunTaskError::ClaudeFailed { status, output } => write!(
+                f,
+                "Claude CLI failed (status: {:?}). Output tail:\n{}",
+                status, output
+            ),
+            RunTaskError::DockerNotFound => write!(f, "Docker CLI not found on PATH."),
+            RunTaskError::DockerFailed { status, output } => write!(
+                f,
+                "Docker run failed (status: {:?}). Output tail:\n{}",
+                status, output
+            ),
             RunTaskError::GitHubAuthCommandNotFound { command } => {
                 write!(f, "GitHub auth command not found on PATH: {}", command)
             }
@@ -219,8 +262,13 @@ impl fmt::Display for RunTaskError {
                 "GitHub auth command failed ({} status: {:?}). Output tail:\n{}",
                 command, status, output
             ),
-            RunTaskError::OutputMissing { path } => {
-                write!(f, "Expected output not found: {}", path.display())
+            RunTaskError::OutputMissing { path, output } => {
+                write!(
+                    f,
+                    "Expected output not found: {}\nCodex output tail:\n{}",
+                    path.display(),
+                    output
+                )
             }
         }
     }
@@ -235,19 +283,24 @@ impl From<io::Error> for RunTaskError {
 }
 
 pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
+    let workspace_dir = remap_workspace_dir(&params.workspace_dir)?;
+    let runner = normalize_runner(&params.runner);
     let request = RunTaskRequest {
-        workspace_dir: &params.workspace_dir,
+        workspace_dir: &workspace_dir,
         input_email_dir: &params.input_email_dir,
         input_attachments_dir: &params.input_attachments_dir,
         memory_dir: &params.memory_dir,
         reference_dir: &params.reference_dir,
         model_name: params.model_name.as_str(),
+        reply_to: &params.reply_to,
     };
 
     let (reply_html_path, reply_attachments_dir) = prepare_workspace(&request)?;
 
     if params.codex_disabled {
-        write_placeholder_reply(&reply_html_path)?;
+        if !params.reply_to.is_empty() {
+            write_placeholder_reply(&reply_html_path)?;
+        }
         return Ok(RunTaskOutput {
             reply_html_path,
             reply_attachments_dir,
@@ -259,16 +312,50 @@ pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
         });
     }
 
-    run_codex_task(request, reply_html_path, reply_attachments_dir)
+    match runner.as_str() {
+        "claude" => run_claude_task(request, &runner, reply_html_path, reply_attachments_dir),
+        _ => run_codex_task(request, &runner, reply_html_path, reply_attachments_dir),
+    }
+}
+
+fn normalize_runner(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "codex".to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
+    }
 }
 
 fn run_codex_task(
     request: RunTaskRequest<'_>,
+    runner: &str,
     reply_html_path: PathBuf,
     reply_attachments_dir: PathBuf,
 ) -> Result<RunTaskOutput, RunTaskError> {
     load_env_sources(request.workspace_dir)?;
-    let github_auth = resolve_github_auth()?;
+    let docker_image = read_env_trimmed("RUN_TASK_DOCKER_IMAGE");
+    let use_docker = docker_image.is_some() || env_enabled("RUN_TASK_USE_DOCKER");
+    let docker_image = if use_docker {
+        docker_image.ok_or(RunTaskError::MissingEnv {
+            key: "RUN_TASK_DOCKER_IMAGE",
+        })?
+    } else {
+        String::new()
+    };
+    let host_workspace_dir = if use_docker {
+        Some(canonicalize_dir(request.workspace_dir)?)
+    } else {
+        None
+    };
+    let askpass_dir = if use_docker {
+        host_workspace_dir
+            .as_ref()
+            .map(|dir| dir.join(DOCKER_CODEX_HOME_DIR))
+    } else {
+        None
+    };
+    let github_auth = resolve_github_auth(askpass_dir.as_deref())?;
 
     let api_key =
         env::var("AZURE_OPENAI_API_KEY_BACKUP").map_err(|_| RunTaskError::MissingEnv {
@@ -295,7 +382,28 @@ fn run_codex_task(
         request.model_name.to_string()
     };
 
-    ensure_codex_config(&model_name, &azure_endpoint)?;
+    let sandbox_mode = codex_sandbox_mode();
+    let bypass_sandbox = codex_bypass_sandbox() || use_docker;
+    if use_docker {
+        let codex_home = host_workspace_dir
+            .as_ref()
+            .map(|dir| dir.join(DOCKER_CODEX_HOME_DIR))
+            .unwrap_or_else(|| request.workspace_dir.join(DOCKER_CODEX_HOME_DIR));
+        ensure_codex_config_at(
+            &model_name,
+            &azure_endpoint,
+            &codex_home,
+            Path::new(DOCKER_WORKSPACE_DIR),
+            &sandbox_mode,
+        )?;
+    } else {
+        ensure_codex_config(
+            &model_name,
+            &azure_endpoint,
+            request.workspace_dir,
+            &sandbox_mode,
+        )?;
+    }
     ensure_github_cli_auth(&github_auth)?;
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -304,38 +412,141 @@ fn run_codex_task(
         request.input_attachments_dir,
         request.memory_dir,
         request.reference_dir,
+        request.workspace_dir,
+        runner,
         &memory_context,
+        !request.reply_to.is_empty(),
     );
 
-    let mut cmd = Command::new("codex");
-    cmd.arg("exec")
-        .arg("--skip-git-repo-check")
-        .arg("-m")
-        .arg(&model_name)
-        .arg("-c")
-        .arg("web_search=\"disabled\"")
-        .arg("-c")
-        .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
-        .arg("--cd")
-        .arg(request.workspace_dir)
-        .arg("--dangerously-bypass-approvals-and-sandbox")
-        .arg(prompt)
-        .env("AZURE_OPENAI_API_KEY_BACKUP", api_key)
-        .current_dir(request.workspace_dir);
-    for (key, value) in github_auth.env_overrides {
-        cmd.env(key, value);
-    }
-    if let Some(askpass_path) = github_auth.askpass_path {
-        cmd.env("GIT_ASKPASS", askpass_path);
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
-    }
+    let output = if use_docker {
+        ensure_docker_image_available(&docker_image)?;
+        let host_workspace_dir = host_workspace_dir
+            .as_ref()
+            .ok_or(RunTaskError::MissingEnv {
+                key: "RUN_TASK_DOCKER_IMAGE",
+            })?;
+        let askpass_container_path = github_auth
+            .askpass_path
+            .as_ref()
+            .and_then(|path| workspace_path_in_container(path, host_workspace_dir));
 
-    let output = match cmd.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Err(RunTaskError::CodexNotFound)
+        if github_auth.askpass_path.is_some() && askpass_container_path.is_none() {
+            return Err(RunTaskError::InvalidPath {
+                label: "git_askpass_path",
+                path: github_auth
+                    .askpass_path
+                    .clone()
+                    .unwrap_or_else(|| host_workspace_dir.join("missing")),
+                reason: "askpass path is not within workspace_dir",
+            });
         }
-        Err(err) => return Err(RunTaskError::Io(err)),
+
+        let mut cmd = Command::new("docker");
+        cmd.arg("run")
+            .arg("--rm")
+            .arg("--workdir")
+            .arg(DOCKER_WORKSPACE_DIR)
+            .arg("-v")
+            .arg(format!(
+                "{}:{}",
+                host_workspace_dir.display(),
+                DOCKER_WORKSPACE_DIR
+            ))
+            .arg("-e")
+            .arg(format!("HOME={}", DOCKER_WORKSPACE_DIR))
+            .arg("-e")
+            .arg(format!(
+                "CODEX_HOME={}/{}",
+                DOCKER_WORKSPACE_DIR, DOCKER_CODEX_HOME_DIR
+            ))
+            .arg("-e")
+            .arg(format!("AZURE_OPENAI_API_KEY_BACKUP={}", api_key))
+            .arg("-e")
+            .arg(format!("AZURE_OPENAI_ENDPOINT_BACKUP={}", azure_endpoint));
+        for (key, value) in &github_auth.env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
+        if let Some(container_path) = askpass_container_path {
+            cmd.arg("-e")
+                .arg(format!("GIT_ASKPASS={}", container_path.display()))
+                .arg("-e")
+                .arg("GIT_TERMINAL_PROMPT=0");
+        }
+        if let Some(network) = read_env_trimmed("RUN_TASK_DOCKER_NETWORK") {
+            cmd.arg("--network").arg(network);
+        }
+        for dns in read_env_list("RUN_TASK_DOCKER_DNS") {
+            cmd.arg("--dns").arg(dns);
+        }
+        for search_domain in read_env_list("RUN_TASK_DOCKER_DNS_SEARCH") {
+            cmd.arg("--dns-search").arg(search_domain);
+        }
+        cmd.arg("--entrypoint")
+            .arg("codex")
+            .arg(&docker_image)
+            .arg("exec");
+        if bypass_sandbox {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(&model_name)
+            .arg("-c")
+            .arg("web_search=\"live\"")
+            .arg("-c")
+            .arg("ask_for_approval=\"never\"")
+            .arg("-c")
+            .arg(format!("sandbox=\"{}\"", sandbox_mode))
+            .arg("-c")
+            .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
+            .arg("--cd")
+            .arg(DOCKER_WORKSPACE_DIR)
+            .arg(prompt);
+
+        match cmd.output() {
+            Ok(output) => output,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(RunTaskError::DockerNotFound)
+            }
+            Err(err) => return Err(RunTaskError::Io(err)),
+        }
+    } else {
+        let mut cmd = Command::new("codex");
+        cmd.arg("exec");
+        if bypass_sandbox {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--skip-git-repo-check")
+            .arg("-m")
+            .arg(&model_name)
+            .arg("-c")
+            .arg("web_search=\"live\"")
+            .arg("-c")
+            .arg("ask_for_approval=\"never\"")
+            .arg("-c")
+            .arg(format!("sandbox=\"{}\"", sandbox_mode))
+            .arg("-c")
+            .arg("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"")
+            .arg("--cd")
+            .arg(request.workspace_dir)
+            .arg(prompt)
+            .env("AZURE_OPENAI_API_KEY_BACKUP", api_key)
+            .current_dir(request.workspace_dir);
+        for (key, value) in github_auth.env_overrides {
+            cmd.env(key, value);
+        }
+        if let Some(askpass_path) = github_auth.askpass_path {
+            cmd.env("GIT_ASKPASS", askpass_path);
+            cmd.env("GIT_TERMINAL_PROMPT", "0");
+        }
+
+        match cmd.output() {
+            Ok(output) => output,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(RunTaskError::CodexNotFound)
+            }
+            Err(err) => return Err(RunTaskError::Io(err)),
+        }
     };
 
     let mut combined_output = String::new();
@@ -346,15 +557,23 @@ fn run_codex_task(
     let output_tail = tail_string(&combined_output, 2000);
 
     if !output.status.success() {
-        return Err(RunTaskError::CodexFailed {
-            status: output.status.code(),
-            output: output_tail,
+        return Err(if use_docker {
+            RunTaskError::DockerFailed {
+                status: output.status.code(),
+                output: output_tail,
+            }
+        } else {
+            RunTaskError::CodexFailed {
+                status: output.status.code(),
+                output: output_tail,
+            }
         });
     }
 
     if !reply_html_path.exists() {
         return Err(RunTaskError::OutputMissing {
             path: reply_html_path,
+            output: output_tail,
         });
     }
 
@@ -367,6 +586,369 @@ fn run_codex_task(
         scheduler_actions,
         scheduler_actions_error,
     })
+}
+
+fn run_claude_task(
+    request: RunTaskRequest<'_>,
+    runner: &str,
+    reply_html_path: PathBuf,
+    reply_attachments_dir: PathBuf,
+) -> Result<RunTaskOutput, RunTaskError> {
+    load_env_sources(request.workspace_dir)?;
+
+    let api_key =
+        env::var("AZURE_OPENAI_API_KEY_BACKUP").map_err(|_| RunTaskError::MissingEnv {
+            key: "AZURE_OPENAI_API_KEY_BACKUP",
+        })?;
+    if api_key.trim().is_empty() {
+        return Err(RunTaskError::MissingEnv {
+            key: "AZURE_OPENAI_API_KEY_BACKUP",
+        });
+    }
+
+    let model_name = if request.model_name.trim().is_empty() {
+        env::var("CLAUDE_MODEL").unwrap_or_else(|_| DEFAULT_CLAUDE_MODEL.to_string())
+    } else {
+        request.model_name.to_string()
+    };
+
+    let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
+    let prompt = build_prompt(
+        request.input_email_dir,
+        request.input_attachments_dir,
+        request.memory_dir,
+        request.reference_dir,
+        request.workspace_dir,
+        runner,
+        &memory_context,
+        !request.reply_to.is_empty(),
+    );
+
+    let env_overrides = prepare_claude_env(&api_key, &model_name)?;
+    let output = run_claude_command(request.workspace_dir, &prompt, &model_name, &env_overrides)?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut combined_output = String::new();
+    combined_output.push_str(&stdout);
+    combined_output.push_str(&stderr);
+    let output_tail = tail_string(&combined_output, 2000);
+
+    if !output.status.success() {
+        return Err(RunTaskError::ClaudeFailed {
+            status: output.status.code(),
+            output: output_tail,
+        });
+    }
+
+    let (assistant_text, _logs) = extract_claude_text(&stdout);
+    if assistant_text.trim().is_empty() {
+        return Err(RunTaskError::ClaudeFailed {
+            status: output.status.code(),
+            output: output_tail,
+        });
+    }
+    let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&assistant_text);
+    let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&assistant_text);
+    let assistant_tail = tail_string(&assistant_text, 2000);
+
+    if !reply_html_path.exists() {
+        return Err(RunTaskError::OutputMissing {
+            path: reply_html_path,
+            output: assistant_tail,
+        });
+    }
+
+    Ok(RunTaskOutput {
+        reply_html_path,
+        reply_attachments_dir,
+        codex_output: assistant_tail,
+        scheduled_tasks,
+        scheduled_tasks_error,
+        scheduler_actions,
+        scheduler_actions_error,
+    })
+}
+
+fn prepare_claude_env(api_key: &str, model_name: &str) -> Result<Vec<(String, String)>, RunTaskError> {
+    let foundry_resource = env::var("ANTHROPIC_FOUNDRY_RESOURCE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| CLAUDE_FOUNDRY_RESOURCE_DEFAULT.to_string());
+    let default_opus = env::var("ANTHROPIC_DEFAULT_OPUS_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_string());
+    let default_sonnet = env::var("ANTHROPIC_DEFAULT_SONNET_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "claude-sonnet-4-5".to_string());
+    let default_haiku = env::var("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "claude-haiku-4-5".to_string());
+
+    ensure_claude_settings(model_name, api_key, &foundry_resource, &default_opus, &default_sonnet, &default_haiku)?;
+
+    Ok(vec![
+        ("AZURE_OPENAI_API_KEY_BACKUP".to_string(), api_key.to_string()),
+        ("CLAUDE_CODE_USE_FOUNDRY".to_string(), "1".to_string()),
+        (
+            "ANTHROPIC_FOUNDRY_RESOURCE".to_string(),
+            foundry_resource,
+        ),
+        ("ANTHROPIC_FOUNDRY_API_KEY".to_string(), api_key.to_string()),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), default_opus),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            default_sonnet,
+        ),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), default_haiku),
+    ])
+}
+
+fn ensure_claude_settings(
+    model_name: &str,
+    api_key: &str,
+    foundry_resource: &str,
+    default_opus: &str,
+    default_sonnet: &str,
+    default_haiku: &str,
+) -> Result<(), RunTaskError> {
+    let home = env::var("HOME").map_err(|_| RunTaskError::MissingEnv { key: "HOME" })?;
+    let settings_dir = PathBuf::from(home).join(".claude");
+    fs::create_dir_all(&settings_dir)?;
+    let settings_path = settings_dir.join("settings.json");
+    let payload = serde_json::json!({
+        "env": {
+            "CLAUDE_CODE_USE_FOUNDRY": "1",
+            "ANTHROPIC_FOUNDRY_RESOURCE": foundry_resource,
+            "ANTHROPIC_FOUNDRY_API_KEY": api_key,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": default_opus,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": default_sonnet,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": default_haiku,
+        },
+        "model": model_name,
+    });
+    let rendered = serde_json::to_string_pretty(&payload).map_err(|err| {
+        RunTaskError::Io(io::Error::new(io::ErrorKind::Other, err.to_string()))
+    })?;
+    fs::write(settings_path, format!("{}\n", rendered))?;
+    Ok(())
+}
+
+fn run_claude_command(
+    workspace_dir: &Path,
+    prompt: &str,
+    model_name: &str,
+    env_overrides: &[(String, String)],
+) -> Result<std::process::Output, RunTaskError> {
+    match build_claude_command(workspace_dir, prompt, model_name, env_overrides).output() {
+        Ok(output) => return Ok(output),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(RunTaskError::Io(err)),
+    }
+
+    ensure_claude_cli_installed(env_overrides)?;
+    match build_claude_command(workspace_dir, prompt, model_name, env_overrides).output() {
+        Ok(output) => Ok(output),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(RunTaskError::ClaudeNotFound),
+        Err(err) => Err(RunTaskError::Io(err)),
+    }
+}
+
+fn build_claude_command(
+    workspace_dir: &Path,
+    prompt: &str,
+    model_name: &str,
+    env_overrides: &[(String, String)],
+) -> Command {
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--include-partial-messages")
+        .arg("--verbose")
+        .arg("--model")
+        .arg(model_name)
+        .arg("--allowedTools")
+        .arg("Read,Glob,Grep,Bash")
+        .arg("--max-turns")
+        .arg("10")
+        .arg("--dangerously-skip-permissions")
+        .arg(prompt)
+        .current_dir(workspace_dir);
+    apply_env_pairs(&mut cmd, env_overrides);
+    cmd
+}
+
+fn ensure_claude_cli_installed(env_overrides: &[(String, String)]) -> Result<(), RunTaskError> {
+    let mut cmd = Command::new("npm");
+    cmd.args(["i", "-g", "@anthropic-ai/claude-code"]);
+    apply_env_pairs(&mut cmd, env_overrides);
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(RunTaskError::ClaudeInstallFailed {
+                output: "npm not found on PATH".to_string(),
+            })
+        }
+        Err(err) => return Err(RunTaskError::Io(err)),
+    };
+    let mut combined = String::new();
+    combined.push_str(&String::from_utf8_lossy(&output.stdout));
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() {
+        return Err(RunTaskError::ClaudeInstallFailed {
+            output: tail_string(&combined, 2000),
+        });
+    }
+    Ok(())
+}
+
+fn apply_env_pairs(cmd: &mut Command, overrides: &[(String, String)]) {
+    for (key, value) in overrides {
+        cmd.env(key, value);
+    }
+}
+
+fn extract_claude_text(raw: &str) -> (String, Vec<String>) {
+    let mut text = String::new();
+    let mut logs = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let event: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(_) => {
+                logs.push(trimmed.to_string());
+                continue;
+            }
+        };
+        let event_type = event
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if matches!(
+            event_type,
+            "text_delta" | "message_delta" | "content_block_delta" | "message_stop" | "result"
+        ) {
+            if let Some(fragment) = extract_claude_fragment(&event) {
+                text.push_str(&fragment);
+            }
+        }
+    }
+    (text, logs)
+}
+
+fn extract_claude_fragment(event: &serde_json::Value) -> Option<String> {
+    if let Some(text) = event.get("text").and_then(|value| value.as_str()) {
+        return Some(text.to_string());
+    }
+    if let Some(text) = event
+        .get("delta")
+        .and_then(|value| value.get("text"))
+        .and_then(|value| value.as_str())
+    {
+        return Some(text.to_string());
+    }
+    if let Some(text) = event
+        .get("message")
+        .and_then(|value| value.get("text"))
+        .and_then(|value| value.as_str())
+    {
+        return Some(text.to_string());
+    }
+    if let Some(text) = event.get("final_text").and_then(|value| value.as_str()) {
+        return Some(text.to_string());
+    }
+    if let Some(text) = event.get("result").and_then(|value| value.as_str()) {
+        return Some(text.to_string());
+    }
+    None
+}
+
+fn remap_workspace_dir(workspace_dir: &Path) -> Result<PathBuf, RunTaskError> {
+    if env_enabled("RUN_TASK_SKIP_WORKSPACE_REMAP") {
+        return Ok(workspace_dir.to_path_buf());
+    }
+    if !workspace_dir.is_absolute() {
+        return Ok(workspace_dir.to_path_buf());
+    }
+
+    let home = env::var("HOME").map_err(|_| RunTaskError::MissingEnv { key: "HOME" })?;
+    let new_users_root = PathBuf::from(&home)
+        .join(".dowhiz")
+        .join("DoWhiz")
+        .join("run_task")
+        .join("users");
+    if workspace_dir.starts_with(&new_users_root) {
+        return Ok(workspace_dir.to_path_buf());
+    }
+
+    let relative = match legacy_workspace_relative(workspace_dir, &home) {
+        Some(relative) => relative,
+        None => return Ok(workspace_dir.to_path_buf()),
+    };
+    let remapped = new_users_root.join(relative);
+
+    if workspace_dir.exists() && !remapped.exists() {
+        if let Some(parent) = remapped.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Err(err) = fs::rename(workspace_dir, &remapped) {
+            if err.raw_os_error() == Some(18) {
+                return Ok(workspace_dir.to_path_buf());
+            }
+            return Err(RunTaskError::Io(err));
+        }
+    }
+
+    Ok(remapped)
+}
+
+fn legacy_workspace_relative(workspace_dir: &Path, home: &str) -> Option<PathBuf> {
+    let legacy_roots = [
+        PathBuf::from(home)
+            .join("Documents")
+            .join("GitHub_MacBook")
+            .join("DoWhiz")
+            .join("DoWhiz_service")
+            .join(".workspace")
+            .join("run_task")
+            .join("users"),
+        PathBuf::from(home)
+            .join("Documents")
+            .join("GitHub_MacBook")
+            .join("DoWhiz")
+            .join(".workspace")
+            .join("run_task")
+            .join("users"),
+        PathBuf::from(home)
+            .join(".dowhiz")
+            .join("DoWhiz")
+            .join("DoWhiz_service")
+            .join(".workspace")
+            .join("run_task")
+            .join("users"),
+    ];
+
+    for root in legacy_roots {
+        if workspace_dir.starts_with(&root) {
+            return workspace_dir
+                .strip_prefix(&root)
+                .ok()
+                .map(|path| path.to_path_buf());
+        }
+    }
+
+    let path_str = workspace_dir.to_string_lossy();
+    let marker = "/.workspace/run_task/users/";
+    path_str
+        .find(marker)
+        .map(|idx| PathBuf::from(&path_str[idx + marker.len()..]))
 }
 
 fn prepare_workspace(request: &RunTaskRequest<'_>) -> Result<(PathBuf, PathBuf), RunTaskError> {
@@ -424,6 +1006,116 @@ fn ensure_dir_exists(path: &Path, label: &'static str) -> Result<(), RunTaskErro
     }
     fs::create_dir_all(path)?;
     Ok(())
+}
+
+fn canonicalize_dir(path: &Path) -> Result<PathBuf, RunTaskError> {
+    fs::canonicalize(path).map_err(RunTaskError::Io)
+}
+
+fn workspace_path_in_container(path: &Path, host_workspace_dir: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(host_workspace_dir).ok()?;
+    Some(Path::new(DOCKER_WORKSPACE_DIR).join(relative))
+}
+
+fn ensure_docker_image_available(image: &str) -> Result<(), RunTaskError> {
+    if docker_image_exists(image)? {
+        return Ok(());
+    }
+
+    if !env_enabled_default("RUN_TASK_DOCKER_AUTO_BUILD", true) {
+        return Err(RunTaskError::DockerFailed {
+            status: None,
+            output: format!(
+                "docker image '{}' not found and auto-build disabled (set RUN_TASK_DOCKER_AUTO_BUILD=1)",
+                image
+            ),
+        });
+    }
+
+    let (dockerfile, context) = resolve_docker_build_paths()?;
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "build",
+        "-t",
+        image,
+        "-f",
+        dockerfile.to_string_lossy().as_ref(),
+        context.to_string_lossy().as_ref(),
+    ]);
+
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(RunTaskError::DockerNotFound)
+        }
+        Err(err) => return Err(RunTaskError::Io(err)),
+    };
+    let mut combined_output = String::new();
+    combined_output.push_str(&String::from_utf8_lossy(&output.stdout));
+    combined_output.push_str(&String::from_utf8_lossy(&output.stderr));
+    let output_tail = tail_string(&combined_output, 2000);
+
+    if !output.status.success() {
+        return Err(RunTaskError::DockerFailed {
+            status: output.status.code(),
+            output: output_tail,
+        });
+    }
+
+    Ok(())
+}
+
+fn docker_image_exists(image: &str) -> Result<bool, RunTaskError> {
+    let output = match Command::new("docker")
+        .args(["image", "inspect", image])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(RunTaskError::DockerNotFound)
+        }
+        Err(err) => return Err(RunTaskError::Io(err)),
+    };
+
+    Ok(output.status.success())
+}
+
+fn resolve_docker_build_paths() -> Result<(PathBuf, PathBuf), RunTaskError> {
+    let cwd = env::current_dir().map_err(RunTaskError::Io)?;
+    let dockerfile = if let Some(path) = resolve_env_path("RUN_TASK_DOCKERFILE", &cwd) {
+        path
+    } else {
+        let candidate = cwd.join("Dockerfile");
+        if candidate.exists() {
+            candidate
+        } else {
+            let candidate = cwd.join("..").join("Dockerfile");
+            if candidate.exists() {
+                candidate
+            } else {
+                return Err(RunTaskError::InvalidPath {
+                    label: "dockerfile",
+                    path: cwd.join("Dockerfile"),
+                    reason: "Dockerfile not found; set RUN_TASK_DOCKERFILE",
+                });
+            }
+        }
+    };
+
+    let context = if let Some(path) = resolve_env_path("RUN_TASK_DOCKER_BUILD_CONTEXT", &cwd) {
+        path
+    } else {
+        dockerfile
+            .parent()
+            .map(PathBuf::from)
+            .ok_or(RunTaskError::InvalidPath {
+                label: "docker_build_context",
+                path: dockerfile.clone(),
+                reason: "could not resolve Dockerfile directory",
+            })?
+    };
+
+    Ok((dockerfile, context))
 }
 
 fn resolve_rel_dir(
@@ -520,7 +1212,7 @@ fn unquote_env_value(value: &str) -> &str {
     value
 }
 
-fn resolve_github_auth() -> Result<GitHubAuthConfig, RunTaskError> {
+fn resolve_github_auth(askpass_dir: Option<&Path>) -> Result<GitHubAuthConfig, RunTaskError> {
     let gh_token = read_env_trimmed("GH_TOKEN");
     let github_token = read_env_trimmed("GITHUB_TOKEN");
     let pat_token = read_env_trimmed("GITHUB_PERSONAL_ACCESS_TOKEN");
@@ -570,7 +1262,10 @@ fn resolve_github_auth() -> Result<GitHubAuthConfig, RunTaskError> {
     }
 
     let askpass_path = if token.is_some() {
-        Some(write_git_askpass_script()?)
+        let target_dir = askpass_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir);
+        Some(write_git_askpass_script_in(&target_dir)?)
     } else {
         None
     };
@@ -721,8 +1416,26 @@ fn read_env_trimmed(key: &str) -> Option<String> {
     if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(unquote_env_value(trimmed).to_string())
     }
+}
+
+fn read_env_list(key: &str) -> Vec<String> {
+    read_env_trimmed(key)
+        .map(|value| {
+            value
+                .split(|ch: char| ch == ',' || ch.is_whitespace())
+                .filter_map(|item| {
+                    let trimmed = item.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn env_missing_or_empty(key: &str) -> bool {
@@ -742,8 +1455,33 @@ fn env_enabled(key: &str) -> bool {
     }
 }
 
-fn write_git_askpass_script() -> Result<PathBuf, RunTaskError> {
-    let mut path = env::temp_dir();
+fn env_enabled_default(key: &str, default_value: bool) -> bool {
+    match env::var(key) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !(normalized.is_empty() || normalized == "0" || normalized == "false")
+        }
+        Err(_) => default_value,
+    }
+}
+
+fn resolve_env_path(key: &str, cwd: &Path) -> Option<PathBuf> {
+    let value = env::var(key).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(cwd.join(path))
+    }
+}
+
+fn write_git_askpass_script_in(dir: &Path) -> Result<PathBuf, RunTaskError> {
+    fs::create_dir_all(dir)?;
+    let mut path = dir.to_path_buf();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -764,9 +1502,31 @@ fn write_git_askpass_script() -> Result<PathBuf, RunTaskError> {
     Ok(path)
 }
 
-fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), RunTaskError> {
+fn ensure_codex_config(
+    model_name: &str,
+    azure_endpoint: &str,
+    workspace_dir: &Path,
+    sandbox_mode: &str,
+) -> Result<(), RunTaskError> {
     let home = env::var("HOME").map_err(|_| RunTaskError::MissingEnv { key: "HOME" })?;
-    let config_path = PathBuf::from(home).join(".codex").join("config.toml");
+    let config_dir = PathBuf::from(home).join(".codex");
+    ensure_codex_config_at(
+        model_name,
+        azure_endpoint,
+        &config_dir,
+        workspace_dir,
+        sandbox_mode,
+    )
+}
+
+fn ensure_codex_config_at(
+    model_name: &str,
+    azure_endpoint: &str,
+    config_dir: &Path,
+    trust_workspace_dir: &Path,
+    sandbox_mode: &str,
+) -> Result<(), RunTaskError> {
+    let config_path = config_dir.join("config.toml");
     let config_dir = config_path.parent().ok_or(RunTaskError::InvalidPath {
         label: "codex_config_dir",
         path: config_path.clone(),
@@ -777,7 +1537,8 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     let endpoint = normalize_azure_endpoint(azure_endpoint);
     let block = CODEX_CONFIG_BLOCK_TEMPLATE
         .replace("{model_name}", model_name)
-        .replace("{azure_endpoint}", &endpoint);
+        .replace("{azure_endpoint}", &endpoint)
+        .replace("{sandbox_mode}", sandbox_mode);
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -786,8 +1547,39 @@ fn ensure_codex_config(model_name: &str, azure_endpoint: &str) -> Result<(), Run
     };
 
     let updated = update_config_block(&existing, &block);
+    let updated = ensure_project_trust(&updated, trust_workspace_dir);
     fs::write(config_path, updated)?;
     Ok(())
+}
+
+fn ensure_project_trust(existing: &str, workspace_dir: &Path) -> String {
+    let workspace_str = workspace_dir.to_string_lossy();
+    let escaped = toml_escape(&workspace_str);
+    let header = format!("[projects.\"{escaped}\"]");
+    if existing.contains(&header) {
+        return existing.to_string();
+    }
+    let mut updated = existing.trim_end().to_string();
+    if !updated.is_empty() {
+        updated.push_str("\n\n");
+    }
+    updated.push_str(&header);
+    updated.push('\n');
+    updated.push_str("trust_level = \"trusted\"\n");
+    updated
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn codex_sandbox_mode() -> String {
+    env::var("CODEX_SANDBOX").unwrap_or_else(|_| "workspace-write".to_string())
+}
+
+fn codex_bypass_sandbox() -> bool {
+    env_enabled("CODEX_BYPASS_SANDBOX")
+        || env_enabled("CODEX_DANGEROUSLY_BYPASS_SANDBOX")
 }
 
 fn normalize_azure_endpoint(endpoint: &str) -> String {
@@ -903,7 +1695,10 @@ fn build_prompt(
     input_attachments_dir: &Path,
     memory_dir: &Path,
     reference_dir: &Path,
+    workspace_dir: &Path,
+    runner: &str,
     memory_context: &str,
+    reply_required: bool,
 ) -> String {
     let memory_section = if memory_context.trim().is_empty() {
         "Memory context (from memory/*.md):\n- (no memory files found)\n\n".to_string()
@@ -913,15 +1708,25 @@ fn build_prompt(
             memory_context = memory_context.trim_end()
         )
     };
+    let reply_instruction = if reply_required {
+        "2. After finishing the task (step one), make sure you write a proper HTML email draft in reply_email_draft.html in the workspace root. If there are files to attach, put them in reply_email_attachments/ and reference them in the email draft. Do not pretend the job has been done without actually doing it, and do not write the email draft until the task is done. If you are not sure about the task, send another email to ask for clarification (and if any, attach information about why did you fail to get the task done, what is the exact error you encountered)."
+    } else {
+        "2. After finishing the task (step one), do not write any email draft. This inbound message is from a non-replyable address, so skip creating reply_email_draft.html or reply_email_attachments/."
+    };
+    let guidance_section = build_guidance_section(workspace_dir, runner);
     format!(
-        r#"You are Oliver, a digital assistant at DoWhiz. You are powerful, resilient, and helpful. Your task is to read incoming emails, understand the user's intent, finish the task, and draft appropriate email replies. You can also use memory and reference materials for context (already saved under current workspace). Always be cute, patient, friendly and helpful in your replies.
+        r#"You are a DoWhiz digital employee. Follow the employee guidance provided below. Your task is to read incoming emails, understand the user's intent, finish the task, and draft appropriate email replies. You can also use memory and reference materials for context (already saved under current workspace). Always be cute, patient, friendly and helpful in your replies.
+
+Employee guidance (from workspace files):
+{guidance_section}
 
 You main goal is
 1. Most importantly, understand the task described in the incoming email and get the task done.
-2. After finishing the task (step one), make sure you write a proper HTML email draft in reply_email_draft.html in the workspace root. If there are files to attach, put them in reply_email_attachments/ and reference them in the email draft. Do not pretend the job has been done without actually doing it, and do not write the email draft until the task is done. If you are not sure about the task, send another email to ask for clarification (and if any, attach information about why did you fail to get the task done, what is the exact error you encountered).
+{reply_instruction}
 
 Inputs (relative to workspace root):
 - Incoming email dir: {input_email} (email.html, postmark_payload.json, thread_history.md, entries/)
+- For incoming email, all previous emails in current thread: /incoming_email/entries/
 - Incoming attachments dir: {input_attachments}
 - Memory dir (memory about the current user): {memory}
 - Reference dir (contain all past emails with the current user): {reference}
@@ -944,6 +1749,7 @@ Scheduling:
 - For any scheduling (email or task), you MUST use the skill "scheduler_maintain".
 
 Rules:
+- Each workspace includes a `.env` file at the workspace root. You may edit it to manage per-user secrets; updates are synced back after the task completes.
 - Do not modify input directories. Any file editing requests should be done on the copied version of attachments and save into reply_email_attachments/ to be sent back to the user. Mark version updates as "_v2", "_v3", etc. in the filename.
 - You may create or modify other files and folders in the workspace as needed to complete the task.
   Prefer creating a work/ directory for clones, patches, and build artifacts.
@@ -955,7 +1761,45 @@ Rules:
         memory = memory_dir.display(),
         reference = reference_dir.display(),
         memory_section = memory_section,
+        guidance_section = guidance_section,
+        reply_instruction = reply_instruction,
     )
+}
+
+fn build_guidance_section(workspace_dir: &Path, runner: &str) -> String {
+    let mut blocks = Vec::new();
+
+    if let Some(content) = load_optional_text(&workspace_dir.join("SOUL.md")) {
+        blocks.push(format_guidance_block("SOUL.md", &content));
+    }
+    if let Some(content) = load_optional_text(&workspace_dir.join("AGENTS.md")) {
+        blocks.push(format_guidance_block("AGENTS.md", &content));
+    }
+    if runner.eq_ignore_ascii_case("claude") {
+        if let Some(content) = load_optional_text(&workspace_dir.join("CLAUDE.md")) {
+            blocks.push(format_guidance_block("CLAUDE.md", &content));
+        }
+    }
+
+    if blocks.is_empty() {
+        "- (no employee guidance files found)\n".to_string()
+    } else {
+        blocks.join("\n")
+    }
+}
+
+fn load_optional_text(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn format_guidance_block(label: &str, content: &str) -> String {
+    format!("{label}:\n```\n{content}\n```\n")
 }
 
 fn load_memory_context(workspace_dir: &Path, memory_dir: &Path) -> Result<String, RunTaskError> {
@@ -1033,7 +1877,10 @@ mod tests {
             Path::new("incoming_attachments"),
             Path::new("memory"),
             Path::new("references"),
+            Path::new("."),
+            "codex",
             "--- memory/memo.md ---\nHello",
+            true,
         );
 
         assert!(prompt.contains("Memory context"));
@@ -1041,6 +1888,23 @@ mod tests {
         assert!(prompt.contains("Memory management"));
         assert!(prompt.contains("memo.md"));
         assert!(prompt.contains("500 lines"));
+    }
+
+    #[test]
+    fn build_prompt_skips_reply_instruction_for_non_replyable() {
+        let prompt = build_prompt(
+            Path::new("incoming_email"),
+            Path::new("incoming_attachments"),
+            Path::new("memory"),
+            Path::new("references"),
+            Path::new("."),
+            "codex",
+            "",
+            false,
+        );
+
+        assert!(prompt.contains("non-replyable address"));
+        assert!(!prompt.contains("write a proper HTML email draft"));
     }
 
     #[test]

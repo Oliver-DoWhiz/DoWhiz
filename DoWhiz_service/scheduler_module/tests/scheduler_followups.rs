@@ -17,6 +17,7 @@ impl TaskExecutor for FollowUpExecutor {
                     subject: "Follow up".to_string(),
                     html_path: "followup.html".to_string(),
                     attachments_dir: Some("followup_attachments".to_string()),
+                    from: None,
                     to: vec!["you@example.com".to_string()],
                     cc: Vec::new(),
                     bcc: Vec::new(),
@@ -52,12 +53,15 @@ fn run_task_followups_persist_to_sqlite() {
         memory_dir: PathBuf::from("memory"),
         reference_dir: PathBuf::from("references"),
         model_name: "gpt-5.2-codex".to_string(),
+        runner: "codex".to_string(),
         codex_disabled: true,
         reply_to: Vec::new(),
+        reply_from: None,
         archive_root: None,
         thread_id: None,
         thread_epoch: None,
         thread_state_path: None,
+        channel: scheduler_module::channel::Channel::default(),
     };
 
     let mut scheduler =
@@ -76,7 +80,7 @@ fn run_task_followups_persist_to_sqlite() {
         .tasks()
         .iter()
         .find_map(|task| {
-            if let TaskKind::SendEmail(send) = &task.kind {
+            if let TaskKind::SendReply(send) = &task.kind {
                 Some(send)
             } else {
                 None

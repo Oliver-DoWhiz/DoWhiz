@@ -11,6 +11,7 @@ pub struct SendEmailParams {
     pub subject: String,
     pub html_path: PathBuf,
     pub attachments_dir: PathBuf,
+    pub from: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -33,6 +34,8 @@ pub struct PostmarkSendResponse {
 pub enum SendEmailError {
     #[error("missing environment variable: {0}")]
     MissingEnv(&'static str),
+    #[error("missing from address")]
+    MissingFrom,
     #[error("missing recipient in To list")]
     MissingRecipient,
     #[error("failed to read file: {0}")]
@@ -86,10 +89,13 @@ pub fn send_email(params: &SendEmailParams) -> Result<PostmarkSendResponse, Send
     if token.trim().is_empty() {
         return Err(SendEmailError::MissingEnv("POSTMARK_SERVER_TOKEN"));
     }
-    let mut from = env::var("OUTBOUND_FROM").unwrap_or_else(|_| "oliver@dowhiz.com".to_string());
-    if from.trim().is_empty() {
-        from = "oliver@dowhiz.com".to_string();
-    }
+    let from = params
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .ok_or(SendEmailError::MissingFrom)?;
 
     let to = join_recipients(&params.to).ok_or(SendEmailError::MissingRecipient)?;
     let cc = join_recipients(&params.cc);
@@ -166,7 +172,10 @@ fn join_recipients(list: &[String]) -> Option<String> {
     for entry in list {
         let trimmed = entry.trim();
         if !trimmed.is_empty() {
-            cleaned.push(trimmed.to_string());
+            let sanitized = sanitize_recipient(trimmed);
+            if !sanitized.is_empty() {
+                cleaned.push(sanitized);
+            }
         }
     }
     if cleaned.is_empty() {
@@ -174,6 +183,55 @@ fn join_recipients(list: &[String]) -> Option<String> {
     } else {
         Some(cleaned.join(", "))
     }
+}
+
+fn sanitize_recipient(value: &str) -> String {
+    if has_unbalanced_quotes(value) {
+        if let Some(email) = extract_email_address(value) {
+            return email;
+        }
+    }
+    value.to_string()
+}
+
+fn has_unbalanced_quotes(value: &str) -> bool {
+    value.chars().filter(|ch| *ch == '"').count() % 2 == 1
+}
+
+fn extract_email_address(value: &str) -> Option<String> {
+    if let Some(start) = value.find('<') {
+        let remainder = &value[start + 1..];
+        if let Some(end) = remainder.find('>') {
+            return normalize_email(&remainder[..end]);
+        }
+    }
+    for token in value.split(|ch| matches!(ch, ',' | ';' | ' ' | '\t' | '\n' | '\r')) {
+        if let Some(email) = normalize_email(token) {
+            return Some(email);
+        }
+    }
+    None
+}
+
+fn normalize_email(raw: &str) -> Option<String> {
+    let mut value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = value.strip_prefix("mailto:") {
+        value = stripped.trim();
+    }
+    value = value.trim_matches(|ch: char| matches!(ch, '<' | '>' | '"' | '\'' | ',' | ';'));
+    if !value.contains('@') {
+        return None;
+    }
+    let mut parts = value.splitn(2, '@');
+    let local = parts.next().unwrap_or("").trim();
+    let domain = parts.next().unwrap_or("").trim();
+    if local.is_empty() || domain.is_empty() {
+        return None;
+    }
+    Some(format!("{}@{}", local, domain))
 }
 
 fn clean_header_value(value: &Option<String>) -> Option<String> {

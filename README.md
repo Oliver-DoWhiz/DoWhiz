@@ -1,7 +1,7 @@
-# DoWhiz - Email-first digital employees
+# DoWhiz - Lightweight Rust replica of OpenClaw
 
 <p align="center">
-  <img src="assets/readme-banner.svg" alt="DoWhiz - Email-first digital employees" width="1200" />
+  <img src="assets/readme-banner.svg" alt="DoWhiz - Any-channel digital employees" width="1200" />
 </p>
 
 <p align="center">
@@ -14,26 +14,29 @@
   <a href="website/README.md">
     <img alt="React website" src="https://img.shields.io/badge/React-Website-3b82f6?style=for-the-badge&logo=react&logoColor=white" />
   </a>
-  <img alt="Email first" src="https://img.shields.io/badge/Email-First-6366f1?style=for-the-badge" />
+  <img alt="Any channel" src="https://img.shields.io/badge/Any-Channel-14b8a6?style=for-the-badge" />
 </p>
 
-Send tasks by email and get structured work and results back in the same
-channel.
+DoWhiz is a lightweight Rust replica of OpenClaw that serves as your digital
+employee team. Message us any task over Telegram, WhatsApp, iMessage, email,
+Discord, Slack, or any other channel, and get structured work back in the same
+place.
 
 ## Overview
-DoWhiz lets users send tasks to role-based agents over email. The platform
-routes, schedules, executes, and replies with results, follow-ups, and
-scheduled work.
+DoWhiz is a lightweight Rust replica of OpenClaw that lets users send tasks to
+role-based agents over any message type (Telegram, WhatsApp, iMessage, email,
+Discord, Slack, and more). The platform routes, schedules, executes, and
+replies in-channel with results, follow-ups, and scheduled work.
 
 ## Core capabilities
-- Email-first task intake and replies.
+- Any-channel task intake and replies across email, chat, and messaging apps.
 - Role-based agents with isolated, user-specific memory and data.
 - Scheduling and orchestration for long-running or recurring work.
 - Tool-backed execution for reliable outputs.
 
 ## High-level architecture
 ```
-Inbound email -> Scheduler -> Task runner -> Tools -> Outbound email
+Inbound message -> Scheduler -> Task runner -> Tools -> Outbound message
 ```
 
 ## Vision
@@ -62,7 +65,7 @@ sudo apt-get update
 sudo apt-get install -y ca-certificates libsqlite3-dev libssl-dev pkg-config curl
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm install -g @openai/codex@latest @playwright/cli@latest
+sudo npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest @playwright/cli@latest
 sudo npx playwright install --with-deps chromium
 ```
 
@@ -77,23 +80,48 @@ sudo ln -sf "$chromium_path" /opt/google/chrome/chrome
 macOS (Homebrew):
 ```
 brew install node@20 openssl@3 sqlite pkg-config
-npm install -g @openai/codex@latest @playwright/cli@latest
+npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest @playwright/cli@latest
 npx playwright install chromium
 ```
 
 Skills are copied from `DoWhiz_service/skills` automatically when preparing workspaces.
+Postmark outbound requires each employee address to be verified as a Sender Signature (or domain) because replies are sent from the inbound mailbox.
 
 ## Getting started
+Local config lives in a repo-root `.env` file. Use `.env.example` as a template.
+
 Rust service:
 ```
 cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001
+```
+Employee profiles (addresses, runner, persona, skills) are defined in `DoWhiz_service/employee.toml`. Each server only processes emails addressed to its configured employee.
+Replies are sent from the employee address that the inbound email targeted. For forwarded mail, the service checks `To`/`Cc`/`Bcc` plus headers like `X-Original-To`, `Delivered-To`, and `X-Forwarded-To` to determine which employee address was targeted.
+If `RUN_TASK_DOCKER_IMAGE` is set in your `.env`, each task runs
+inside a fresh Docker container and the image auto-builds on first use (unless
+disabled with `RUN_TASK_DOCKER_AUTO_BUILD=0`).
+
+One-command local run (auto ngrok + Postmark hook):
+```
+./DoWhiz_service/scripts/run_employee.sh little_bear 9001
+```
+Requires `POSTMARK_SERVER_TOKEN` in your `.env`, plus `ngrok` and `python3` installed. Use `--public-url`, `--skip-hook`, or `--skip-ngrok` for advanced flows.
+
+Multi-employee local run (from repo root):
+```
+# Oliver / Little-Bear (Codex)
+EMPLOYEE_ID=little_bear RUST_SERVICE_PORT=9001 \
+  cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9001
+
+# Maggie / Mini-Mouse (Claude)
+EMPLOYEE_ID=mini_mouse RUST_SERVICE_PORT=9002 \
+  cargo run -p scheduler_module --bin rust_service -- --host 0.0.0.0 --port 9002
 ```
 
 Docker (production image):
 ```
 docker build -t dowhiz-service .
 docker run --rm -p 9001:9001 \
-  -v "$PWD/DoWhiz_service/.env:/app/.env:ro" \
+  -v "$PWD/.env:/app/.env:ro" \
   -v dowhiz-workspace:/app/.workspace \
   dowhiz-service
 ```
@@ -128,6 +156,10 @@ npm run dev
 More detail:
 - `DoWhiz_service/README.md`
 - `website/README.md`
+- `CONTRIBUTING.md`
+
+## Contributing
+See `CONTRIBUTING.md` for environment setup, tests, and local development workflow.
 
 ## Testing
 Rust unit tests:
@@ -135,6 +167,9 @@ Rust unit tests:
 cargo test -p scheduler_module
 cargo test -p run_task_module
 ```
+
+Live Postmark E2E:
+See `DoWhiz_service/README.md` for the full Docker + local live E2E workflow, including ngrok port mapping for `mini_mouse` (9002) and `little_bear` (9001).
 
 Website lint:
 ```
