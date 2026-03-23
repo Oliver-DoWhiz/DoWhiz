@@ -520,67 +520,99 @@ pub async fn ingest_notion_webhook(
     let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
 
     // Notion webhook v2 doesn't include comment text in payload - need to fetch via API
+    // Must paginate through all comments since pages can have 100+ comments
     if comment_text.is_empty() && page_id != "unknown" {
         info!(
             "notion webhook comment text empty, fetching via API: page_id={} comment_id={}",
             page_id, comment_id
         );
-        // Use reqwest directly with the credential's access token
         let http_client = reqwest::blocking::Client::new();
-        let url = format!("https://api.notion.com/v1/comments?block_id={}", page_id);
-        match http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", credential.access_token))
-            .header("Notion-Version", "2022-06-28")
-            .send()
-        {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    if let Ok(data) = resp.json::<serde_json::Value>() {
-                        if let Some(results) = data["results"].as_array() {
-                            for c in results {
-                                let cid = c["id"].as_str().unwrap_or("");
-                                if cid == comment_id {
-                                    // Extract plain text from rich_text array
-                                    if let Some(rich_text) = c["rich_text"].as_array() {
-                                        comment_text = rich_text
-                                            .iter()
-                                            .filter_map(|rt| rt["plain_text"].as_str())
-                                            .collect::<Vec<_>>()
-                                            .join("");
-                                    }
-                                    // Extract author name
-                                    if author_name.is_none() {
-                                        if let Some(name) = c["created_by"]["name"].as_str() {
-                                            author_name = Some(name.to_string());
+        let mut next_cursor: Option<String> = None;
+        let mut total_comments_checked = 0;
+        let max_pages = 10; // Safety limit: 10 pages * 100 = 1000 comments max
+        let mut pages_fetched = 0;
+
+        'pagination: loop {
+            if pages_fetched >= max_pages {
+                warn!(
+                    "notion webhook pagination limit reached after {} pages ({} comments)",
+                    pages_fetched, total_comments_checked
+                );
+                break;
+            }
+
+            let mut url = format!("https://api.notion.com/v1/comments?block_id={}", page_id);
+            if let Some(ref cursor) = next_cursor {
+                url.push_str(&format!("&start_cursor={}", cursor));
+            }
+
+            match http_client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", credential.access_token))
+                .header("Notion-Version", "2022-06-28")
+                .send()
+            {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>() {
+                            if let Some(results) = data["results"].as_array() {
+                                total_comments_checked += results.len();
+                                for c in results {
+                                    let cid = c["id"].as_str().unwrap_or("");
+                                    if cid == comment_id {
+                                        // Extract plain text from rich_text array
+                                        if let Some(rich_text) = c["rich_text"].as_array() {
+                                            comment_text = rich_text
+                                                .iter()
+                                                .filter_map(|rt| rt["plain_text"].as_str())
+                                                .collect::<Vec<_>>()
+                                                .join("");
                                         }
+                                        // Extract author name
+                                        if author_name.is_none() {
+                                            if let Some(name) = c["created_by"]["name"].as_str() {
+                                                author_name = Some(name.to_string());
+                                            }
+                                        }
+                                        info!(
+                                            "notion webhook fetched comment text: {} chars (page {} of pagination)",
+                                            comment_text.len(),
+                                            pages_fetched + 1
+                                        );
+                                        break 'pagination;
                                     }
-                                    info!(
-                                        "notion webhook fetched comment text: {} chars",
-                                        comment_text.len()
-                                    );
-                                    break;
                                 }
                             }
-                            if comment_text.is_empty() {
+                            // Check for more pages
+                            let has_more = data["has_more"].as_bool().unwrap_or(false);
+                            if has_more {
+                                next_cursor = data["next_cursor"].as_str().map(|s| s.to_string());
+                                pages_fetched += 1;
+                            } else {
+                                // No more pages and comment not found
                                 warn!(
-                                    "notion webhook comment_id={} not found in {} comments on page",
-                                    comment_id,
-                                    results.len()
+                                    "notion webhook comment_id={} not found in {} comments (checked {} pages)",
+                                    comment_id, total_comments_checked, pages_fetched + 1
                                 );
+                                break;
                             }
+                        } else {
+                            warn!("notion webhook failed to parse API response as JSON");
+                            break;
                         }
+                    } else {
+                        warn!(
+                            "notion webhook API returned status {}: {:?}",
+                            resp.status(),
+                            resp.text()
+                        );
+                        break;
                     }
-                } else {
-                    warn!(
-                        "notion webhook API returned status {}: {:?}",
-                        resp.status(),
-                        resp.text()
-                    );
                 }
-            }
-            Err(e) => {
-                warn!("notion webhook failed to fetch comments via API: {}", e);
+                Err(e) => {
+                    warn!("notion webhook failed to fetch comments via API: {}", e);
+                    break;
+                }
             }
         }
     }
