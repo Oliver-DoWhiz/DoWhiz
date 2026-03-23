@@ -17,6 +17,7 @@ pub struct NotionCredential {
     pub workspace_id: String,
     pub workspace_name: Option<String>,
     pub access_token: String,
+    /// The bot ID from OAuth response. In webhook payloads, this is called `integration_id`.
     pub bot_id: String,
     pub owner_user_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -69,6 +70,14 @@ impl NotionStore {
             &self.credentials,
             IndexModel::builder()
                 .keys(doc! { "workspace_id": 1 })
+                .build(),
+        )?;
+
+        // Index on bot_id for webhook lookups (bot_id == integration_id in webhooks)
+        ensure_index_compatible(
+            &self.credentials,
+            IndexModel::builder()
+                .keys(doc! { "bot_id": 1 })
                 .build(),
         )?;
 
@@ -246,6 +255,22 @@ impl NotionStore {
             "no workspace matching '{}'",
             name_or_slug
         )))
+    }
+
+    /// Get credential by bot_id (integration_id in webhook payloads).
+    ///
+    /// The bot_id from OAuth is called `integration_id` in Notion webhook payloads.
+    /// This method is used to look up credentials when processing incoming webhooks.
+    pub fn get_credential_by_bot_id(
+        &self,
+        bot_id: &str,
+    ) -> Result<NotionCredential, NotionStoreError> {
+        let doc = self
+            .credentials
+            .find_one(doc! { "bot_id": bot_id }, None)?
+            .ok_or_else(|| NotionStoreError::NotFound(format!("bot_id: {}", bot_id)))?;
+
+        Self::doc_to_credential(doc)
     }
 
     /// Get any available credential (fallback when workspace_name is unknown).

@@ -109,6 +109,40 @@ pub(super) fn verify_twilio(headers: &HeaderMap, body: &[u8]) -> Result<(), &'st
 
 /// Verify WhatsApp webhook subscription request.
 /// Returns the challenge token if verification succeeds.
+/// Verify Notion webhook signature using HMAC-SHA256.
+///
+/// Notion sends the signature in the `X-Notion-Signature` header.
+/// The signature is computed as: HMAC-SHA256(verification_token, request_body)
+pub(super) fn verify_notion(headers: &HeaderMap, body: &[u8]) -> Result<(), &'static str> {
+    let secret = env::var("NOTION_WEBHOOK_SECRET").ok();
+    let Some(secret) = secret.filter(|value| !value.trim().is_empty()) else {
+        // If secret not configured, skip verification (allows testing)
+        return Ok(());
+    };
+
+    let signature = headers
+        .get("x-notion-signature")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("missing_signature")?;
+
+    // Notion signature format: "v0=<hex_digest>"
+    let expected_prefix = "v0=";
+    if !signature.starts_with(expected_prefix) {
+        return Err("invalid_signature_format");
+    }
+
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| "bad_secret")?;
+    mac.update(body);
+    let expected = format!("v0={}", hex::encode(mac.finalize().into_bytes()));
+
+    if expected != signature {
+        return Err("invalid_signature");
+    }
+
+    Ok(())
+}
+
 pub(super) fn verify_whatsapp_subscription(
     mode: Option<&str>,
     token: Option<&str>,
