@@ -28,6 +28,12 @@ fn main() -> ExitCode {
         "reply" => cmd_reply(&args[2..]),
         "create-comment" => cmd_create_comment(&args[2..]),
         "search" => cmd_search(&args[2..]),
+        "create-page" => cmd_create_page(&args[2..]),
+        "append-blocks" => cmd_append_blocks(&args[2..]),
+        "get-database" => cmd_get_database(&args[2..]),
+        "query-database" => cmd_query_database(&args[2..]),
+        "update-page" => cmd_update_page(&args[2..]),
+        "archive-page" => cmd_archive_page(&args[2..]),
         "help" | "--help" | "-h" => {
             print_usage();
             ExitCode::SUCCESS
@@ -69,6 +75,52 @@ Commands:
   search           Search for pages
     --query <text>       Search query
     --workspace-id <ws>  Workspace ID (optional)
+
+  create-page      Create a new page under a parent page
+    --parent-id <id>     Parent page ID
+    --title <text>       Page title
+    --content <text>     Initial paragraph content (optional)
+    --workspace-id <ws>  Workspace ID (optional)
+
+  append-blocks    Append content blocks to a page
+    --page-id <id>       Page or block ID to append to
+    --blocks <json>      JSON array of blocks (see below)
+    --workspace-id <ws>  Workspace ID (optional)
+
+  get-database     Get database schema and properties
+    --database-id <id>   Database ID
+    --workspace-id <ws>  Workspace ID (optional)
+
+  query-database   Query items from a database
+    --database-id <id>   Database ID
+    --filter <json>      Filter JSON (optional)
+    --sorts <json>       Sorts JSON array (optional)
+    --limit <n>          Max results (optional, default 100)
+    --workspace-id <ws>  Workspace ID (optional)
+
+  update-page      Update page properties
+    --page-id <id>       Page ID
+    --properties <json>  Properties JSON
+    --workspace-id <ws>  Workspace ID (optional)
+
+  archive-page     Archive (soft delete) a page
+    --page-id <id>       Page ID
+    --workspace-id <ws>  Workspace ID (optional)
+
+Block Types for append-blocks:
+  [
+    {{"type": "paragraph", "text": "..."}},
+    {{"type": "heading_1", "text": "..."}},
+    {{"type": "heading_2", "text": "..."}},
+    {{"type": "heading_3", "text": "..."}},
+    {{"type": "bulleted_list_item", "text": "..."}},
+    {{"type": "numbered_list_item", "text": "..."}},
+    {{"type": "to_do", "text": "...", "checked": false}},
+    {{"type": "quote", "text": "..."}},
+    {{"type": "callout", "text": "...", "emoji": "..."}},
+    {{"type": "code", "text": "...", "language": "python"}},
+    {{"type": "divider"}}
+  ]
 
 Environment:
   EMPLOYEE_ID              Required for OAuth token lookup
@@ -408,6 +460,499 @@ fn cmd_search(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn cmd_create_page(args: &[String]) -> ExitCode {
+    let mut parent_id = None;
+    let mut title = None;
+    let mut content = None;
+    let mut workspace_id = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--parent-id" => {
+                i += 1;
+                parent_id = args.get(i).cloned();
+            }
+            "--title" => {
+                i += 1;
+                title = args.get(i).cloned();
+            }
+            "--content" => {
+                i += 1;
+                content = args.get(i).cloned();
+            }
+            "--workspace-id" => {
+                i += 1;
+                workspace_id = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(parent_id) = parent_id else {
+        eprintln!("Error: --parent-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(title) = title else {
+        eprintln!("Error: --title is required");
+        return ExitCode::FAILURE;
+    };
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    // Build initial content blocks if provided
+    let content_blocks = content.map(|text| {
+        vec![scheduler_module::notion_browser::BlockInput::Paragraph(text)]
+    });
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.create_page(&workspace_id, &parent_id, &title, content_blocks) {
+            Ok(page) => {
+                let output = serde_json::json!({
+                    "success": true,
+                    "page": {
+                        "id": page.id,
+                        "title": page.title,
+                        "url": page.url,
+                        "created_time": page.created_time,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_append_blocks(args: &[String]) -> ExitCode {
+    let mut page_id = None;
+    let mut blocks_json = None;
+    let mut workspace_id = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--page-id" => {
+                i += 1;
+                page_id = args.get(i).cloned();
+            }
+            "--blocks" => {
+                i += 1;
+                blocks_json = args.get(i).cloned();
+            }
+            "--workspace-id" => {
+                i += 1;
+                workspace_id = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(page_id) = page_id else {
+        eprintln!("Error: --page-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(blocks_json) = blocks_json else {
+        eprintln!("Error: --blocks is required (JSON array)");
+        return ExitCode::FAILURE;
+    };
+
+    // Parse blocks JSON
+    let blocks: Vec<serde_json::Value> = match serde_json::from_str(&blocks_json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing blocks JSON: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Convert to BlockInput
+    let block_inputs: Vec<scheduler_module::notion_browser::BlockInput> = blocks
+        .into_iter()
+        .filter_map(|b| parse_block_input(&b))
+        .collect();
+
+    if block_inputs.is_empty() {
+        eprintln!("Error: No valid blocks found in JSON");
+        return ExitCode::FAILURE;
+    }
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.append_blocks(&workspace_id, &page_id, block_inputs) {
+            Ok(blocks) => {
+                let output = serde_json::json!({
+                    "success": true,
+                    "blocks_created": blocks.len(),
+                    "blocks": blocks.iter().map(|b| {
+                        serde_json::json!({
+                            "id": b.id,
+                            "type": b.block_type,
+                        })
+                    }).collect::<Vec<_>>()
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_get_database(args: &[String]) -> ExitCode {
+    let mut database_id = None;
+    let mut workspace_id = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--database-id" => {
+                i += 1;
+                database_id = args.get(i).cloned();
+            }
+            "--workspace-id" => {
+                i += 1;
+                workspace_id = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(database_id) = database_id else {
+        eprintln!("Error: --database-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.get_database(&workspace_id, &database_id) {
+            Ok(db) => {
+                let output = serde_json::json!({
+                    "id": db.id,
+                    "title": db.title,
+                    "url": db.url,
+                    "properties": db.properties.iter().map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "type": p.property_type,
+                            "id": p.id,
+                        })
+                    }).collect::<Vec<_>>()
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_query_database(args: &[String]) -> ExitCode {
+    let mut database_id = None;
+    let mut filter_json = None;
+    let mut sorts_json = None;
+    let mut limit = None;
+    let mut workspace_id = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--database-id" => {
+                i += 1;
+                database_id = args.get(i).cloned();
+            }
+            "--filter" => {
+                i += 1;
+                filter_json = args.get(i).cloned();
+            }
+            "--sorts" => {
+                i += 1;
+                sorts_json = args.get(i).cloned();
+            }
+            "--limit" => {
+                i += 1;
+                limit = args.get(i).and_then(|s| s.parse().ok());
+            }
+            "--workspace-id" => {
+                i += 1;
+                workspace_id = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(database_id) = database_id else {
+        eprintln!("Error: --database-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let filter: Option<serde_json::Value> = filter_json.and_then(|s| serde_json::from_str(&s).ok());
+    let sorts: Option<Vec<serde_json::Value>> = sorts_json.and_then(|s| serde_json::from_str(&s).ok());
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.query_database(&workspace_id, &database_id, filter, sorts, limit) {
+            Ok(items) => {
+                let output: Vec<_> = items
+                    .iter()
+                    .map(|item| {
+                        serde_json::json!({
+                            "id": item.id,
+                            "title": item.title,
+                            "url": item.url,
+                            "properties": item.properties,
+                            "created_time": item.created_time,
+                            "last_edited_time": item.last_edited_time,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_update_page(args: &[String]) -> ExitCode {
+    let mut page_id = None;
+    let mut properties_json = None;
+    let mut workspace_id = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--page-id" => {
+                i += 1;
+                page_id = args.get(i).cloned();
+            }
+            "--properties" => {
+                i += 1;
+                properties_json = args.get(i).cloned();
+            }
+            "--workspace-id" => {
+                i += 1;
+                workspace_id = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(page_id) = page_id else {
+        eprintln!("Error: --page-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(properties_json) = properties_json else {
+        eprintln!("Error: --properties is required (JSON object)");
+        return ExitCode::FAILURE;
+    };
+
+    let properties: serde_json::Value = match serde_json::from_str(&properties_json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing properties JSON: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.update_page(&workspace_id, &page_id, properties) {
+            Ok(page) => {
+                let output = serde_json::json!({
+                    "success": true,
+                    "page": {
+                        "id": page.id,
+                        "title": page.title,
+                        "url": page.url,
+                        "last_edited_time": page.last_edited_time,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_archive_page(args: &[String]) -> ExitCode {
+    let (page_id, workspace_id) = match parse_page_args(args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let Some(page_id) = page_id else {
+        eprintln!("Error: --page-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let employee_id = match env::var("EMPLOYEE_ID") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("Error: EMPLOYEE_ID environment variable is required");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let workspace_id = workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string());
+
+    match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
+        Ok(client) => match client.archive_page(&workspace_id, &page_id) {
+            Ok(()) => {
+                let output = serde_json::json!({
+                    "success": true,
+                    "page_id": page_id,
+                    "archived": true,
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("API Error: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to create API client: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Parse a block input from JSON.
+fn parse_block_input(value: &serde_json::Value) -> Option<scheduler_module::notion_browser::BlockInput> {
+    let block_type = value["type"].as_str()?;
+    let text = value["text"].as_str().unwrap_or("").to_string();
+
+    Some(match block_type {
+        "paragraph" => scheduler_module::notion_browser::BlockInput::Paragraph(text),
+        "heading_1" => scheduler_module::notion_browser::BlockInput::Heading1(text),
+        "heading_2" => scheduler_module::notion_browser::BlockInput::Heading2(text),
+        "heading_3" => scheduler_module::notion_browser::BlockInput::Heading3(text),
+        "bulleted_list_item" => scheduler_module::notion_browser::BlockInput::BulletedListItem(text),
+        "numbered_list_item" => scheduler_module::notion_browser::BlockInput::NumberedListItem(text),
+        "to_do" => scheduler_module::notion_browser::BlockInput::ToDo {
+            text,
+            checked: value["checked"].as_bool().unwrap_or(false),
+        },
+        "quote" => scheduler_module::notion_browser::BlockInput::Quote(text),
+        "callout" => scheduler_module::notion_browser::BlockInput::Callout {
+            text,
+            emoji: value["emoji"].as_str().map(|s| s.to_string()),
+        },
+        "code" => scheduler_module::notion_browser::BlockInput::Code {
+            text,
+            language: value["language"].as_str().unwrap_or("plain text").to_string(),
+        },
+        "divider" => scheduler_module::notion_browser::BlockInput::Divider,
+        _ => return None,
+    })
 }
 
 fn parse_page_args(args: &[String]) -> Result<(Option<String>, Option<String>), String> {
