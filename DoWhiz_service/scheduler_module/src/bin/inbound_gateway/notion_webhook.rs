@@ -18,6 +18,7 @@ use serde_json::json;
 use tracing::{debug, info, warn};
 
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundMessage};
+use scheduler_module::notion_browser::api_client::NotionApiClient;
 use scheduler_module::notion_browser::models::NotionMention;
 use scheduler_module::notion_store::NotionStore;
 
@@ -512,12 +513,50 @@ pub async fn ingest_notion_webhook(
     };
 
     // Extract message details
-    let comment_text = payload.extract_comment_text();
+    let mut comment_text = payload.extract_comment_text();
     let page_id = payload.get_page_id().unwrap_or_else(|| "unknown".to_string());
     let comment_id = payload.get_comment_id().unwrap_or_else(|| payload.id.clone());
     let discussion_id = payload.get_discussion_id().unwrap_or_else(|| comment_id.clone());
-    let author_name = payload.author_name();
+    let mut author_name = payload.author_name();
     let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
+
+    // Notion webhook v2 doesn't include comment text in payload - need to fetch via API
+    if comment_text.is_empty() && page_id != "unknown" {
+        info!(
+            "notion webhook comment text empty, fetching via API: page_id={} comment_id={}",
+            page_id, comment_id
+        );
+        let api_client = NotionApiClient::new(notion_store);
+        match api_client.get_comments(&payload.workspace_id, &page_id) {
+            Ok(comments) => {
+                // Find the comment matching our comment_id
+                for c in comments {
+                    if c.id == comment_id {
+                        comment_text = c.text.clone();
+                        if author_name.is_none() {
+                            author_name = Some(c.author_name.clone());
+                        }
+                        info!(
+                            "notion webhook fetched comment text: {} chars, author={}",
+                            comment_text.len(),
+                            c.author_name
+                        );
+                        break;
+                    }
+                }
+                if comment_text.is_empty() {
+                    warn!(
+                        "notion webhook comment_id={} not found in {} comments on page",
+                        comment_id,
+                        comments.len()
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("notion webhook failed to fetch comments via API: {}", e);
+            }
+        }
+    }
 
     // Log payload structure for debugging
     info!(
