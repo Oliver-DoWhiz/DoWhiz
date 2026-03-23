@@ -18,6 +18,7 @@ use serde_json::json;
 use tracing::{debug, info, warn};
 
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundMessage};
+use scheduler_module::notion_browser::models::NotionMention;
 use scheduler_module::notion_store::NotionStore;
 
 use super::handlers::{build_envelope, enqueue_envelope};
@@ -487,10 +488,10 @@ pub async fn ingest_notion_webhook(
     let message = InboundMessage {
         channel: Channel::Notion,
         sender: author_id.clone(),
-        sender_name: author_name,
+        sender_name: author_name.clone(),
         recipient: payload.integration_id.clone(),
         subject: Some(format!("Notion comment on page {}", page_id)),
-        text_body: Some(comment_text),
+        text_body: Some(comment_text.clone()),
         html_body: None,
         thread_id,
         message_id: Some(message_id.clone()),
@@ -505,6 +506,34 @@ pub async fn ingest_notion_webhook(
         },
     };
 
+    // Convert webhook payload to NotionMention format for worker compatibility
+    let notion_mention = NotionMention {
+        id: payload.id.clone(),
+        workspace_id: payload.workspace_id.clone(),
+        workspace_name: payload.workspace_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        page_id: page_id.clone(),
+        page_title: format!("Notion Page {}", page_id), // Title not available in webhook
+        block_id: None,
+        comment_id: Some(comment_id.clone()),
+        sender_name: author_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        sender_id: Some(author_id.clone()),
+        comment_text: comment_text.clone(),
+        thread_context: vec![], // Thread context not available in webhook
+        url: format!("https://notion.so/{}", page_id.replace("-", "")),
+        detected_at: chrono::Utc::now(),
+    };
+
+    let notion_mention_bytes = match serde_json::to_vec(&notion_mention) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!("notion webhook failed to serialize NotionMention: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "serialization_error"})),
+            );
+        }
+    };
+
     info!(
         "notion webhook building envelope: route={:?} message_id={}",
         route.employee_id, message_id
@@ -516,7 +545,7 @@ pub async fn ingest_notion_webhook(
         Channel::Notion,
         Some(message_id.clone()),
         &message,
-        &body,
+        &notion_mention_bytes,
     )
     .await
     {
@@ -585,31 +614,27 @@ mod tests {
 
     fn make_test_payload(authors: Option<Vec<NotionWebhookAuthor>>) -> NotionWebhookPayload {
         NotionWebhookPayload {
-            event_type: NotionEventType::CommentCreated,
+            id: "event-1".to_string(),
+            event_type: Some(NotionEventType::CommentCreated),
+            timestamp: None,
             integration_id: "bot-123".to_string(),
             workspace_id: "ws-456".to_string(),
+            workspace_name: None,
+            subscription_id: None,
             authors,
-            data: Some(NotionCommentData {
-                id: "comment-1".to_string(),
-                parent: Some(NotionCommentParent {
-                    parent_type: "page_id".to_string(),
-                    page_id: Some("page-789".to_string()),
-                    block_id: None,
-                }),
-                created_by: Some(NotionCommentCreatedBy {
-                    id: "user-111".to_string(),
-                    author_type: "person".to_string(),
-                    name: Some("Test User".to_string()),
-                }),
-                rich_text: Some(vec![NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some("Hello world".to_string()),
-                    text: None,
-                    mention: None,
-                }]),
-                discussion_id: Some("disc-222".to_string()),
-            }),
-            verification_token: None,
+            accessible_by: None,
+            data: Some(serde_json::json!({
+                "id": "comment-1",
+                "parent": {"type": "page_id", "page_id": "page-789"},
+                "created_by": {"id": "user-111", "type": "person", "name": "Test User"},
+                "rich_text": [{"type": "text", "plain_text": "Hello world"}],
+                "discussion_id": "disc-222"
+            })),
+            entity: None,
+            page_id: None,
+            discussion_id: None,
+            comment_id: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 
@@ -655,98 +680,60 @@ mod tests {
     #[test]
     fn test_extract_comment_text_multiple_elements() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![
-                NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some("Hello ".to_string()),
-                    text: None,
-                    mention: None,
-                },
-                NotionRichTextElement {
-                    element_type: "mention".to_string(),
-                    plain_text: Some("@Bot".to_string()),
-                    text: None,
-                    mention: Some(NotionMentionContent {
-                        mention_type: Some("user".to_string()),
-                        user: Some(NotionMentionUser {
-                            id: Some("bot-123".to_string()),
-                            name: Some("Bot".to_string()),
-                        }),
-                    }),
-                },
-                NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some(" please help".to_string()),
-                    text: None,
-                    mention: None,
-                },
-            ]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "text", "plain_text": "Hello "},
+                {"type": "mention", "plain_text": "@Bot", "mention": {"type": "user", "user": {"id": "bot-123", "name": "Bot"}}},
+                {"type": "text", "plain_text": " please help"}
+            ]
+        }));
         assert_eq!(payload.extract_comment_text(), "Hello @Bot please help");
     }
 
     #[test]
     fn test_contains_bot_mention_true() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![NotionRichTextElement {
-                element_type: "mention".to_string(),
-                plain_text: Some("@Bot".to_string()),
-                text: None,
-                mention: Some(NotionMentionContent {
-                    mention_type: Some("user".to_string()),
-                    user: Some(NotionMentionUser {
-                        id: Some("bot-123".to_string()),
-                        name: Some("Bot".to_string()),
-                    }),
-                }),
-            }]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "mention", "plain_text": "@Bot", "mention": {"type": "user", "user": {"id": "bot-123", "name": "Bot"}}}
+            ]
+        }));
         assert!(payload.contains_bot_mention("bot-123"));
     }
 
     #[test]
     fn test_contains_bot_mention_false_different_id() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![NotionRichTextElement {
-                element_type: "mention".to_string(),
-                plain_text: Some("@User".to_string()),
-                text: None,
-                mention: Some(NotionMentionContent {
-                    mention_type: Some("user".to_string()),
-                    user: Some(NotionMentionUser {
-                        id: Some("user-other".to_string()),
-                        name: Some("User".to_string()),
-                    }),
-                }),
-            }]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "mention", "plain_text": "@User", "mention": {"type": "user", "user": {"id": "user-other", "name": "User"}}}
+            ]
+        }));
         assert!(!payload.contains_bot_mention("bot-123"));
     }
 
     #[test]
-    fn test_page_id() {
+    fn test_get_page_id() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.page_id(), Some("page-789"));
+        assert_eq!(payload.get_page_id(), Some("page-789".to_string()));
     }
 
     #[test]
-    fn test_comment_id() {
+    fn test_get_comment_id() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.comment_id(), Some("comment-1"));
+        assert_eq!(payload.get_comment_id(), Some("comment-1".to_string()));
     }
 
     #[test]
     fn test_author_name() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.author_name(), Some("Test User"));
+        assert_eq!(payload.author_name(), Some("Test User".to_string()));
     }
 
     #[test]
     fn test_deserialize_comment_created() {
         let json = r#"{
+            "id": "event-123",
             "type": "comment.created",
             "integration_id": "abc-123",
             "workspace_id": "ws-456",
@@ -760,7 +747,7 @@ mod tests {
         }"#;
 
         let payload: NotionWebhookPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.event_type, NotionEventType::CommentCreated);
+        assert_eq!(payload.event_type, Some(NotionEventType::CommentCreated));
         assert_eq!(payload.integration_id, "abc-123");
         assert_eq!(payload.extract_comment_text(), "Hello");
     }
@@ -768,12 +755,13 @@ mod tests {
     #[test]
     fn test_deserialize_unknown_event_type() {
         let json = r#"{
+            "id": "event-456",
             "type": "page.created",
             "integration_id": "abc",
             "workspace_id": "ws"
         }"#;
 
         let payload: NotionWebhookPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.event_type, NotionEventType::Unknown);
+        assert_eq!(payload.event_type, Some(NotionEventType::Unknown));
     }
 }
