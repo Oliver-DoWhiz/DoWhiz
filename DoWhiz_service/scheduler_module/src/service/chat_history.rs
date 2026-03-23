@@ -19,6 +19,11 @@ pub(crate) const CHAT_HISTORY_SCOPE_FILE_NAME: &str = ".chat_history_scope.json"
 
 const CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV: &str = "CHAT_HISTORY_SCOPE_SIGNING_SECRET";
 const CHAT_HISTORY_PROXY_BASE_URL_ENV: &str = "CHAT_HISTORY_PROXY_BASE_URL";
+const DOWHIZ_API_URL_ENV: &str = "DOWHIZ_API_URL";
+const FRONTEND_URL_ENV: &str = "FRONTEND_URL";
+const POSTMARK_INBOUND_HOOK_URL_ENV: &str = "POSTMARK_INBOUND_HOOK_URL";
+const SERVICE_URL_ENV: &str = "SERVICE_URL";
+const RUN_TASK_EXECUTION_BACKEND_ENV: &str = "RUN_TASK_EXECUTION_BACKEND";
 const CHAT_HISTORY_SCOPE_TTL_MINUTES_ENV: &str = "CHAT_HISTORY_SCOPE_TTL_MINUTES";
 const CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES_ENV: &str = "CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES";
 const CHAT_HISTORY_SLACK_MAX_THREAD_PAGES_ENV: &str = "CHAT_HISTORY_SLACK_MAX_THREAD_PAGES";
@@ -35,6 +40,7 @@ const DEFAULT_SLACK_MAX_THREAD_PAGES: usize = 20;
 const DEFAULT_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL: usize = 40;
 const DEFAULT_DISCORD_MAX_CHANNELS: usize = 200;
 const DISCORD_TEXT_CHANNEL_TYPES: &[u8] = &[0, 5, 10, 11, 12, 15];
+const AZURE_ACI_EXECUTION_BACKEND: &str = "azure_aci";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -640,11 +646,55 @@ fn chat_history_base_url(config: &ServiceConfig) -> String {
     if let Some(url) = env_trimmed(CHAT_HISTORY_PROXY_BASE_URL_ENV) {
         return url.trim_end_matches('/').to_string();
     }
-    if let Some(url) = env_trimmed("SERVICE_URL") {
+    if let Some(url) = env_trimmed(DOWHIZ_API_URL_ENV) {
         return url.trim_end_matches('/').to_string();
+    }
+    if let Some(url) = env_trimmed(SERVICE_URL_ENV) {
+        return url.trim_end_matches('/').to_string();
+    }
+    if chat_history_requires_public_proxy() {
+        if let Some(url) = env_trimmed(POSTMARK_INBOUND_HOOK_URL_ENV)
+            .and_then(|value| derive_public_service_base_url(&value))
+        {
+            return url;
+        }
+        if let Some(url) =
+            env_trimmed(FRONTEND_URL_ENV).and_then(|value| derive_public_service_base_url(&value))
+        {
+            return url;
+        }
     }
     let host = normalize_base_host(&config.host);
     format!("http://{host}:{}", config.port)
+}
+
+fn chat_history_requires_public_proxy() -> bool {
+    env_trimmed(RUN_TASK_EXECUTION_BACKEND_ENV)
+        .map(|value| value.eq_ignore_ascii_case(AZURE_ACI_EXECUTION_BACKEND))
+        .unwrap_or(false)
+}
+
+fn derive_public_service_base_url(candidate: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(candidate).ok()?;
+    let raw_path = url.path().trim_end_matches('/');
+    let normalized_path = if let Some(prefix) = raw_path.strip_suffix("/postmark/inbound") {
+        let prefix = prefix.trim_end_matches('/');
+        if prefix.is_empty() {
+            "/service".to_string()
+        } else {
+            format!("{prefix}/service")
+        }
+    } else if raw_path.is_empty() || raw_path == "/" {
+        "/service".to_string()
+    } else if raw_path.ends_with("/service") {
+        raw_path.to_string()
+    } else {
+        format!("{}/service", raw_path)
+    };
+    url.set_path(&normalized_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn normalize_base_host(host: &str) -> String {
@@ -941,6 +991,7 @@ fn search_discord_history(
             &channel.id,
             channel.name.as_deref(),
             &query_norm,
+            &mut warnings,
         )?;
         for entry in channel_matches {
             let key = format!("{}:{}", entry.channel_id, entry.message_id);
@@ -1078,6 +1129,7 @@ fn search_discord_channel_messages(
     channel_id: &str,
     channel_name: Option<&str>,
     query_norm: &str,
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<ChatHistoryMatch>, BoxError> {
     let mut results = Vec::new();
     let mut before: Option<String> = None;
@@ -1094,9 +1146,22 @@ fn search_discord_channel_messages(
         }
         let response = request.send()?;
         if !response.status().is_success() {
+            let status = response.status();
+            if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND
+            {
+                let label = channel_name
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("{value} ({channel_id})"))
+                    .unwrap_or_else(|| channel_id.to_string());
+                warnings.push(format!(
+                    "Skipped Discord channel {label} because the bot could not read its history ({status})."
+                ));
+                return Ok(Vec::new());
+            }
             return Err(format!(
                 "discord channel history api for {channel_id} returned {}",
-                response.status()
+                status
             )
             .into());
         }
@@ -1313,7 +1378,7 @@ mod tests {
     fn write_discord_scope_file_uses_service_url_override() {
         let _lock = env_lock();
         let _secret = EnvGuard::set(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV, "scope-secret");
-        let _service_url = EnvGuard::set("SERVICE_URL", "https://worker.example.com");
+        let _service_url = EnvGuard::set(SERVICE_URL_ENV, "https://worker.example.com");
         let workspace = tempfile::tempdir().expect("tempdir");
         let config = test_config();
         let message = crate::channel::InboundMessage {
@@ -1341,6 +1406,91 @@ mod tests {
             .expect("scope file");
         assert!(payload.contains("https://worker.example.com/internal/chat-history/search"));
         assert!(payload.contains("\"guild_id\": 42"));
+    }
+
+    #[test]
+    fn write_discord_scope_file_uses_public_service_base_for_azure_aci() {
+        let _lock = env_lock();
+        let _secret = EnvGuard::set(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV, "scope-secret");
+        let _run_task_backend =
+            EnvGuard::set(RUN_TASK_EXECUTION_BACKEND_ENV, AZURE_ACI_EXECUTION_BACKEND);
+        let _proxy = EnvGuard::set(CHAT_HISTORY_PROXY_BASE_URL_ENV, "");
+        let _dowhiz_api = EnvGuard::set(DOWHIZ_API_URL_ENV, "");
+        let _service_url = EnvGuard::set(SERVICE_URL_ENV, "");
+        let _frontend_url = EnvGuard::set(FRONTEND_URL_ENV, "");
+        let _postmark_hook = EnvGuard::set(
+            POSTMARK_INBOUND_HOOK_URL_ENV,
+            "https://api.staging.dowhiz.com/postmark/inbound",
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let config = test_config();
+        let message = crate::channel::InboundMessage {
+            channel: crate::channel::Channel::Discord,
+            sender: "123".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "456".to_string(),
+            subject: None,
+            text_body: Some("hello".to_string()),
+            html_body: None,
+            thread_id: "789".to_string(),
+            message_id: Some("789".to_string()),
+            attachments: Vec::new(),
+            reply_to: vec!["123".to_string()],
+            raw_payload: Vec::new(),
+            metadata: crate::channel::ChannelMetadata {
+                discord_guild_id: Some(42),
+                discord_channel_id: Some(84),
+                ..crate::channel::ChannelMetadata::default()
+            },
+        };
+        write_discord_chat_history_scope_file(&config, workspace.path(), &message)
+            .expect("write scope");
+        let payload = std::fs::read_to_string(workspace.path().join(CHAT_HISTORY_SCOPE_FILE_NAME))
+            .expect("scope file");
+        assert!(
+            payload.contains("https://api.staging.dowhiz.com/service/internal/chat-history/search")
+        );
+    }
+
+    #[test]
+    fn write_discord_scope_file_keeps_local_base_without_remote_execution_backend() {
+        let _lock = env_lock();
+        let _secret = EnvGuard::set(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV, "scope-secret");
+        let _run_task_backend = EnvGuard::set(RUN_TASK_EXECUTION_BACKEND_ENV, "");
+        let _proxy = EnvGuard::set(CHAT_HISTORY_PROXY_BASE_URL_ENV, "");
+        let _dowhiz_api = EnvGuard::set(DOWHIZ_API_URL_ENV, "");
+        let _service_url = EnvGuard::set(SERVICE_URL_ENV, "");
+        let _frontend_url = EnvGuard::set(FRONTEND_URL_ENV, "https://api.staging.dowhiz.com/");
+        let _postmark_hook = EnvGuard::set(
+            POSTMARK_INBOUND_HOOK_URL_ENV,
+            "https://api.staging.dowhiz.com/postmark/inbound",
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let config = test_config();
+        let message = crate::channel::InboundMessage {
+            channel: crate::channel::Channel::Discord,
+            sender: "123".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "456".to_string(),
+            subject: None,
+            text_body: Some("hello".to_string()),
+            html_body: None,
+            thread_id: "789".to_string(),
+            message_id: Some("789".to_string()),
+            attachments: Vec::new(),
+            reply_to: vec!["123".to_string()],
+            raw_payload: Vec::new(),
+            metadata: crate::channel::ChannelMetadata {
+                discord_guild_id: Some(42),
+                discord_channel_id: Some(84),
+                ..crate::channel::ChannelMetadata::default()
+            },
+        };
+        write_discord_chat_history_scope_file(&config, workspace.path(), &message)
+            .expect("write scope");
+        let payload = std::fs::read_to_string(workspace.path().join(CHAT_HISTORY_SCOPE_FILE_NAME))
+            .expect("scope file");
+        assert!(payload.contains("http://127.0.0.1:9001/internal/chat-history/search"));
     }
 
     #[test]
@@ -1402,5 +1552,73 @@ mod tests {
         )
         .expect_err("expected scope violation");
         assert!(error.to_string().contains("cannot access another channel"));
+    }
+
+    #[test]
+    fn discord_guild_search_skips_forbidden_channels() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+
+        let guild_channels = server
+            .mock("GET", "/guilds/42/channels")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"111","name":"restricted","type":0},{"id":"222","name":"general","type":0}]"#,
+            )
+            .create();
+        let active_threads = server
+            .mock("GET", "/guilds/42/threads/active")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"{"threads":[]}"#)
+            .create();
+        let restricted = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(403)
+            .create();
+        let general_page_one = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"200","content":"Needle from general","timestamp":"2026-03-23T00:00:00Z","author":{"id":"user-1","username":"alice","global_name":"Alice"},"attachments":[]}]"#,
+            )
+            .create();
+        let general_page_two = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("before".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 222,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let (results, searched_channels, warnings) =
+            search_discord_history("discord-secret", &scope, None, "needle", 10)
+                .expect("search should succeed");
+
+        guild_channels.assert();
+        active_threads.assert();
+        restricted.assert();
+        general_page_one.assert();
+        general_page_two.assert();
+        assert_eq!(searched_channels, 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].channel_id, "222");
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("Skipped Discord channel") && warning.contains("111")
+        }));
     }
 }

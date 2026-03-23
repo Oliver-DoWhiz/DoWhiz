@@ -18,6 +18,7 @@ use serde_json::json;
 use tracing::{debug, info, warn};
 
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundMessage};
+use scheduler_module::notion_browser::models::NotionMention;
 use scheduler_module::notion_store::NotionStore;
 
 use super::handlers::{build_envelope, enqueue_envelope};
@@ -96,17 +97,49 @@ pub struct NotionCommentCreatedBy {
 }
 
 /// Main webhook payload structure
+/// Based on actual Notion webhook format (API version 2026-03-11)
+/// Uses serde_json::Value for dynamic fields to handle varying payload structures
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NotionWebhookPayload {
-    #[serde(rename = "type")]
-    pub event_type: NotionEventType,
+    /// Event ID
+    pub id: String,
+    /// Event type (e.g., "comment.created") - may not be present in all payloads
+    #[serde(rename = "type", default)]
+    pub event_type: Option<NotionEventType>,
+    /// Timestamp of the event
+    #[serde(default)]
+    pub timestamp: Option<String>,
     /// The integration that received this webhook (same as bot_id from OAuth)
     pub integration_id: String,
     pub workspace_id: String,
+    #[serde(default)]
+    pub workspace_name: Option<String>,
+    #[serde(default)]
+    pub subscription_id: Option<String>,
+    /// Authors who triggered this event
+    #[serde(default)]
     pub authors: Option<Vec<NotionWebhookAuthor>>,
-    pub data: Option<NotionCommentData>,
-    /// Verification token for signature validation
-    pub verification_token: Option<String>,
+    /// Users/bots who can access the affected resource
+    #[serde(default)]
+    pub accessible_by: Option<Vec<NotionWebhookAuthor>>,
+    /// Comment data - structure varies, use Value for flexibility
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    /// Entity data - alternative location for comment data
+    #[serde(default)]
+    pub entity: Option<serde_json::Value>,
+    /// Page reference
+    #[serde(default)]
+    pub page_id: Option<String>,
+    /// Discussion/thread reference
+    #[serde(default)]
+    pub discussion_id: Option<String>,
+    /// Comment reference
+    #[serde(default)]
+    pub comment_id: Option<String>,
+    /// Catch all other fields we haven't explicitly defined
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl NotionWebhookPayload {
@@ -128,73 +161,187 @@ impl NotionWebhookPayload {
         false
     }
 
+    /// Check if the given bot_id is among the authors.
+    ///
+    /// This is used for self-trigger prevention when we have the workspace-specific
+    /// bot_id from the NotionCredential, which is different from the public integration_id.
+    pub fn is_author_bot(&self, bot_id: &str) -> bool {
+        // Check in authors array
+        if let Some(authors) = &self.authors {
+            for author in authors {
+                if author.id == bot_id {
+                    return true;
+                }
+            }
+        }
+
+        // Also check created_by in the data
+        if let Some(author_id) = self.author_id() {
+            if author_id == bot_id {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get the comment/entity data as a JSON Value
+    fn comment_data_value(&self) -> Option<&serde_json::Value> {
+        self.data
+            .as_ref()
+            .or(self.entity.as_ref())
+            .or_else(|| self.extra.get("comment"))
+            .or_else(|| self.extra.get("block"))
+    }
+
     /// Extract the plain text content from the comment's rich_text array.
     pub fn extract_comment_text(&self) -> String {
-        let Some(data) = &self.data else {
+        let Some(data) = self.comment_data_value() else {
             return String::new();
         };
-        let Some(rich_text) = &data.rich_text else {
+
+        // Try to get rich_text array
+        let rich_text = data.get("rich_text").and_then(|v| v.as_array());
+        let Some(rich_text) = rich_text else {
             return String::new();
         };
 
         rich_text
             .iter()
             .filter_map(|elem| {
-                elem.plain_text
-                    .clone()
-                    .or_else(|| elem.text.as_ref().and_then(|t| t.content.clone()))
+                elem.get("plain_text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        elem.get("text")
+                            .and_then(|t| t.get("content"))
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string())
+                    })
             })
             .collect::<Vec<_>>()
             .join("")
     }
 
-    /// Get the page ID from the comment parent
-    pub fn page_id(&self) -> Option<&str> {
-        self.data
-            .as_ref()
-            .and_then(|d| d.parent.as_ref())
-            .and_then(|p| p.page_id.as_deref())
+    /// Get the page ID - check multiple possible locations
+    pub fn get_page_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.page_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(parent) = data.get("parent") {
+                if let Some(page_id) = parent.get("page_id").and_then(|v| v.as_str()) {
+                    return Some(page_id.to_string());
+                }
+            }
+            if let Some(page_id) = data.get("page_id").and_then(|v| v.as_str()) {
+                return Some(page_id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("page_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the comment ID
-    pub fn comment_id(&self) -> Option<&str> {
-        self.data.as_ref().map(|d| d.id.as_str())
+    /// Get the comment ID - check multiple possible locations
+    pub fn get_comment_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.comment_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(id) = data.get("id").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("comment_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the author name (created_by.name)
-    pub fn author_name(&self) -> Option<&str> {
-        self.data
-            .as_ref()
-            .and_then(|d| d.created_by.as_ref())
-            .and_then(|c| c.name.as_deref())
+    /// Get the discussion ID - check multiple possible locations
+    pub fn get_discussion_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.discussion_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(id) = data.get("discussion_id").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("discussion_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the author ID (created_by.id)
-    pub fn author_id(&self) -> Option<&str> {
-        self.data
-            .as_ref()
-            .and_then(|d| d.created_by.as_ref())
-            .map(|c| c.id.as_str())
+    /// Get the author name from created_by
+    pub fn author_name(&self) -> Option<String> {
+        if let Some(data) = self.comment_data_value() {
+            if let Some(created_by) = data.get("created_by") {
+                if let Some(name) = created_by.get("name").and_then(|v| v.as_str()) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        // Fallback: get first author's name if available
+        if let Some(authors) = &self.authors {
+            if let Some(first) = authors.first() {
+                // Authors don't have names in the basic struct, return ID as fallback
+                return Some(first.id.clone());
+            }
+        }
+        None
+    }
+
+    /// Get the author ID from created_by
+    pub fn author_id(&self) -> Option<String> {
+        if let Some(data) = self.comment_data_value() {
+            if let Some(created_by) = data.get("created_by") {
+                if let Some(id) = created_by.get("id").and_then(|v| v.as_str()) {
+                    return Some(id.to_string());
+                }
+            }
+        }
+        // Fallback: get first author's ID
+        if let Some(authors) = &self.authors {
+            if let Some(first) = authors.first() {
+                return Some(first.id.clone());
+            }
+        }
+        None
     }
 
     /// Check if the comment contains an @mention for a specific bot/integration.
-    ///
-    /// Looks for mention elements in rich_text where mention.user.id matches the integration_id.
     pub fn contains_bot_mention(&self, integration_id: &str) -> bool {
-        let Some(data) = &self.data else {
+        let Some(data) = self.comment_data_value() else {
             return false;
         };
-        let Some(rich_text) = &data.rich_text else {
+        let Some(rich_text) = data.get("rich_text").and_then(|v| v.as_array()) else {
             return false;
         };
 
         for elem in rich_text {
-            if elem.element_type == "mention" {
-                if let Some(mention) = &elem.mention {
-                    if mention.mention_type.as_deref() == Some("user") {
-                        if let Some(user) = &mention.user {
-                            if user.id.as_deref() == Some(integration_id) {
-                                return true;
+            let elem_type = elem.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if elem_type == "mention" {
+                if let Some(mention) = elem.get("mention") {
+                    let mention_type = mention.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if mention_type == "user" {
+                        if let Some(user) = mention.get("user") {
+                            if let Some(user_id) = user.get("id").and_then(|v| v.as_str()) {
+                                if user_id == integration_id {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -203,6 +350,11 @@ impl NotionWebhookPayload {
         }
 
         false
+    }
+
+    /// Check if this is a comment.created event
+    pub fn is_comment_created(&self) -> bool {
+        matches!(self.event_type, Some(NotionEventType::CommentCreated))
     }
 }
 
@@ -259,7 +411,7 @@ pub async fn ingest_notion_webhook(
     );
 
     // Only handle comment.created events
-    if payload.event_type != NotionEventType::CommentCreated {
+    if !payload.is_comment_created() {
         debug!(
             "notion webhook ignoring event type: {:?}",
             payload.event_type
@@ -282,19 +434,7 @@ pub async fn ingest_notion_webhook(
         );
     }
 
-    // Check for self-trigger (our bot posted this comment)
-    if payload.is_self_triggered() {
-        info!(
-            "notion webhook self-triggered: integration_id={} (ignoring)",
-            payload.integration_id
-        );
-        return (
-            StatusCode::OK,
-            Json(json!({"status": "ignored", "reason": "self_triggered"})),
-        );
-    }
-
-    // Look up credentials by integration_id (== bot_id)
+    // Look up credentials first (needed for self-trigger check using bot_id)
     let notion_store = match NotionStore::new() {
         Ok(store) => store,
         Err(e) => {
@@ -306,12 +446,13 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    let credential = match notion_store.get_credential_by_bot_id(&payload.integration_id) {
+    // Look up credential by workspace_id
+    let credential = match notion_store.get_credential_by_workspace(&payload.workspace_id) {
         Ok(cred) => cred,
         Err(e) => {
             warn!(
-                "notion webhook no credential found for integration_id={}: {}",
-                payload.integration_id, e
+                "notion webhook no credential found for workspace_id={}: {}",
+                payload.workspace_id, e
             );
             return (
                 StatusCode::OK,
@@ -319,6 +460,19 @@ pub async fn ingest_notion_webhook(
             );
         }
     };
+
+    // Check for self-trigger using the workspace-specific bot_id from credential
+    // The bot_id is the bot's user ID within this workspace, while integration_id is the public integration ID
+    if payload.is_author_bot(&credential.bot_id) {
+        info!(
+            "notion webhook self-triggered: bot_id={} (ignoring)",
+            credential.bot_id
+        );
+        return (
+            StatusCode::OK,
+            Json(json!({"status": "ignored", "reason": "self_triggered"})),
+        );
+    }
 
     // Build routing decision based on employee directory
     let route = resolve_notion_route(&payload, &credential, &state);
@@ -332,35 +486,37 @@ pub async fn ingest_notion_webhook(
 
     // Extract message details
     let comment_text = payload.extract_comment_text();
-    let page_id = payload.page_id().unwrap_or("unknown").to_string();
-    let comment_id = payload.comment_id().unwrap_or("unknown").to_string();
-    let author_name = payload.author_name().map(|s| s.to_string());
-    let author_id = payload.author_id().unwrap_or("unknown").to_string();
+    let page_id = payload.get_page_id().unwrap_or_else(|| "unknown".to_string());
+    let comment_id = payload.get_comment_id().unwrap_or_else(|| payload.id.clone());
+    let discussion_id = payload.get_discussion_id().unwrap_or_else(|| comment_id.clone());
+    let author_name = payload.author_name();
+    let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
 
+    // Log payload structure for debugging
     info!(
-        "notion webhook processing comment: page_id={} comment_id={} author={:?}",
-        page_id, comment_id, author_name
+        "notion webhook payload: id={} extra_keys={:?}",
+        payload.id,
+        payload.extra.keys().collect::<Vec<_>>()
+    );
+    info!(
+        "notion webhook processing comment: page_id={} comment_id={} author={:?} text_preview={}",
+        page_id,
+        comment_id,
+        author_name,
+        comment_text.chars().take(50).collect::<String>()
     );
 
     // Build InboundMessage
-    let thread_id = format!(
-        "notion:{}:{}",
-        payload.workspace_id,
-        payload
-            .data
-            .as_ref()
-            .and_then(|d| d.discussion_id.as_deref())
-            .unwrap_or(&comment_id)
-    );
+    let thread_id = format!("notion:{}:{}", payload.workspace_id, discussion_id);
     let message_id = format!("notion-comment-{}", comment_id);
 
     let message = InboundMessage {
         channel: Channel::Notion,
         sender: author_id.clone(),
-        sender_name: author_name,
+        sender_name: author_name.clone(),
         recipient: payload.integration_id.clone(),
         subject: Some(format!("Notion comment on page {}", page_id)),
-        text_body: Some(comment_text),
+        text_body: Some(comment_text.clone()),
         html_body: None,
         thread_id,
         message_id: Some(message_id.clone()),
@@ -375,17 +531,53 @@ pub async fn ingest_notion_webhook(
         },
     };
 
+    // Convert webhook payload to NotionMention format for worker compatibility
+    let notion_mention = NotionMention {
+        id: payload.id.clone(),
+        workspace_id: payload.workspace_id.clone(),
+        workspace_name: payload.workspace_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        page_id: page_id.clone(),
+        page_title: format!("Notion Page {}", page_id), // Title not available in webhook
+        block_id: None,
+        comment_id: Some(comment_id.clone()),
+        sender_name: author_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        sender_id: Some(author_id.clone()),
+        comment_text: comment_text.clone(),
+        thread_context: vec![], // Thread context not available in webhook
+        url: format!("https://notion.so/{}", page_id.replace("-", "")),
+        detected_at: chrono::Utc::now(),
+    };
+
+    let notion_mention_bytes = match serde_json::to_vec(&notion_mention) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!("notion webhook failed to serialize NotionMention: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "serialization_error"})),
+            );
+        }
+    };
+
+    info!(
+        "notion webhook building envelope: route={:?} message_id={}",
+        route.employee_id, message_id
+    );
+
     // Build and enqueue envelope
     let envelope = match build_envelope(
         route,
         Channel::Notion,
-        Some(message_id),
+        Some(message_id.clone()),
         &message,
-        &body,
+        &notion_mention_bytes,
     )
     .await
     {
-        Ok(env) => env,
+        Ok(env) => {
+            info!("notion webhook envelope built: id={}", env.envelope_id);
+            env
+        }
         Err(e) => {
             warn!("notion webhook failed to build envelope: {}", e);
             return (
@@ -395,7 +587,10 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    enqueue_envelope(state.queue.clone(), envelope).await
+    info!("notion webhook enqueuing envelope: {}", envelope.envelope_id);
+    let result = enqueue_envelope(state.queue.clone(), envelope).await;
+    info!("notion webhook enqueue result: {:?}", result.0);
+    result
 }
 
 /// Resolve routing for Notion webhook based on workspace/integration mapping.
@@ -444,31 +639,27 @@ mod tests {
 
     fn make_test_payload(authors: Option<Vec<NotionWebhookAuthor>>) -> NotionWebhookPayload {
         NotionWebhookPayload {
-            event_type: NotionEventType::CommentCreated,
+            id: "event-1".to_string(),
+            event_type: Some(NotionEventType::CommentCreated),
+            timestamp: None,
             integration_id: "bot-123".to_string(),
             workspace_id: "ws-456".to_string(),
+            workspace_name: None,
+            subscription_id: None,
             authors,
-            data: Some(NotionCommentData {
-                id: "comment-1".to_string(),
-                parent: Some(NotionCommentParent {
-                    parent_type: "page_id".to_string(),
-                    page_id: Some("page-789".to_string()),
-                    block_id: None,
-                }),
-                created_by: Some(NotionCommentCreatedBy {
-                    id: "user-111".to_string(),
-                    author_type: "person".to_string(),
-                    name: Some("Test User".to_string()),
-                }),
-                rich_text: Some(vec![NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some("Hello world".to_string()),
-                    text: None,
-                    mention: None,
-                }]),
-                discussion_id: Some("disc-222".to_string()),
-            }),
-            verification_token: None,
+            accessible_by: None,
+            data: Some(serde_json::json!({
+                "id": "comment-1",
+                "parent": {"type": "page_id", "page_id": "page-789"},
+                "created_by": {"id": "user-111", "type": "person", "name": "Test User"},
+                "rich_text": [{"type": "text", "plain_text": "Hello world"}],
+                "discussion_id": "disc-222"
+            })),
+            entity: None,
+            page_id: None,
+            discussion_id: None,
+            comment_id: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 
@@ -514,98 +705,60 @@ mod tests {
     #[test]
     fn test_extract_comment_text_multiple_elements() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![
-                NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some("Hello ".to_string()),
-                    text: None,
-                    mention: None,
-                },
-                NotionRichTextElement {
-                    element_type: "mention".to_string(),
-                    plain_text: Some("@Bot".to_string()),
-                    text: None,
-                    mention: Some(NotionMentionContent {
-                        mention_type: Some("user".to_string()),
-                        user: Some(NotionMentionUser {
-                            id: Some("bot-123".to_string()),
-                            name: Some("Bot".to_string()),
-                        }),
-                    }),
-                },
-                NotionRichTextElement {
-                    element_type: "text".to_string(),
-                    plain_text: Some(" please help".to_string()),
-                    text: None,
-                    mention: None,
-                },
-            ]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "text", "plain_text": "Hello "},
+                {"type": "mention", "plain_text": "@Bot", "mention": {"type": "user", "user": {"id": "bot-123", "name": "Bot"}}},
+                {"type": "text", "plain_text": " please help"}
+            ]
+        }));
         assert_eq!(payload.extract_comment_text(), "Hello @Bot please help");
     }
 
     #[test]
     fn test_contains_bot_mention_true() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![NotionRichTextElement {
-                element_type: "mention".to_string(),
-                plain_text: Some("@Bot".to_string()),
-                text: None,
-                mention: Some(NotionMentionContent {
-                    mention_type: Some("user".to_string()),
-                    user: Some(NotionMentionUser {
-                        id: Some("bot-123".to_string()),
-                        name: Some("Bot".to_string()),
-                    }),
-                }),
-            }]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "mention", "plain_text": "@Bot", "mention": {"type": "user", "user": {"id": "bot-123", "name": "Bot"}}}
+            ]
+        }));
         assert!(payload.contains_bot_mention("bot-123"));
     }
 
     #[test]
     fn test_contains_bot_mention_false_different_id() {
         let mut payload = make_test_payload(None);
-        if let Some(data) = &mut payload.data {
-            data.rich_text = Some(vec![NotionRichTextElement {
-                element_type: "mention".to_string(),
-                plain_text: Some("@User".to_string()),
-                text: None,
-                mention: Some(NotionMentionContent {
-                    mention_type: Some("user".to_string()),
-                    user: Some(NotionMentionUser {
-                        id: Some("user-other".to_string()),
-                        name: Some("User".to_string()),
-                    }),
-                }),
-            }]);
-        }
+        payload.data = Some(serde_json::json!({
+            "rich_text": [
+                {"type": "mention", "plain_text": "@User", "mention": {"type": "user", "user": {"id": "user-other", "name": "User"}}}
+            ]
+        }));
         assert!(!payload.contains_bot_mention("bot-123"));
     }
 
     #[test]
-    fn test_page_id() {
+    fn test_get_page_id() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.page_id(), Some("page-789"));
+        assert_eq!(payload.get_page_id(), Some("page-789".to_string()));
     }
 
     #[test]
-    fn test_comment_id() {
+    fn test_get_comment_id() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.comment_id(), Some("comment-1"));
+        assert_eq!(payload.get_comment_id(), Some("comment-1".to_string()));
     }
 
     #[test]
     fn test_author_name() {
         let payload = make_test_payload(None);
-        assert_eq!(payload.author_name(), Some("Test User"));
+        assert_eq!(payload.author_name(), Some("Test User".to_string()));
     }
 
     #[test]
     fn test_deserialize_comment_created() {
         let json = r#"{
+            "id": "event-123",
             "type": "comment.created",
             "integration_id": "abc-123",
             "workspace_id": "ws-456",
@@ -619,7 +772,7 @@ mod tests {
         }"#;
 
         let payload: NotionWebhookPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.event_type, NotionEventType::CommentCreated);
+        assert_eq!(payload.event_type, Some(NotionEventType::CommentCreated));
         assert_eq!(payload.integration_id, "abc-123");
         assert_eq!(payload.extract_comment_text(), "Hello");
     }
@@ -627,12 +780,13 @@ mod tests {
     #[test]
     fn test_deserialize_unknown_event_type() {
         let json = r#"{
+            "id": "event-456",
             "type": "page.created",
             "integration_id": "abc",
             "workspace_id": "ws"
         }"#;
 
         let payload: NotionWebhookPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.event_type, NotionEventType::Unknown);
+        assert_eq!(payload.event_type, Some(NotionEventType::Unknown));
     }
 }

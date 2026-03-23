@@ -121,10 +121,22 @@ pub(crate) fn process_notion_email(
         }
         NotionNotificationType::PageComment | NotionNotificationType::Other => {
             // General page activity - only process if we were explicitly @mentioned
+            // Check comment_preview, subject, AND full text_body (since preview extraction may miss the actual comment)
             let content_to_check = format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
                 notification.comment_preview.as_deref().unwrap_or(""),
-                notification.subject.as_str()
+                notification.subject.as_str(),
+                email_payload.text_body.as_deref().unwrap_or("")
+            );
+            // Debug: log truncated content being checked for @mention
+            let preview_for_log = if content_to_check.len() > 500 {
+                format!("{}... (truncated)", &content_to_check[..500])
+            } else {
+                content_to_check.clone()
+            };
+            info!(
+                "PageComment mention check - content_to_check: {:?}",
+                preview_for_log
             );
             if !contains_employee_mention(&content_to_check) {
                 info!(

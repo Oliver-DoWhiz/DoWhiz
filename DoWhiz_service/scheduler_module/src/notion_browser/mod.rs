@@ -13,7 +13,10 @@ pub mod models;
 pub mod oauth_store;
 pub mod store;
 
-pub use api_client::{NotionApiClient, NotionApiError, NotionBlock, NotionComment, NotionPage, PageContent};
+pub use api_client::{
+    BlockInput, DatabaseItem, DatabaseProperty, NotionApiClient, NotionApiError, NotionBlock,
+    NotionComment, NotionDatabase, NotionPage, PageContent,
+};
 pub use models::{NotionMention, NotionNotification, NotionPageContext};
 pub use oauth_store::{NotionOAuthStore, NotionOAuthToken};
 pub use store::MongoNotionProcessedStore;

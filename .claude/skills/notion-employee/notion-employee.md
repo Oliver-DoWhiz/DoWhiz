@@ -86,44 +86,111 @@ notion_api_cli reply $DISCUSSION_ID "Your reply message"
 
 # Append a block to the page
 notion_api_cli append-block $PAGE_ID "Content to add"
+```
 
-# IMPORTANT: Mark that we've already replied via API (prevents double-send)
+### Step 6: Mark Task Complete (CRITICAL)
+
+**You MUST create the `.notion_api_replied` marker file after posting your reply.** This tells the system that you've already replied via API. Without this marker, the task will fail and retry, causing duplicate replies.
+
+```bash
+# REQUIRED: Create marker file to indicate successful reply
 touch .notion_api_replied
 ```
 
-### Step 6: Write reply_message.txt (Internal Logging Only)
-
-Write a brief internal note for the task system. This is **NOT** sent to Notion - it's only for DoWhiz logs:
+Optionally, you can also write a brief log message (for debugging only, not sent to Notion):
 ```bash
 echo "Done" > reply_message.txt
 ```
 
 ## notion_api_cli Reference
 
+### Reading Content
+
 ```bash
-# Get bot info (verify token works)
-notion_api_cli me
-
-# Search pages
-notion_api_cli search "query"
-
-# Read page metadata
-notion_api_cli read-page PAGE_ID
-
-# Read page blocks/content
-notion_api_cli read-blocks PAGE_ID
+# Read page metadata and content blocks
+notion_api_cli read-page --page-id PAGE_ID
 
 # Get comments on a page
-notion_api_cli get-comments PAGE_ID
+notion_api_cli get-comments --page-id PAGE_ID
 
-# Reply to a comment thread
-notion_api_cli reply DISCUSSION_ID "message"
+# Search pages
+notion_api_cli search --query "search text"
+```
+
+### Writing Comments
+
+```bash
+# Reply to an existing comment thread
+notion_api_cli reply --discussion-id DISCUSSION_ID --content "Your reply"
 
 # Create new comment on page
-notion_api_cli create-comment PAGE_ID "message"
+notion_api_cli create-comment --page-id PAGE_ID --content "New comment"
+```
 
-# Append a paragraph block
-notion_api_cli append-block PAGE_ID "content"
+### Creating and Editing Pages
+
+```bash
+# Create a new page under a parent page
+notion_api_cli create-page --parent-id PARENT_PAGE_ID --title "Page Title" --content "Initial paragraph"
+
+# Append blocks to a page
+notion_api_cli append-blocks --page-id PAGE_ID --blocks '[
+  {"type": "heading_1", "text": "Section Title"},
+  {"type": "paragraph", "text": "Some content..."},
+  {"type": "bulleted_list_item", "text": "First item"},
+  {"type": "bulleted_list_item", "text": "Second item"},
+  {"type": "to_do", "text": "Task to complete", "checked": false}
+]'
+
+# Update page properties (for database pages)
+notion_api_cli update-page --page-id PAGE_ID --properties '{"Status": {"select": {"name": "Done"}}}'
+
+# Archive (soft delete) a page
+notion_api_cli archive-page --page-id PAGE_ID
+```
+
+### Database Operations
+
+```bash
+# Get database schema (see all properties/columns)
+notion_api_cli get-database --database-id DATABASE_ID
+
+# Query database items (with optional filters)
+notion_api_cli query-database --database-id DATABASE_ID
+
+# Query with filter (e.g., status = "In Progress")
+notion_api_cli query-database --database-id DATABASE_ID --filter '{"property": "Status", "select": {"equals": "In Progress"}}'
+
+# Query with sorts
+notion_api_cli query-database --database-id DATABASE_ID --sorts '[{"property": "Due Date", "direction": "ascending"}]'
+
+# Query with limit
+notion_api_cli query-database --database-id DATABASE_ID --limit 10
+```
+
+### Block Types for append-blocks
+
+| Type | JSON Format |
+|------|-------------|
+| paragraph | `{"type": "paragraph", "text": "..."}` |
+| heading_1 | `{"type": "heading_1", "text": "..."}` |
+| heading_2 | `{"type": "heading_2", "text": "..."}` |
+| heading_3 | `{"type": "heading_3", "text": "..."}` |
+| bulleted_list_item | `{"type": "bulleted_list_item", "text": "..."}` |
+| numbered_list_item | `{"type": "numbered_list_item", "text": "..."}` |
+| to_do | `{"type": "to_do", "text": "...", "checked": false}` |
+| quote | `{"type": "quote", "text": "..."}` |
+| callout | `{"type": "callout", "text": "...", "emoji": "💡"}` |
+| code | `{"type": "code", "text": "...", "language": "python"}` |
+| divider | `{"type": "divider"}` |
+
+### Environment Variables
+
+All commands automatically use OAuth tokens stored in MongoDB. For manual testing:
+
+```bash
+export EMPLOYEE_ID=little_bear
+export NOTION_DEFAULT_WORKSPACE=workspace-uuid  # Optional
 ```
 
 ## No API Access?
