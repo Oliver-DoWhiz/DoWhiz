@@ -161,6 +161,30 @@ impl NotionWebhookPayload {
         false
     }
 
+    /// Check if the given bot_id is among the authors.
+    ///
+    /// This is used for self-trigger prevention when we have the workspace-specific
+    /// bot_id from the NotionCredential, which is different from the public integration_id.
+    pub fn is_author_bot(&self, bot_id: &str) -> bool {
+        // Check in authors array
+        if let Some(authors) = &self.authors {
+            for author in authors {
+                if author.id == bot_id {
+                    return true;
+                }
+            }
+        }
+
+        // Also check created_by in the data
+        if let Some(author_id) = self.author_id() {
+            if author_id == bot_id {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Get the comment/entity data as a JSON Value
     fn comment_data_value(&self) -> Option<&serde_json::Value> {
         self.data
@@ -410,19 +434,7 @@ pub async fn ingest_notion_webhook(
         );
     }
 
-    // Check for self-trigger (our bot posted this comment)
-    if payload.is_self_triggered() {
-        info!(
-            "notion webhook self-triggered: integration_id={} (ignoring)",
-            payload.integration_id
-        );
-        return (
-            StatusCode::OK,
-            Json(json!({"status": "ignored", "reason": "self_triggered"})),
-        );
-    }
-
-    // Look up credentials by integration_id (== bot_id)
+    // Look up credentials first (needed for self-trigger check using bot_id)
     let notion_store = match NotionStore::new() {
         Ok(store) => store,
         Err(e) => {
@@ -434,7 +446,7 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    // Look up credential by workspace_id (not integration_id, which is the public integration ID)
+    // Look up credential by workspace_id
     let credential = match notion_store.get_credential_by_workspace(&payload.workspace_id) {
         Ok(cred) => cred,
         Err(e) => {
@@ -448,6 +460,19 @@ pub async fn ingest_notion_webhook(
             );
         }
     };
+
+    // Check for self-trigger using the workspace-specific bot_id from credential
+    // The bot_id is the bot's user ID within this workspace, while integration_id is the public integration ID
+    if payload.is_author_bot(&credential.bot_id) {
+        info!(
+            "notion webhook self-triggered: bot_id={} (ignoring)",
+            credential.bot_id
+        );
+        return (
+            StatusCode::OK,
+            Json(json!({"status": "ignored", "reason": "self_triggered"})),
+        );
+    }
 
     // Build routing decision based on employee directory
     let route = resolve_notion_route(&payload, &credential, &state);
