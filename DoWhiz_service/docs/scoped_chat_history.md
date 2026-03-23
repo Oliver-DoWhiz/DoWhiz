@@ -68,13 +68,23 @@ Recommended:
 
 Optional:
 
+- `DOWHIZ_API_URL`
+  - Explicit public `/service` base URL (for example `https://api.staging.dowhiz.com/service`).
 - `CHAT_HISTORY_SCOPE_TTL_MINUTES`
 - `CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES`
 - `CHAT_HISTORY_SLACK_MAX_THREAD_PAGES`
 - `CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL`
 - `CHAT_HISTORY_DISCORD_MAX_CHANNELS`
 
-If `CHAT_HISTORY_PROXY_BASE_URL` is missing, the worker falls back to `SERVICE_URL`, then to its local bind host and port.
+Fallback order:
+
+1. `CHAT_HISTORY_PROXY_BASE_URL`
+2. `DOWHIZ_API_URL`
+3. `SERVICE_URL`
+4. When `RUN_TASK_EXECUTION_BACKEND=azure_aci`, derive the public `/service` base from `POSTMARK_INBOUND_HOOK_URL` or `FRONTEND_URL`
+5. Local bind host and port
+
+The Azure ACI fallback avoids writing `127.0.0.1` into the workspace scope file when the agent runs in a separate container.
 
 ## Current Discord Coverage
 
@@ -85,3 +95,4 @@ Discord search currently scans:
 - the current DM channel for DM-scoped requests
 
 Archived Discord threads are not scanned yet; the API response includes a warning when that matters.
+Guild-wide Discord search also skips channels or active threads that the bot cannot read (for example 403/404 responses) and reports those skips as warnings instead of failing the whole search.
