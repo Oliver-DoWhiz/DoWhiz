@@ -78,11 +78,14 @@ To reply:
 2. Read the context from .notion_context.json to get page_id and comment_id
 3. Optionally read the page content: `notion_api_cli read-page <page_id>`
 4. Post your reply as a comment: `notion_api_cli create-comment <page_id> "Your reply message here"`
+5. CRITICAL: After posting the comment, you MUST create the marker file: `touch .notion_api_replied`
 
 The .notion_env file contains NOTION_API_TOKEN and .notion_context.json has:
 - page_id: The page to comment on
 - comment_id: The comment that mentioned you (for context)
 - url: Link to the Notion page
+
+The marker file `.notion_api_replied` tells the system you've already posted via API. Without it, the task will fail and retry, causing duplicate replies.
 
 Keep your reply concise and helpful. Do not pretend the job has been done without actually posting the comment via the API."#
             }
