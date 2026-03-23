@@ -192,6 +192,9 @@ If Azure upload is unavailable or fails, the worker still writes the zip to a du
 fallback path under `.task_debug_archives_failed/` near the workspace/archive root and records that
 fallback path in Mongo.
 
+For the operational lookup/download/debugging flow, see:
+- `DoWhiz_service/docs/task_debug_archives.md`
+
 ### 4.4 RunTask backend controls
 
 - `RUN_TASK_EXECUTION_BACKEND=local|azure_aci|auto`
@@ -428,6 +431,8 @@ Task debug archival:
   credential JSON, and private key-like files are recorded as redacted manifest entries instead.
 - The archive record also stores `archive_build_duration_ms` and `upload_duration_ms` so staging
   and production runs can be checked for overhead.
+- Operational commands for finding a task, downloading its bundle, and inspecting captured logs are
+  documented in `DoWhiz_service/docs/task_debug_archives.md`.
 
 ## 9) Troubleshooting
 
