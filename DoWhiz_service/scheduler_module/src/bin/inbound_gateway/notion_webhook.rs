@@ -505,17 +505,25 @@ pub async fn ingest_notion_webhook(
         },
     };
 
+    info!(
+        "notion webhook building envelope: route={:?} message_id={}",
+        route.employee_id, message_id
+    );
+
     // Build and enqueue envelope
     let envelope = match build_envelope(
         route,
         Channel::Notion,
-        Some(message_id),
+        Some(message_id.clone()),
         &message,
         &body,
     )
     .await
     {
-        Ok(env) => env,
+        Ok(env) => {
+            info!("notion webhook envelope built: id={}", env.envelope_id);
+            env
+        }
         Err(e) => {
             warn!("notion webhook failed to build envelope: {}", e);
             return (
@@ -525,7 +533,10 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    enqueue_envelope(state.queue.clone(), envelope).await
+    info!("notion webhook enqueuing envelope: {}", envelope.envelope_id);
+    let result = enqueue_envelope(state.queue.clone(), envelope).await;
+    info!("notion webhook enqueue result: {:?}", result.0);
+    result
 }
 
 /// Resolve routing for Notion webhook based on workspace/integration mapping.
