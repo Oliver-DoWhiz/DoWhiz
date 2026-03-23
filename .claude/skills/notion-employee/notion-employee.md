@@ -86,14 +86,18 @@ notion_api_cli reply $DISCUSSION_ID "Your reply message"
 
 # Append a block to the page
 notion_api_cli append-block $PAGE_ID "Content to add"
+```
 
-# IMPORTANT: Mark that we've already replied via API (prevents double-send)
+### Step 6: Mark Task Complete (CRITICAL)
+
+**You MUST create the `.notion_api_replied` marker file after posting your reply.** This tells the system that you've already replied via API. Without this marker, the task will fail and retry, causing duplicate replies.
+
+```bash
+# REQUIRED: Create marker file to indicate successful reply
 touch .notion_api_replied
 ```
 
-### Step 6: Write reply_message.txt (Internal Logging Only)
-
-Write a brief internal note for the task system. This is **NOT** sent to Notion - it's only for DoWhiz logs:
+Optionally, you can also write a brief log message (for debugging only, not sent to Notion):
 ```bash
 echo "Done" > reply_message.txt
 ```

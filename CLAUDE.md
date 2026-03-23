@@ -584,6 +584,8 @@ This section collects hard-won debugging lessons. **Read before starting work on
 | `/notifications` URL returns 404 | Click Inbox button in sidebar instead | Navigation failures |
 | Notification parsing misses items | Regex must handle tabs, various date formats ("Mar 2", "Yesterday") | Missed @mentions |
 | Same notification matched twice | Add content-based deduplication (actor + page + mentioned) | Duplicate processing |
+| Duplicate replies via retry | Agent MUST create `.notion_api_replied` marker after API call | 3x duplicate comments |
+| Task fails with "Expected output not found" | Agent didn't create `.notion_api_replied` marker file | Task retries, multiple replies |
 
 ### Rust/Cargo
 
