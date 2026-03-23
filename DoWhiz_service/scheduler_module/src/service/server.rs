@@ -6,7 +6,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use chrono::Utc;
 use tower_http::cors::{Any, CorsLayer};
@@ -30,6 +30,7 @@ use super::agent_market::{agent_market_router, AgentMarketState};
 use super::analytics::{analytics_router, AnalyticsState};
 use super::auth::{auth_router, AuthState};
 use super::billing::{billing_router, BillingState};
+use super::chat_history::search_chat_history;
 
 use super::config::ServiceConfig;
 use super::ingestion::spawn_ingestion_consumer;
@@ -212,6 +213,7 @@ pub async fn run_server(
     let mut app = Router::new()
         .route("/", get(health))
         .route("/health", get(health))
+        .route("/internal/chat-history/search", post(search_chat_history))
         .route("/slack/install", get(slack_install))
         .route("/slack/oauth/callback", get(slack_oauth_callback))
         .with_state(state)

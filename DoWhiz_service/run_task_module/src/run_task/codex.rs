@@ -16,7 +16,9 @@ use super::constants::{
     CODEX_MODEL_NAME, CODEX_SANDBOX_MODE, DOCKER_CODEX_HOME_DIR, DOCKER_WORKSPACE_DIR,
 };
 use super::docker::{docker_cli_available, ensure_docker_image_available};
-use super::env::{env_enabled, normalize_env_prefix, read_env_list, read_env_trimmed};
+use super::env::{
+    env_enabled, normalize_env_prefix, read_env_list, read_env_trimmed, remove_restricted_agent_env,
+};
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
@@ -499,6 +501,7 @@ pub(super) fn run_codex_task(
     } else {
         let mut cmd = Command::new("codex");
         cmd.arg("exec").arg("--json");
+        remove_restricted_agent_env(&mut cmd);
         if bypass_sandbox {
             cmd.arg("--yolo");
         }

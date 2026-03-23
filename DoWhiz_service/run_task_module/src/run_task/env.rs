@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::errors::RunTaskError;
 
@@ -160,6 +161,31 @@ pub(super) fn resolve_env_path(key: &str, cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+pub(super) fn remove_restricted_agent_env(cmd: &mut Command) {
+    for (key, _) in env::vars() {
+        if is_restricted_agent_env_key(&key) {
+            cmd.env_remove(&key);
+        }
+    }
+}
+
+pub(super) fn is_restricted_agent_env_key(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_uppercase();
+    normalized == "SLACK_BOT_TOKEN"
+        || normalized.ends_with("_SLACK_BOT_TOKEN")
+        || normalized == "DISCORD_BOT_TOKEN"
+        || normalized.ends_with("_DISCORD_BOT_TOKEN")
+        || normalized == "SLACK_CLIENT_SECRET"
+        || normalized == "SLACK_SIGNING_SECRET"
+        || normalized == "DISCORD_CLIENT_SECRET"
+        || normalized == "MONGODB_URI"
+        || normalized == "MONGODB_DATABASE"
+        || normalized == "DATABASE_URL"
+        || normalized == "INGESTION_DB_URL"
+        || normalized == "SUPABASE_DB_URL"
+        || normalized == "SLACK_STORE_PATH"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +268,17 @@ mod tests {
                 .as_deref(),
             Some("rg-from-service")
         );
+    }
+
+    #[test]
+    fn is_restricted_agent_env_key_matches_chat_history_bypass_secrets() {
+        assert!(is_restricted_agent_env_key("SLACK_BOT_TOKEN"));
+        assert!(is_restricted_agent_env_key("little_bear_slack_bot_token"));
+        assert!(is_restricted_agent_env_key("DISCORD_BOT_TOKEN"));
+        assert!(is_restricted_agent_env_key("BOILED_EGG_DISCORD_BOT_TOKEN"));
+        assert!(is_restricted_agent_env_key("MONGODB_URI"));
+        assert!(is_restricted_agent_env_key("DATABASE_URL"));
+        assert!(!is_restricted_agent_env_key("DISCORD_CLIENT_ID"));
+        assert!(!is_restricted_agent_env_key("GOOGLE_CLIENT_SECRET"));
     }
 }

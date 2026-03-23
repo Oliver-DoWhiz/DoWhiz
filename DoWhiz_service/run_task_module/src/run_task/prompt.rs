@@ -104,6 +104,8 @@ Keep your reply concise and helpful. Do not pretend the job has been done withou
         build_allowed_paths_section(&user_identities.allowed_user_ids);
     let web_auth_capabilities_section = build_web_auth_capabilities_section();
     let human_approval_gate_section = build_human_approval_gate_section();
+    let chat_history_capabilities_section =
+        build_chat_history_capabilities_section(workspace_dir, channel);
 
     // Build registration prompt section if user doesn't have a unified account
     // and we haven't prompted them yet in this thread.
@@ -165,6 +167,7 @@ Scheduling:
 - For any scheduling (email or task), you MUST use the skill "scheduler_maintain".
 
 {cross_channel_capabilities}
+{chat_history_capabilities_section}
 {web_auth_capabilities_section}
 {human_approval_gate_section}
 {user_identities_section}
@@ -186,6 +189,7 @@ Rules:
         discord_context_section = discord_context_section,
         github_coauthor_section = github_coauthor_section,
         cross_channel_capabilities = build_cross_channel_capabilities_section(),
+        chat_history_capabilities_section = chat_history_capabilities_section,
         web_auth_capabilities_section = web_auth_capabilities_section,
         human_approval_gate_section = human_approval_gate_section,
         user_identities_section = user_identities_section,
@@ -207,6 +211,33 @@ Security: Only access files the CURRENT USER has shared. Never access other user
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
 
 "#
+}
+
+fn build_chat_history_capabilities_section(workspace_dir: &Path, channel: &str) -> String {
+    if !workspace_dir.join(".chat_history_scope.json").exists() {
+        return String::new();
+    }
+    match channel.to_ascii_lowercase().as_str() {
+        "slack" => {
+            r#"Scoped chat history search:
+- When the user asks about earlier Slack discussion that is not already in the prompt or workspace files, use `.agents/skills/slack-history-search/SKILL.md`.
+- The helper is backend-enforced and can search only the current Slack conversation (channel / DM / MPIM) and its threads.
+- It cannot cross into other Slack channels or workspaces, even if asked.
+
+"#
+            .to_string()
+        }
+        "discord" => {
+            r#"Scoped chat history search:
+- When the user asks about earlier Discord discussion that is not already in the prompt or workspace files, use `.agents/skills/discord-history-search/SKILL.md`.
+- The helper is backend-enforced and can search only the current Discord server (or the current DM if this is not a guild message).
+- It cannot cross into other Discord servers, even if asked.
+
+"#
+            .to_string()
+        }
+        _ => String::new(),
+    }
 }
 
 fn build_web_auth_capabilities_section() -> &'static str {
@@ -800,6 +831,58 @@ mod tests {
 
         assert!(prompt.contains("Discord context snapshot (auto-generated"));
         assert!(prompt.contains("Quoted + thread context"));
+    }
+
+    #[test]
+    fn build_prompt_includes_scoped_discord_history_skill_when_scope_file_exists() {
+        let temp = TempDir::new().expect("tempdir");
+        let workspace = temp.path();
+        fs::write(workspace.join(".chat_history_scope.json"), "{}\n").expect("scope file");
+
+        let prompt = build_prompt(
+            Path::new("incoming_email"),
+            Path::new("incoming_attachments"),
+            Path::new("memory"),
+            Path::new("references"),
+            workspace,
+            "codex",
+            "",
+            true,
+            "discord",
+            true,
+            &UserIdentities::default(),
+        );
+
+        assert!(prompt.contains("Scoped chat history search"));
+        assert!(prompt.contains(".agents/skills/discord-history-search/SKILL.md"));
+        assert!(prompt.contains("current Discord server"));
+        assert!(prompt.contains("cannot cross into other Discord servers"));
+    }
+
+    #[test]
+    fn build_prompt_includes_scoped_slack_history_skill_when_scope_file_exists() {
+        let temp = TempDir::new().expect("tempdir");
+        let workspace = temp.path();
+        fs::write(workspace.join(".chat_history_scope.json"), "{}\n").expect("scope file");
+
+        let prompt = build_prompt(
+            Path::new("incoming_email"),
+            Path::new("incoming_attachments"),
+            Path::new("memory"),
+            Path::new("references"),
+            workspace,
+            "codex",
+            "",
+            true,
+            "slack",
+            true,
+            &UserIdentities::default(),
+        );
+
+        assert!(prompt.contains("Scoped chat history search"));
+        assert!(prompt.contains(".agents/skills/slack-history-search/SKILL.md"));
+        assert!(prompt.contains("current Slack conversation"));
+        assert!(prompt.contains("cannot cross into other Slack channels or workspaces"));
     }
 
     #[test]
