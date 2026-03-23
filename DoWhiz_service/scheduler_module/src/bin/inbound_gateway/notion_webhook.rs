@@ -356,6 +356,21 @@ impl NotionWebhookPayload {
     pub fn is_comment_created(&self) -> bool {
         matches!(self.event_type, Some(NotionEventType::CommentCreated))
     }
+
+    /// Check if any author is a bot (regardless of which bot).
+    ///
+    /// This prevents cross-environment triggers where one employee's bot reply
+    /// triggers another employee's webhook handler.
+    pub fn is_from_any_bot(&self) -> bool {
+        if let Some(authors) = &self.authors {
+            for author in authors {
+                if author.author_type == "bot" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Check if this webhook is for our environment's integration.
@@ -471,6 +486,18 @@ pub async fn ingest_notion_webhook(
         return (
             StatusCode::OK,
             Json(json!({"status": "ignored", "reason": "self_triggered"})),
+        );
+    }
+
+    // Also filter out comments from ANY bot (not just our own)
+    // This prevents cross-environment triggers (e.g., prod Oliver triggering staging Boiled-Egg)
+    if payload.is_from_any_bot() {
+        info!(
+            "notion webhook from bot author (ignoring to prevent cross-env trigger)"
+        );
+        return (
+            StatusCode::OK,
+            Json(json!({"status": "ignored", "reason": "bot_author"})),
         );
     }
 
