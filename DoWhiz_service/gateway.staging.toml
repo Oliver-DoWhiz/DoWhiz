@@ -46,3 +46,10 @@ channel = "wechat"
 key = "*"
 employee_id = "boiled_egg"
 tenant_id = "staging"
+
+# WhatsApp routing
+[[routes]]
+channel = "whatsapp"
+key = "*"
+employee_id = "boiled_egg"
+tenant_id = "staging"
