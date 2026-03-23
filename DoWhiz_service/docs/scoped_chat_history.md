@@ -88,7 +88,11 @@ The Azure ACI fallback avoids writing `127.0.0.1` into the workspace scope file 
 
 ## Current Discord Coverage
 
-Discord search currently scans:
+Discord guild search now prefers the official Discord guild search endpoint first.
+
+If that official search is unavailable, still indexing, or rate-limited, the backend automatically falls back to the scoped channel scan below.
+
+The scoped Discord scan currently covers:
 
 - searchable guild text channels
 - active threads

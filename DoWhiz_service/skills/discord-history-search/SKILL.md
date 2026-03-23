@@ -24,6 +24,14 @@ python3 .agents/skills/discord-history-search/scripts/discord_history_search.py 
 - It cannot cross into another Discord server.
 - Do not try to use raw Discord tokens directly.
 
+## Search Strategy
+
+- Keep using this single skill for Discord history lookups.
+- For guild-scoped requests, the backend now tries Discord's official guild search first.
+- If official search is unavailable, not ready, or rate-limited, the backend automatically falls back to the scoped channel-history scan.
+- DM-scoped requests still use the scoped DM-channel history scan.
+- The helper prints which engine was used so you can verify whether the request stayed on official search or fell back.
+
 ## Workflow
 
 1. Run `status` first if you need to confirm the current scope or expiry.

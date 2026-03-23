@@ -85,10 +85,19 @@ def run_search(
         sys.stdout.write("\n")
         return 0
 
-    print(
-        f"Found {len(payload.get('results', []))} Discord matches "
-        f"across {payload.get('searched_channels', 0)} searchable channel(s)."
-    )
+    engine = payload.get("engine")
+    fallback_used = bool(payload.get("fallback_used"))
+    if engine:
+        print(f"Engine: {engine}")
+    if engine == "discord_official_search":
+        print(f"Found {len(payload.get('results', []))} Discord matches via official guild search.")
+    else:
+        print(
+            f"Found {len(payload.get('results', []))} Discord matches "
+            f"across {payload.get('searched_channels', 0)} searchable channel(s)."
+        )
+    if fallback_used:
+        print("Fallback: official Discord search was unavailable, so the backend used scoped channel history scanning.")
     for warning in payload.get("warnings", []):
         print(f"Warning: {warning}")
     for item in payload.get("results", []):
