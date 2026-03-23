@@ -97,30 +97,48 @@ pub struct NotionCommentCreatedBy {
 
 /// Main webhook payload structure
 /// Based on actual Notion webhook format (API version 2026-03-11)
+/// Uses serde_json::Value for dynamic fields to handle varying payload structures
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NotionWebhookPayload {
     /// Event ID
     pub id: String,
-    /// Event type (e.g., "comment.created")
-    #[serde(rename = "type")]
+    /// Event type (e.g., "comment.created") - may not be present in all payloads
+    #[serde(rename = "type", default)]
     pub event_type: Option<NotionEventType>,
     /// Timestamp of the event
+    #[serde(default)]
     pub timestamp: Option<String>,
     /// The integration that received this webhook (same as bot_id from OAuth)
     pub integration_id: String,
     pub workspace_id: String,
+    #[serde(default)]
     pub workspace_name: Option<String>,
+    #[serde(default)]
     pub subscription_id: Option<String>,
     /// Authors who triggered this event
+    #[serde(default)]
     pub authors: Option<Vec<NotionWebhookAuthor>>,
     /// Users/bots who can access the affected resource
+    #[serde(default)]
     pub accessible_by: Option<Vec<NotionWebhookAuthor>>,
-    /// Comment data (for comment.created events) - might be under "data" or "entity"
-    pub data: Option<NotionCommentData>,
-    #[serde(rename = "entity")]
-    pub entity: Option<NotionCommentData>,
-    /// Verification token for signature validation
-    pub verification_token: Option<String>,
+    /// Comment data - structure varies, use Value for flexibility
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    /// Entity data - alternative location for comment data
+    #[serde(default)]
+    pub entity: Option<serde_json::Value>,
+    /// Page reference
+    #[serde(default)]
+    pub page_id: Option<String>,
+    /// Discussion/thread reference
+    #[serde(default)]
+    pub discussion_id: Option<String>,
+    /// Comment reference
+    #[serde(default)]
+    pub comment_id: Option<String>,
+    /// Catch all other fields we haven't explicitly defined
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl NotionWebhookPayload {
@@ -142,75 +160,163 @@ impl NotionWebhookPayload {
         false
     }
 
-    /// Get the comment data (from either `data` or `entity` field)
-    fn comment_data(&self) -> Option<&NotionCommentData> {
-        self.data.as_ref().or(self.entity.as_ref())
+    /// Get the comment/entity data as a JSON Value
+    fn comment_data_value(&self) -> Option<&serde_json::Value> {
+        self.data
+            .as_ref()
+            .or(self.entity.as_ref())
+            .or_else(|| self.extra.get("comment"))
+            .or_else(|| self.extra.get("block"))
     }
 
     /// Extract the plain text content from the comment's rich_text array.
     pub fn extract_comment_text(&self) -> String {
-        let Some(data) = self.comment_data() else {
+        let Some(data) = self.comment_data_value() else {
             return String::new();
         };
-        let Some(rich_text) = &data.rich_text else {
+
+        // Try to get rich_text array
+        let rich_text = data.get("rich_text").and_then(|v| v.as_array());
+        let Some(rich_text) = rich_text else {
             return String::new();
         };
 
         rich_text
             .iter()
             .filter_map(|elem| {
-                elem.plain_text
-                    .clone()
-                    .or_else(|| elem.text.as_ref().and_then(|t| t.content.clone()))
+                elem.get("plain_text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        elem.get("text")
+                            .and_then(|t| t.get("content"))
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string())
+                    })
             })
             .collect::<Vec<_>>()
             .join("")
     }
 
-    /// Get the page ID from the comment parent
-    pub fn page_id(&self) -> Option<&str> {
-        self.comment_data()
-            .and_then(|d| d.parent.as_ref())
-            .and_then(|p| p.page_id.as_deref())
+    /// Get the page ID - check multiple possible locations
+    pub fn get_page_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.page_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(parent) = data.get("parent") {
+                if let Some(page_id) = parent.get("page_id").and_then(|v| v.as_str()) {
+                    return Some(page_id.to_string());
+                }
+            }
+            if let Some(page_id) = data.get("page_id").and_then(|v| v.as_str()) {
+                return Some(page_id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("page_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the comment ID
-    pub fn comment_id(&self) -> Option<&str> {
-        self.comment_data().map(|d| d.id.as_str())
+    /// Get the comment ID - check multiple possible locations
+    pub fn get_comment_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.comment_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(id) = data.get("id").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("comment_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the author name (created_by.name)
-    pub fn author_name(&self) -> Option<&str> {
-        self.comment_data()
-            .and_then(|d| d.created_by.as_ref())
-            .and_then(|c| c.name.as_deref())
+    /// Get the discussion ID - check multiple possible locations
+    pub fn get_discussion_id(&self) -> Option<String> {
+        // Direct field
+        if let Some(ref id) = self.discussion_id {
+            return Some(id.clone());
+        }
+        // From data/entity
+        if let Some(data) = self.comment_data_value() {
+            if let Some(id) = data.get("discussion_id").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+        // From extra fields
+        self.extra
+            .get("discussion_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    /// Get the author ID (created_by.id)
-    pub fn author_id(&self) -> Option<&str> {
-        self.comment_data()
-            .and_then(|d| d.created_by.as_ref())
-            .map(|c| c.id.as_str())
+    /// Get the author name from created_by
+    pub fn author_name(&self) -> Option<String> {
+        if let Some(data) = self.comment_data_value() {
+            if let Some(created_by) = data.get("created_by") {
+                if let Some(name) = created_by.get("name").and_then(|v| v.as_str()) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        // Fallback: get first author's name if available
+        if let Some(authors) = &self.authors {
+            if let Some(first) = authors.first() {
+                // Authors don't have names in the basic struct, return ID as fallback
+                return Some(first.id.clone());
+            }
+        }
+        None
+    }
+
+    /// Get the author ID from created_by
+    pub fn author_id(&self) -> Option<String> {
+        if let Some(data) = self.comment_data_value() {
+            if let Some(created_by) = data.get("created_by") {
+                if let Some(id) = created_by.get("id").and_then(|v| v.as_str()) {
+                    return Some(id.to_string());
+                }
+            }
+        }
+        // Fallback: get first author's ID
+        if let Some(authors) = &self.authors {
+            if let Some(first) = authors.first() {
+                return Some(first.id.clone());
+            }
+        }
+        None
     }
 
     /// Check if the comment contains an @mention for a specific bot/integration.
-    ///
-    /// Looks for mention elements in rich_text where mention.user.id matches the integration_id.
     pub fn contains_bot_mention(&self, integration_id: &str) -> bool {
-        let Some(data) = self.comment_data() else {
+        let Some(data) = self.comment_data_value() else {
             return false;
         };
-        let Some(rich_text) = &data.rich_text else {
+        let Some(rich_text) = data.get("rich_text").and_then(|v| v.as_array()) else {
             return false;
         };
 
         for elem in rich_text {
-            if elem.element_type == "mention" {
-                if let Some(mention) = &elem.mention {
-                    if mention.mention_type.as_deref() == Some("user") {
-                        if let Some(user) = &mention.user {
-                            if user.id.as_deref() == Some(integration_id) {
-                                return true;
+            let elem_type = elem.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if elem_type == "mention" {
+                if let Some(mention) = elem.get("mention") {
+                    let mention_type = mention.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if mention_type == "user" {
+                        if let Some(user) = mention.get("user") {
+                            if let Some(user_id) = user.get("id").and_then(|v| v.as_str()) {
+                                if user_id == integration_id {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -353,26 +459,28 @@ pub async fn ingest_notion_webhook(
 
     // Extract message details
     let comment_text = payload.extract_comment_text();
-    let page_id = payload.page_id().unwrap_or("unknown").to_string();
-    let comment_id = payload.comment_id().unwrap_or("unknown").to_string();
-    let author_name = payload.author_name().map(|s| s.to_string());
-    let author_id = payload.author_id().unwrap_or("unknown").to_string();
+    let page_id = payload.get_page_id().unwrap_or_else(|| "unknown".to_string());
+    let comment_id = payload.get_comment_id().unwrap_or_else(|| payload.id.clone());
+    let discussion_id = payload.get_discussion_id().unwrap_or_else(|| comment_id.clone());
+    let author_name = payload.author_name();
+    let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
 
+    // Log payload structure for debugging
     info!(
-        "notion webhook processing comment: page_id={} comment_id={} author={:?}",
-        page_id, comment_id, author_name
+        "notion webhook payload: id={} extra_keys={:?}",
+        payload.id,
+        payload.extra.keys().collect::<Vec<_>>()
+    );
+    info!(
+        "notion webhook processing comment: page_id={} comment_id={} author={:?} text_preview={}",
+        page_id,
+        comment_id,
+        author_name,
+        comment_text.chars().take(50).collect::<String>()
     );
 
     // Build InboundMessage
-    let thread_id = format!(
-        "notion:{}:{}",
-        payload.workspace_id,
-        payload
-            .data
-            .as_ref()
-            .and_then(|d| d.discussion_id.as_deref())
-            .unwrap_or(&comment_id)
-    );
+    let thread_id = format!("notion:{}:{}", payload.workspace_id, discussion_id);
     let message_id = format!("notion-comment-{}", comment_id);
 
     let message = InboundMessage {
