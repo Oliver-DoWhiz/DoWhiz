@@ -51,6 +51,7 @@ use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
+use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest};
 use super::utils::{run_command_with_timeout, run_task_timeout, tail_string};
 
@@ -104,29 +105,57 @@ pub(super) fn run_claude_task(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
-    let output = run_claude_command(request.workspace_dir, &prompt, &model_name, &env_overrides)?;
+    let timeout = run_task_timeout();
+    let mut trace = RunTaskTraceRecorder::new(
+        request.workspace_dir,
+        runner,
+        "claude_local",
+        &model_name,
+        &prompt,
+        timeout,
+        serde_json::json!({
+            "protocol": "claude_stream_json",
+            "max_turns": claude_max_turns(),
+            "reply_expected": !request.reply_to.is_empty(),
+        }),
+        &env_overrides,
+    )?;
+    let output =
+        match run_claude_command(request.workspace_dir, &prompt, &model_name, &env_overrides) {
+            Ok(output) => output,
+            Err(err) => {
+                let _ = trace.finish(None, false, Some(&err.to_string()), None);
+                return Err(err);
+            }
+        };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut combined_output = String::new();
     combined_output.push_str(&stdout);
     combined_output.push_str(&stderr);
+    let _ = trace.record_outputs(&stdout, &stderr, &combined_output);
     let output_tail = tail_string(&combined_output, 2000);
 
     if !output.status.success() {
-        return Err(RunTaskError::ClaudeFailed {
+        let err = RunTaskError::ClaudeFailed {
             status: output.status.code(),
             output: output_tail,
-        });
+        };
+        let _ = trace.finish(output.status.code(), false, Some(&err.to_string()), None);
+        return Err(err);
     }
 
     let (assistant_text, _logs) = extract_claude_text(&stdout);
     if assistant_text.trim().is_empty() {
-        return Err(RunTaskError::ClaudeFailed {
+        let err = RunTaskError::ClaudeFailed {
             status: output.status.code(),
             output: output_tail,
-        });
+        };
+        let _ = trace.finish(output.status.code(), false, Some(&err.to_string()), None);
+        return Err(err);
     }
+    let _ = trace.record_text("logs/assistant_output.txt", &assistant_text);
     let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&assistant_text);
     let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&assistant_text);
     let assistant_tail = tail_string(&assistant_text, 2000);
@@ -136,11 +165,14 @@ pub(super) fn run_claude_task(
     let expected_reply_path =
         resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
     if !request.reply_to.is_empty() && !expected_reply_path.exists() {
-        return Err(RunTaskError::OutputMissing {
+        let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: assistant_tail,
-        });
+        };
+        let _ = trace.finish(output.status.code(), false, Some(&err.to_string()), None);
+        return Err(err);
     }
+    let _ = trace.finish(output.status.code(), true, None, None);
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,

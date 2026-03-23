@@ -44,6 +44,19 @@ Raw payload download auth for Azure Blob can use any one of:
 - `AZURE_STORAGE_CONTAINER_INGEST` + `AZURE_STORAGE_SAS_TOKEN` + `AZURE_STORAGE_ACCOUNT`
 - `AZURE_STORAGE_CONNECTION_STRING_INGEST` (or `AZURE_STORAGE_CONNECTION_STRING`)
 
+Task debug archive bundles can either reuse the same Azure auth chain or use a dedicated archive
+container:
+- `TASK_DEBUG_ARCHIVE_ENABLED=1` (default enabled)
+- optional dedicated container name: `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES`
+- optional dedicated container SAS URL: `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL`
+
+Recommended staging/prod policy:
+- Keep task debug archives enabled so historical `RunTask` investigations remain possible after an
+  Azure ACI container is deleted.
+- Prefer a dedicated archive container when retention/ACL needs differ from raw ingest.
+- If Azure upload fails, the worker falls back to a local zip under `.task_debug_archives_failed/`
+  and records the local path in Mongo collection `task_debug_archives`.
+
 Staging ingest isolation policy:
 - Use a staging-dedicated storage account for raw payload ingress.
 - Current staging account: `dwhzoliverstg26261234`

@@ -16,6 +16,7 @@
 |------------|-------|---------------|
 | tasks | Per-user (owner_scope) | Full task definition, schedule, enabled, retry_count |
 | task_executions | Per-user (owner_scope) | Execution history: started_at, finished_at, status, error_message (used for frontend tasksync) |
+| task_debug_archives | Per-user (owner_scope) | One row per `task_id + execution_id`, mapping execution to Azure Blob zip (or local fallback path), plus size/checksum/overhead metrics |
 | task_index | Global | Lightweight index: user_id, task_id, next_run, enabled |
 
 ---
@@ -51,6 +52,50 @@
   "error_message": null
 }
 ```
+
+### task_debug_archives
+```json
+{
+  "owner_scope": {
+    "kind": "user",
+    "id": "alice"
+  },
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "execution_id": 12345,
+  "archive_type": "full_debug_bundle",
+  "archive_version": 1,
+  "status": "uploaded",
+  "storage_backend": "azure_blob",
+  "blob_container": "task-debug-archives",
+  "blob_path": "task_debug_archives/2026/03/10/550e8400-e29b-41d4-a716-446655440000/12345-v1.zip",
+  "blob_reference": "azure://task-debug-archives/task_debug_archives/2026/03/10/550e8400-e29b-41d4-a716-446655440000/12345-v1.zip",
+  "local_fallback_path": null,
+  "sha256": "<zip sha256>",
+  "size_bytes": 482190,
+  "duration_ms": 75123,
+  "archive_build_duration_ms": 1380,
+  "upload_duration_ms": 241,
+  "workspace_before_file_count": 18,
+  "workspace_after_file_count": 31,
+  "redacted_file_count": 4,
+  "skipped_file_count": 2,
+  "has_run_task_trace": true,
+  "has_aci_logs": true,
+  "error_summary": null,
+  "created_at": { "$date": "2026-03-10T14:31:16Z" }
+}
+```
+
+Archive bundle contents:
+- `manifest.json` and task/execution metadata
+- `workspace_before/` and `workspace_after/`
+- snapshot manifests + diff
+- runtime env allowlist / redacted env inventory / git / tool versions
+- `.run_task_trace/` artifacts (prompt, stdout/stderr, assistant tail, token usage, Azure ACI logs)
+
+Redaction policy:
+- `.env*`, `.secrets/`, `.auth/`, credential JSON, and private-key-like files are recorded in
+  manifests as redacted entries and are not copied into the zip payload
 
 ### task_index collection (global)
 ```json

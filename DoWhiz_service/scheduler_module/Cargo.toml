@@ -48,6 +48,8 @@ urlencoding = "2"
 flate2 = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "rustls_backend"] }
+tempfile = "3"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # Browser automation for Notion integration (via browser-use CLI)
 scraper = "0.20"
@@ -73,4 +75,3 @@ path = "src/bin/google_slides_cli.rs"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder"] }
 mockito = "1"
 serial_test = "3"
-tempfile = "3"

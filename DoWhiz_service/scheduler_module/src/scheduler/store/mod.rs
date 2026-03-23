@@ -57,6 +57,13 @@ impl SchedulerStore {
         )
     }
 
+    pub(crate) fn record_task_debug_archive(
+        &self,
+        archive: &TaskDebugArchiveRecord,
+    ) -> Result<(), SchedulerError> {
+        self.mongo.record_task_debug_archive(archive)
+    }
+
     pub(crate) fn get_retry_count(&self, task_id: &str) -> Result<u32, SchedulerError> {
         self.mongo.get_retry_count(task_id)
     }
@@ -97,4 +104,38 @@ pub struct TaskStatusSummary {
     pub execution_status: Option<String>,
     pub error_message: Option<String>,
     pub execution_started_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TaskDebugArchiveRecord {
+    pub task_id: String,
+    pub execution_id: i64,
+    pub archive_type: String,
+    pub archive_version: i32,
+    pub status: String,
+    pub storage_backend: String,
+    pub blob_container: Option<String>,
+    pub blob_path: Option<String>,
+    pub blob_reference: Option<String>,
+    pub local_fallback_path: Option<String>,
+    pub sha256: String,
+    pub size_bytes: i64,
+    pub runner: String,
+    pub model: String,
+    pub deploy_target: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub duration_ms: i64,
+    pub archive_build_duration_ms: i64,
+    pub upload_duration_ms: i64,
+    pub workspace_before_file_count: i64,
+    pub workspace_after_file_count: i64,
+    pub redacted_file_count: i64,
+    pub skipped_file_count: i64,
+    pub has_workspace_before: bool,
+    pub has_workspace_after: bool,
+    pub has_run_task_trace: bool,
+    pub has_aci_logs: bool,
+    pub error_summary: Option<String>,
+    pub created_at: DateTime<Utc>,
 }

@@ -49,6 +49,10 @@ Create runtime env file (example path `/opt/dowhiz/.env`) and set at least:
 - `RAW_PAYLOAD_STORAGE_BACKEND=azure`
 - `AZURE_STORAGE_CONTAINER_INGEST=ingestion-raw`
 - Azure auth for raw payload storage (`AZURE_STORAGE_CONTAINER_SAS_URL` or account+sas)
+- `TASK_DEBUG_ARCHIVE_ENABLED=1` (recommended)
+- optional dedicated archive container:
+  - `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES`
+  - `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL`
 
 If using dockerized local task execution path in worker:
 - `RUN_TASK_USE_DOCKER=1`
@@ -102,3 +106,6 @@ python3 DoWhiz_service/scripts/load_tests/servicebus_fanout.py --count 200 --emp
 - Runtime env should use unprefixed keys in `.env`.
 - Some code paths still support `SCALE_OLIVER_*` aliases, but new deployments should treat unprefixed keys as source of truth.
 - Validate queue/storage credentials before enabling high-concurrency loads.
+- Historical task reconstruction now depends on the zip bundle written per execution. Keep the
+  workspace/archive root on durable Azure Files storage so local fallback zips remain available even
+  if Azure Blob upload is temporarily unavailable.

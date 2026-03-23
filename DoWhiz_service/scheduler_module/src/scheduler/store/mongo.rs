@@ -13,7 +13,7 @@ use crate::mongo_store::{create_client_from_env, database_from_env, ensure_index
 
 use super::super::types::{Schedule, ScheduledTask, SchedulerError};
 use super::super::utils::{task_kind_channel, task_kind_label};
-use super::TaskStatusSummary;
+use super::{TaskDebugArchiveRecord, TaskStatusSummary};
 
 static EXECUTION_SEQ: AtomicI64 = AtomicI64::new(1);
 const REQUEST_SUMMARY_MAX_CHARS: usize = 72;
@@ -22,6 +22,7 @@ const REQUEST_SUMMARY_MAX_CHARS: usize = 72;
 pub(crate) struct MongoSchedulerStore {
     tasks: Collection<Document>,
     executions: Collection<Document>,
+    debug_archives: Collection<Document>,
     owner_kind: String,
     owner_id: String,
 }
@@ -59,9 +60,40 @@ impl MongoSchedulerStore {
                 .build(),
         )
         .map_err(mongo_err)?;
+        let debug_archives = db.collection::<Document>("task_debug_archives");
+        ensure_index_compatible(
+            &debug_archives,
+            IndexModel::builder()
+                .keys(doc! {
+                    "owner_scope.kind": 1,
+                    "owner_scope.id": 1,
+                    "task_id": 1,
+                    "execution_id": 1
+                })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .unique(Some(true))
+                        .build(),
+                )
+                .build(),
+        )
+        .map_err(mongo_err)?;
+        ensure_index_compatible(
+            &debug_archives,
+            IndexModel::builder()
+                .keys(doc! {
+                    "owner_scope.kind": 1,
+                    "owner_scope.id": 1,
+                    "task_id": 1,
+                    "created_at": -1
+                })
+                .build(),
+        )
+        .map_err(mongo_err)?;
         Ok(Self {
             tasks,
             executions,
+            debug_archives,
             owner_kind,
             owner_id,
         })
@@ -222,6 +254,59 @@ impl MongoSchedulerStore {
                     }
                 },
                 None,
+            )
+            .map_err(mongo_err)?;
+        Ok(())
+    }
+
+    pub(crate) fn record_task_debug_archive(
+        &self,
+        archive: &TaskDebugArchiveRecord,
+    ) -> Result<(), SchedulerError> {
+        self.debug_archives
+            .update_one(
+                doc! {
+                    "owner_scope.kind": &self.owner_kind,
+                    "owner_scope.id": &self.owner_id,
+                    "task_id": &archive.task_id,
+                    "execution_id": archive.execution_id,
+                },
+                doc! {
+                    "$set": {
+                        "owner_scope": self.owner_scope_doc(),
+                        "task_id": &archive.task_id,
+                        "execution_id": archive.execution_id,
+                        "archive_type": &archive.archive_type,
+                        "archive_version": archive.archive_version,
+                        "status": &archive.status,
+                        "storage_backend": &archive.storage_backend,
+                        "blob_container": archive.blob_container.as_deref().map(Bson::from).unwrap_or(Bson::Null),
+                        "blob_path": archive.blob_path.as_deref().map(Bson::from).unwrap_or(Bson::Null),
+                        "blob_reference": archive.blob_reference.as_deref().map(Bson::from).unwrap_or(Bson::Null),
+                        "local_fallback_path": archive.local_fallback_path.as_deref().map(Bson::from).unwrap_or(Bson::Null),
+                        "sha256": &archive.sha256,
+                        "size_bytes": archive.size_bytes,
+                        "runner": &archive.runner,
+                        "model": &archive.model,
+                        "deploy_target": &archive.deploy_target,
+                        "started_at": BsonDateTime::from_chrono(archive.started_at),
+                        "finished_at": BsonDateTime::from_chrono(archive.finished_at),
+                        "duration_ms": archive.duration_ms,
+                        "archive_build_duration_ms": archive.archive_build_duration_ms,
+                        "upload_duration_ms": archive.upload_duration_ms,
+                        "workspace_before_file_count": archive.workspace_before_file_count,
+                        "workspace_after_file_count": archive.workspace_after_file_count,
+                        "redacted_file_count": archive.redacted_file_count,
+                        "skipped_file_count": archive.skipped_file_count,
+                        "has_workspace_before": archive.has_workspace_before,
+                        "has_workspace_after": archive.has_workspace_after,
+                        "has_run_task_trace": archive.has_run_task_trace,
+                        "has_aci_logs": archive.has_aci_logs,
+                        "error_summary": archive.error_summary.as_deref().map(Bson::from).unwrap_or(Bson::Null),
+                        "created_at": BsonDateTime::from_chrono(archive.created_at),
+                    }
+                },
+                UpdateOptions::builder().upsert(Some(true)).build(),
             )
             .map_err(mongo_err)?;
         Ok(())

@@ -175,6 +175,19 @@ If using Azure raw payload storage (`RAW_PAYLOAD_STORAGE_BACKEND=azure`):
   - `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_SAS_TOKEN`, or
   - `AZURE_STORAGE_CONNECTION_STRING_INGEST`/`AZURE_STORAGE_CONNECTION_STRING`
 
+Task debug archive bundles reuse the same Azure auth chain by default. If you want a dedicated
+archive container instead of sharing the raw-ingest container, set:
+- `TASK_DEBUG_ARCHIVE_ENABLED=1` (default enabled)
+- `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES=<container-name>` (default `task-debug-archives`)
+- optional dedicated auth:
+  - `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL`, or
+  - reuse `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_SAS_TOKEN`, or
+  - reuse `AZURE_STORAGE_CONNECTION_STRING_INGEST`/`AZURE_STORAGE_CONNECTION_STRING`
+
+If Azure upload is unavailable or fails, the worker still writes the zip to a durable local
+fallback path under `.task_debug_archives_failed/` near the workspace/archive root and records that
+fallback path in Mongo.
+
 ### 4.4 RunTask backend controls
 
 - `RUN_TASK_EXECUTION_BACKEND=local|azure_aci|auto`
@@ -396,6 +409,18 @@ Data store split:
 - Supabase Postgres: account/auth/billing records
 - Raw payload: Supabase storage or Azure Blob (by backend config)
 - Queue: Service Bus (gateway flow) or Postgres (legacy/optional)
+
+Task debug archival:
+- Each `RunTask` execution writes a standardized `.run_task_trace/` directory inside the workspace
+  with prompt, stdout/stderr/combined logs, assistant output tail, token usage, and Azure ACI
+  metadata/logs when applicable.
+- Scheduler finalization snapshots `workspace_before` and `workspace_after`, writes redacted
+  manifests/diffs/runtime metadata, zips the bundle, uploads it to Azure Blob when configured, and
+  records the lookup row in Mongo collection `task_debug_archives`.
+- Sensitive files are not copied into the archive payload. `.env*`, `.secrets/`, `.auth/`,
+  credential JSON, and private key-like files are recorded as redacted manifest entries instead.
+- The archive record also stores `archive_build_duration_ms` and `upload_duration_ms` so staging
+  and production runs can be checked for overhead.
 
 ## 9) Troubleshooting
 

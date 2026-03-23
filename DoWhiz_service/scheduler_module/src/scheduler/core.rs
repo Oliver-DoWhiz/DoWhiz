@@ -9,6 +9,7 @@ use crate::account_store::{lookup_account_by_channel, lookup_account_by_identifi
 use crate::channel::Channel;
 
 use super::actions::{apply_scheduler_actions, ingest_follow_up_tasks, schedule_auto_reply};
+use super::debug_archive::PendingTaskDebugArchive;
 use super::executor::TaskExecutor;
 use super::outbound::execute_slack_send;
 use super::reply::load_reply_context;
@@ -226,6 +227,7 @@ impl<E: TaskExecutor> Scheduler<E> {
 
     fn execute_task_at_index(&mut self, index: usize) -> Result<(), SchedulerError> {
         let task_id = self.tasks[index].id;
+        let task_before_snapshot = self.tasks[index].clone();
         let task_kind = self.tasks[index].kind.clone();
         if let TaskKind::RunTask(task) = &self.tasks[index].kind {
             if let Err(err) = write_scheduler_snapshot(&task.workspace_dir, &self.tasks, Utc::now())
@@ -239,6 +241,17 @@ impl<E: TaskExecutor> Scheduler<E> {
         }
         let started_at = Utc::now();
         let execution_id = self.store.record_execution_start(task_id, started_at)?;
+        let mut archive_session =
+            match PendingTaskDebugArchive::begin(&task_before_snapshot, execution_id, started_at) {
+                Ok(session) => session,
+                Err(err) => {
+                    warn!(
+                        "failed to capture pre-run debug archive snapshot for task {}: {}",
+                        task_id, err
+                    );
+                    None
+                }
+            };
         let result = self.executor.execute(&task_kind);
         let executed_at = Utc::now();
 
@@ -309,6 +322,30 @@ impl<E: TaskExecutor> Scheduler<E> {
                     }
                     // Sync success status to user's account-level storage for Discord/Slack
                     sync_task_status_to_user_storage(task_id, task, executed_at, "success", None);
+                }
+                if let Some(session) = archive_session.take() {
+                    match session.finalize(
+                        &task_before_snapshot,
+                        &self.tasks[index],
+                        executed_at,
+                        "success",
+                        None,
+                    ) {
+                        Ok(record) => {
+                            if let Err(err) = self.store.record_task_debug_archive(&record) {
+                                warn!(
+                                    "failed to record task debug archive for task {} execution {}: {}",
+                                    record.task_id, record.execution_id, err
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                "failed to finalize task debug archive for task {}: {}",
+                                task_id, err
+                            );
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -391,6 +428,30 @@ impl<E: TaskExecutor> Scheduler<E> {
                             "disabled one-shot task {} after failure: {}",
                             task_id, message
                         );
+                    }
+                }
+                if let Some(session) = archive_session.take() {
+                    match session.finalize(
+                        &task_before_snapshot,
+                        &self.tasks[index],
+                        executed_at,
+                        "failed",
+                        Some(&message),
+                    ) {
+                        Ok(record) => {
+                            if let Err(store_err) = self.store.record_task_debug_archive(&record) {
+                                warn!(
+                                    "failed to record task debug archive for task {} execution {}: {}",
+                                    record.task_id, record.execution_id, store_err
+                                );
+                            }
+                        }
+                        Err(finalize_err) => {
+                            warn!(
+                                "failed to finalize task debug archive for task {}: {}",
+                                task_id, finalize_err
+                            );
+                        }
                     }
                 }
                 return Err(err);
