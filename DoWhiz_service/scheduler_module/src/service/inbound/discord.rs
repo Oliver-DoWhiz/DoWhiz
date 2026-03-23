@@ -15,6 +15,7 @@ use super::super::config::ServiceConfig;
 use super::super::default_thread_state_path;
 use super::super::scheduler::cancel_pending_thread_tasks;
 use super::super::workspace::ensure_thread_workspace;
+use super::super::write_discord_chat_history_scope_file;
 use super::super::BoxError;
 use super::discord_context::{
     build_discord_message_text_with_quote, hydrate_discord_context_files,
@@ -64,6 +65,14 @@ pub(crate) fn persist_discord_ingest_context(
         &config.employee_profile,
         config.skills_source_dir.as_deref(),
     )?;
+
+    if let Err(err) = write_discord_chat_history_scope_file(config, &workspace, message) {
+        warn!(
+            "failed to write scoped Discord history grant for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
 
     let thread_state_path = default_thread_state_path(&workspace);
     let thread_state =
@@ -135,6 +144,14 @@ pub(crate) fn process_discord_inbound_message(
         &config.employee_profile,
         config.skills_source_dir.as_deref(),
     )?;
+
+    if let Err(err) = write_discord_chat_history_scope_file(config, &workspace, message) {
+        warn!(
+            "failed to write scoped Discord history grant for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
 
     let thread_state_path = default_thread_state_path(&workspace);
     let thread_state =

@@ -17,6 +17,7 @@ use super::super::config::ServiceConfig;
 use super::super::default_thread_state_path;
 use super::super::scheduler::cancel_pending_thread_tasks;
 use super::super::workspace::ensure_thread_workspace;
+use super::super::write_slack_chat_history_scope_file;
 use super::super::BoxError;
 
 pub(crate) fn process_slack_event(
@@ -84,6 +85,14 @@ pub(crate) fn process_slack_event(
         &config.employee_profile,
         config.skills_source_dir.as_deref(),
     )?;
+
+    if let Err(err) = write_slack_chat_history_scope_file(config, &workspace, &message) {
+        warn!(
+            "failed to write scoped Slack history grant for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
 
     // Bump thread state
     let thread_state_path = default_thread_state_path(&workspace);

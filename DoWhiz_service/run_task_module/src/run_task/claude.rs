@@ -46,7 +46,7 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
         _ => default_path,
     }
 }
-use super::env::load_env_sources;
+use super::env::{load_env_sources, remove_restricted_agent_env};
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
@@ -300,6 +300,7 @@ fn build_claude_command(
 ) -> Command {
     let max_turns = claude_max_turns();
     let mut cmd = Command::new("claude");
+    remove_restricted_agent_env(&mut cmd);
     cmd.arg("-p")
         .arg("--output-format")
         .arg("stream-json")

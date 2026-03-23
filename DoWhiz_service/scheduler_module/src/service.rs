@@ -2,6 +2,7 @@ pub mod agent_market;
 pub mod analytics;
 pub mod auth;
 pub mod billing;
+mod chat_history;
 mod config;
 mod email;
 mod html;
@@ -26,6 +27,9 @@ pub use server::run_server;
 pub(crate) use workspace::ensure_thread_workspace;
 pub use workspace::{bootstrap_startup_workspace_files, copy_dir_recursive};
 
+pub(crate) use chat_history::{
+    write_discord_chat_history_scope_file, write_slack_chat_history_scope_file,
+};
 pub(crate) use config::{default_employee_config_path, resolve_telegram_bot_token};
 pub(crate) use inbound::{
     build_discord_message_text_with_quote, build_discord_router_context,
