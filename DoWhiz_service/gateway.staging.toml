@@ -39,3 +39,10 @@ channel = "google_slides"
 key = "*"
 employee_id = "boiled_egg"
 tenant_id = "staging"
+
+# WeChat Work routing
+[[routes]]
+channel = "wechat"
+key = "*"
+employee_id = "boiled_egg"
+tenant_id = "staging"
