@@ -96,3 +96,4 @@ Discord search currently scans:
 
 Archived Discord threads are not scanned yet; the API response includes a warning when that matters.
 Guild-wide Discord search also skips channels or active threads that the bot cannot read (for example 403/404 responses) and reports those skips as warnings instead of failing the whole search.
+When Discord returns 429 rate limits on a channel-history request, the backend now retries with the server-provided delay before eventually downgrading that single channel to a warning.
