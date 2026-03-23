@@ -69,25 +69,25 @@ pub(super) fn build_prompt(
                 "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Do not use HTML or markdown. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
             }
             "notion" => {
-                r#"2. After finishing the task (step one), you MUST reply directly to the Notion comment using the Notion API.
+                r#"2. After finishing the task (step one), you MUST reply directly to the Notion comment using the Notion API CLI.
 
-IMPORTANT: This is a Notion @mention, NOT an email. Do NOT create reply_email_draft.html.
+CRITICAL RESTRICTIONS:
+- Do NOT use browser automation or browser-use for Notion. The API is faster and more reliable.
+- Do NOT try to log into Notion via Google or any other OAuth flow.
+- Do NOT create reply_email_draft.html - this is a Notion @mention, not email.
+- ONLY use the notion_api_cli command-line tool.
 
 To reply:
-1. First, source the OAuth token: `source .notion_env`
-2. Read the context from .notion_context.json to get page_id and comment_id
-3. Optionally read the page content: `notion_api_cli read-page <page_id>`
-4. Post your reply as a comment: `notion_api_cli create-comment <page_id> "Your reply message here"`
-5. CRITICAL: After posting the comment, you MUST create the marker file: `touch .notion_api_replied`
+1. Source the OAuth token: `source .notion_env`
+2. Read context from .notion_context.json to get page_id
+3. Post your reply: `notion_api_cli create-comment <page_id> "Your message"`
+4. Create the marker: `touch .notion_api_replied`
 
-The .notion_env file contains NOTION_API_TOKEN and .notion_context.json has:
-- page_id: The page to comment on
-- comment_id: The comment that mentioned you (for context)
-- url: Link to the Notion page
+The .notion_env file contains NOTION_API_TOKEN. The .notion_context.json has page_id and comment_id.
 
-The marker file `.notion_api_replied` tells the system you've already posted via API. Without it, the task will fail and retry, causing duplicate replies.
+The marker file `.notion_api_replied` is REQUIRED. Without it, the task retries and creates duplicate replies.
 
-Keep your reply concise and helpful. Do not pretend the job has been done without actually posting the comment via the API."#
+Keep your reply concise. Use the API only - no browser automation."#
             }
             _ => {
                 // Default to email (HTML)
