@@ -586,6 +586,9 @@ This section collects hard-won debugging lessons. **Read before starting work on
 | Same notification matched twice | Add content-based deduplication (actor + page + mentioned) | Duplicate processing |
 | Duplicate replies via retry | Agent MUST create `.notion_api_replied` marker after API call | 3x duplicate comments |
 | Task fails with "Expected output not found" | Agent didn't create `.notion_api_replied` marker file | Task retries, multiple replies |
+| Dual-path duplicate (webhook + email) | Disable email path when webhook is active (`email.rs: notion_email_disabled = true`) | 2-3x replies from different employees |
+| Cross-employee trigger loop | Employee A's reply triggers webhook → Employee B replies → loop | Infinite reply chain |
+| Prompt missing marker instruction | Add `touch .notion_api_replied` to prompt.rs Notion section | Task retry, duplicates |
 
 ### Rust/Cargo
 
