@@ -280,6 +280,7 @@ impl MongoSchedulerStore {
                         "archive_version": archive.archive_version,
                         "status": &archive.status,
                         "storage_backend": &archive.storage_backend,
+                        "storage_account": archive.storage_account.as_deref().map(Bson::from).unwrap_or(Bson::Null),
                         "blob_container": archive.blob_container.as_deref().map(Bson::from).unwrap_or(Bson::Null),
                         "blob_path": archive.blob_path.as_deref().map(Bson::from).unwrap_or(Bson::Null),
                         "blob_reference": archive.blob_reference.as_deref().map(Bson::from).unwrap_or(Bson::Null),

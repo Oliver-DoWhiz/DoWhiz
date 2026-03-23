@@ -114,6 +114,7 @@ pub(crate) struct TaskDebugArchiveRecord {
     pub archive_version: i32,
     pub status: String,
     pub storage_backend: String,
+    pub storage_account: Option<String>,
     pub blob_container: Option<String>,
     pub blob_path: Option<String>,
     pub blob_reference: Option<String>,

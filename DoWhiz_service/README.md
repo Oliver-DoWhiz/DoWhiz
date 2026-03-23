@@ -184,6 +184,10 @@ archive container instead of sharing the raw-ingest container, set:
   - reuse `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_SAS_TOKEN`, or
   - reuse `AZURE_STORAGE_CONNECTION_STRING_INGEST`/`AZURE_STORAGE_CONNECTION_STRING`
 
+Archive uploads try the configured auth candidates in that order until one succeeds. When an
+upload lands in Azure, the Mongo row records the actual storage account used so historical debug
+bundles can be traced back unambiguously even if multiple storage accounts are configured.
+
 If Azure upload is unavailable or fails, the worker still writes the zip to a durable local
 fallback path under `.task_debug_archives_failed/` near the workspace/archive root and records that
 fallback path in Mongo.
@@ -417,6 +421,9 @@ Task debug archival:
 - Scheduler finalization snapshots `workspace_before` and `workspace_after`, writes redacted
   manifests/diffs/runtime metadata, zips the bundle, uploads it to Azure Blob when configured, and
   records the lookup row in Mongo collection `task_debug_archives`.
+- The archive lookup row records the actual storage account/container/blob path used for successful
+  uploads, plus a precise `blob_reference`, so historical task bundles can be found without
+  guessing which Azure account accepted the write.
 - Sensitive files are not copied into the archive payload. `.env*`, `.secrets/`, `.auth/`,
   credential JSON, and private key-like files are recorded as redacted manifest entries instead.
 - The archive record also stores `archive_build_duration_ms` and `upload_duration_ms` so staging

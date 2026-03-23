@@ -54,6 +54,9 @@ Recommended staging/prod policy:
 - Keep task debug archives enabled so historical `RunTask` investigations remain possible after an
   Azure ACI container is deleted.
 - Prefer a dedicated archive container when retention/ACL needs differ from raw ingest.
+- Provision the dedicated archive container in every storage account that might be used by the
+  configured auth chain, or set `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL` explicitly so
+  the worker does not need to guess.
 - If Azure upload fails, the worker falls back to a local zip under `.task_debug_archives_failed/`
   and records the local path in Mongo collection `task_debug_archives`.
 

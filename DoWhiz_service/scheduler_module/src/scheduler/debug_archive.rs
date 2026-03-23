@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use azure_core::StatusCode;
 use azure_storage::StorageCredentials;
 use azure_storage_blobs::prelude::*;
 use chrono::{DateTime, Utc};
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Url};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -93,7 +94,7 @@ pub(crate) struct PendingTaskDebugArchive {
 
 #[derive(Debug, Clone)]
 enum ArchiveStoragePlan {
-    Azure(AzureArchiveTarget),
+    Azure(Vec<AzureArchiveTarget>),
     LocalOnly { reason: String },
 }
 
@@ -103,6 +104,7 @@ struct AzureArchiveTarget {
     auth: AzureArchiveAuth,
     path_prefix: String,
     storage_backend: String,
+    storage_account: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -374,6 +376,7 @@ impl PendingTaskDebugArchive {
             archive_version: ARCHIVE_VERSION,
             status: upload.status,
             storage_backend: upload.storage_backend,
+            storage_account: upload.storage_account,
             blob_container: upload.blob_container,
             blob_path: upload.blob_path,
             blob_reference: upload.blob_reference,
@@ -416,6 +419,7 @@ enum SnapshotMode {
 struct ArchiveUploadResult {
     status: String,
     storage_backend: String,
+    storage_account: Option<String>,
     blob_container: Option<String>,
     blob_path: Option<String>,
     blob_reference: Option<String>,
@@ -737,36 +741,67 @@ fn upload_archive_bundle(
     fallback_root: &Path,
 ) -> Result<ArchiveUploadResult, SchedulerError> {
     match plan {
-        ArchiveStoragePlan::Azure(target) => {
-            let blob_path =
-                build_archive_blob_path(&target.path_prefix, task_id, execution_id, started_at);
+        ArchiveStoragePlan::Azure(targets) => {
+            let Some(primary_target) = targets.first() else {
+                let fallback_path =
+                    persist_local_fallback(zip_path, task_id, execution_id, Some(fallback_root))?;
+                return Ok(ArchiveUploadResult {
+                    status: "local_only".to_string(),
+                    storage_backend: "local_fallback:missing_azure_blob_targets".to_string(),
+                    storage_account: None,
+                    blob_container: None,
+                    blob_path: None,
+                    blob_reference: None,
+                    local_fallback_path: Some(fallback_path.to_string_lossy().into_owned()),
+                });
+            };
+            let blob_path = build_archive_blob_path(
+                &primary_target.path_prefix,
+                task_id,
+                execution_id,
+                started_at,
+            );
             let bytes = fs::read(zip_path)?;
-            match upload_archive_bytes(target, &blob_path, &bytes) {
-                Ok(()) => Ok(ArchiveUploadResult {
-                    status: "uploaded".to_string(),
-                    storage_backend: target.storage_backend.clone(),
-                    blob_container: Some(target.container.clone()),
-                    blob_path: Some(blob_path.clone()),
-                    blob_reference: Some(format!("azure://{}/{}", target.container, blob_path)),
-                    local_fallback_path: None,
-                }),
-                Err(_) => {
-                    let fallback_path = persist_local_fallback(
-                        zip_path,
-                        task_id,
-                        execution_id,
-                        Some(fallback_root),
-                    )?;
-                    Ok(ArchiveUploadResult {
-                        status: "upload_failed".to_string(),
-                        storage_backend: target.storage_backend.clone(),
-                        blob_container: Some(target.container.clone()),
-                        blob_path: Some(blob_path.clone()),
-                        blob_reference: None,
-                        local_fallback_path: Some(fallback_path.to_string_lossy().into_owned()),
-                    })
+            for target in targets {
+                match upload_archive_bytes(target, &blob_path, &bytes) {
+                    Ok(()) => {
+                        return Ok(ArchiveUploadResult {
+                            status: "uploaded".to_string(),
+                            storage_backend: target.storage_backend.clone(),
+                            storage_account: target.storage_account.clone(),
+                            blob_container: Some(target.container.clone()),
+                            blob_path: Some(blob_path.clone()),
+                            blob_reference: Some(build_blob_reference(
+                                target.storage_account.as_deref(),
+                                &target.container,
+                                &blob_path,
+                            )),
+                            local_fallback_path: None,
+                        });
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "[task_debug_archive] upload attempt failed backend={} account={} container={} path={}",
+                            target.storage_backend,
+                            target.storage_account.as_deref().unwrap_or("unknown"),
+                            target.container,
+                            blob_path
+                        );
+                    }
                 }
             }
+
+            let fallback_path =
+                persist_local_fallback(zip_path, task_id, execution_id, Some(fallback_root))?;
+            Ok(ArchiveUploadResult {
+                status: "upload_failed".to_string(),
+                storage_backend: primary_target.storage_backend.clone(),
+                storage_account: None,
+                blob_container: Some(primary_target.container.clone()),
+                blob_path: Some(blob_path),
+                blob_reference: None,
+                local_fallback_path: Some(fallback_path.to_string_lossy().into_owned()),
+            })
         }
         ArchiveStoragePlan::LocalOnly { reason } => {
             let fallback_path =
@@ -774,6 +809,7 @@ fn upload_archive_bundle(
             Ok(ArchiveUploadResult {
                 status: "local_only".to_string(),
                 storage_backend: format!("local_fallback:{}", reason),
+                storage_account: None,
                 blob_container: None,
                 blob_path: None,
                 blob_reference: None,
@@ -864,6 +900,23 @@ fn upload_via_connection_string(
                 let creds = StorageCredentials::access_key(&account, account_key);
                 let container_client =
                     BlobServiceClient::new(&account, creds).container_client(container);
+                if !container_client.exists().await.map_err(|err| {
+                    SchedulerError::Storage(format!("container exists check failed: {}", err))
+                })? {
+                    let create_result = container_client.create().await;
+                    if let Err(err) = create_result {
+                        let already_exists = err
+                            .as_http_error()
+                            .map(|http| http.status() == StatusCode::Conflict)
+                            .unwrap_or(false);
+                        if !already_exists {
+                            return Err(SchedulerError::Storage(format!(
+                                "container create failed: {}",
+                                err
+                            )));
+                        }
+                    }
+                }
                 let blob_client = container_client.blob_client(blob_path);
                 blob_client
                     .put_block_blob(payload)
@@ -894,7 +947,7 @@ fn persist_local_fallback(
             zip_path
                 .parent()
                 .map(PathBuf::from)
-                .unwrap_or_else(|| env::temp_dir())
+                .unwrap_or_else(env::temp_dir)
         })
         .join(LOCAL_FALLBACK_DIRNAME);
     fs::create_dir_all(&fallback_root)?;
@@ -906,13 +959,18 @@ fn persist_local_fallback(
 fn resolve_archive_storage_plan() -> ArchiveStoragePlan {
     let desired_container = var_with_scale_oliver("AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES")
         .unwrap_or_else(|| DEFAULT_ARCHIVE_CONTAINER.to_string());
+    let mut targets = Vec::new();
     if let Some(url) = var_with_scale_oliver("AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL")
     {
-        return ArchiveStoragePlan::Azure(AzureArchiveTarget {
-            container: desired_container,
+        let storage_account = parse_account_from_sas_url(&url);
+        let container =
+            parse_container_from_sas_url(&url).unwrap_or_else(|| desired_container.clone());
+        targets.push(AzureArchiveTarget {
+            container,
             auth: AzureArchiveAuth::ContainerSasUrl(url),
             path_prefix: DEFAULT_ARCHIVE_PATH_PREFIX.to_string(),
             storage_backend: "azure_blob".to_string(),
+            storage_account,
         });
     }
 
@@ -922,11 +980,15 @@ fn resolve_archive_storage_plan() -> ArchiveStoragePlan {
             .map(|value| value.trim_start_matches('?').to_string())
             .filter(|value| !value.is_empty()),
     ) {
-        return ArchiveStoragePlan::Azure(AzureArchiveTarget {
-            container: desired_container,
-            auth: AzureArchiveAuth::AccountSas { account, sas_token },
+        targets.push(AzureArchiveTarget {
+            container: desired_container.clone(),
+            auth: AzureArchiveAuth::AccountSas {
+                account: account.clone(),
+                sas_token,
+            },
             path_prefix: DEFAULT_ARCHIVE_PATH_PREFIX.to_string(),
             storage_backend: "azure_blob".to_string(),
+            storage_account: Some(account),
         });
     }
 
@@ -935,14 +997,15 @@ fn resolve_archive_storage_plan() -> ArchiveStoragePlan {
             parse_connection_string_component(&connection_string, "AccountName"),
             parse_connection_string_component(&connection_string, "AccountKey"),
         ) {
-            return ArchiveStoragePlan::Azure(AzureArchiveTarget {
-                container: desired_container,
+            targets.push(AzureArchiveTarget {
+                container: desired_container.clone(),
                 auth: AzureArchiveAuth::ConnectionString {
-                    account,
+                    account: account.clone(),
                     account_key,
                 },
                 path_prefix: DEFAULT_ARCHIVE_PATH_PREFIX.to_string(),
                 storage_backend: "azure_blob".to_string(),
+                storage_account: Some(account),
             });
         }
     }
@@ -951,12 +1014,18 @@ fn resolve_archive_storage_plan() -> ArchiveStoragePlan {
         let fallback_container = var_with_scale_oliver("AZURE_STORAGE_CONTAINER_INGEST")
             .or_else(|| parse_container_from_sas_url(&url))
             .unwrap_or_else(|| DEFAULT_ARCHIVE_CONTAINER.to_string());
-        return ArchiveStoragePlan::Azure(AzureArchiveTarget {
+        let storage_account = parse_account_from_sas_url(&url);
+        targets.push(AzureArchiveTarget {
             container: fallback_container,
             auth: AzureArchiveAuth::ContainerSasUrl(url),
             path_prefix: DEFAULT_ARCHIVE_PATH_PREFIX.to_string(),
             storage_backend: "azure_blob_shared_container".to_string(),
+            storage_account,
         });
+    }
+
+    if !targets.is_empty() {
+        return ArchiveStoragePlan::Azure(targets);
     }
 
     ArchiveStoragePlan::LocalOnly {
@@ -992,6 +1061,25 @@ fn parse_container_from_sas_url(url: &str) -> Option<String> {
         None
     } else {
         Some(container.to_string())
+    }
+}
+
+fn parse_account_from_sas_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim();
+    let account = host.split('.').next()?.trim();
+    if account.is_empty() {
+        None
+    } else {
+        Some(account.to_string())
+    }
+}
+
+fn build_blob_reference(storage_account: Option<&str>, container: &str, blob_path: &str) -> String {
+    if let Some(account) = storage_account.filter(|value| !value.trim().is_empty()) {
+        format!("azure://{}/{}/{}", account, container, blob_path)
+    } else {
+        format!("azure://{}/{}", container, blob_path)
     }
 }
 
@@ -1366,6 +1454,7 @@ mod tests {
             .expect("finalize archive");
 
         assert_eq!(record.status, "local_only");
+        assert_eq!(record.storage_account, None);
         assert!(record.has_run_task_trace);
         assert!(record.has_aci_logs);
         assert!(record.redacted_file_count >= 2);
@@ -1387,6 +1476,66 @@ mod tests {
             zip.by_name("workspace_after/reply_email_draft.html")
                 .is_ok(),
             "reply draft should be captured in after snapshot"
+        );
+    }
+
+    #[test]
+    fn resolve_archive_storage_plan_builds_ordered_candidates_with_precise_accounts() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _env_guards = [
+            EnvVarGuard::set(
+                "AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL",
+                "https://archiveacct.blob.core.windows.net/archive-zips?sv=test",
+            ),
+            EnvVarGuard::set("AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES", "ignored"),
+            EnvVarGuard::set("AZURE_STORAGE_ACCOUNT", "accountsas"),
+            EnvVarGuard::set("AZURE_STORAGE_SAS_TOKEN", "?sig=test"),
+            EnvVarGuard::set(
+                "AZURE_STORAGE_CONNECTION_STRING",
+                "DefaultEndpointsProtocol=https;AccountName=connacct;AccountKey=abc;EndpointSuffix=core.windows.net",
+            ),
+            EnvVarGuard::set(
+                "AZURE_STORAGE_CONTAINER_SAS_URL",
+                "https://sharedacct.blob.core.windows.net/shared-ingest?sv=test",
+            ),
+            EnvVarGuard::set("AZURE_STORAGE_CONTAINER_INGEST", "shared-ingest"),
+        ];
+
+        match resolve_archive_storage_plan() {
+            ArchiveStoragePlan::Azure(targets) => {
+                assert_eq!(targets.len(), 4);
+                assert_eq!(targets[0].container, "archive-zips");
+                assert_eq!(targets[0].storage_account.as_deref(), Some("archiveacct"));
+                assert_eq!(targets[1].container, "ignored");
+                assert_eq!(targets[1].storage_account.as_deref(), Some("accountsas"));
+                assert_eq!(targets[2].container, "ignored");
+                assert_eq!(targets[2].storage_account.as_deref(), Some("connacct"));
+                assert_eq!(targets[3].container, "shared-ingest");
+                assert_eq!(targets[3].storage_account.as_deref(), Some("sharedacct"));
+            }
+            ArchiveStoragePlan::LocalOnly { .. } => {
+                panic!("expected azure candidates");
+            }
+        }
+    }
+
+    #[test]
+    fn build_blob_reference_includes_storage_account_when_available() {
+        assert_eq!(
+            build_blob_reference(
+                Some("archiveacct"),
+                "task-debug-archives",
+                "task_debug_archives/2026/03/23/task/1-v1.zip",
+            ),
+            "azure://archiveacct/task-debug-archives/task_debug_archives/2026/03/23/task/1-v1.zip"
+        );
+        assert_eq!(
+            build_blob_reference(
+                None,
+                "task-debug-archives",
+                "task_debug_archives/2026/03/23/task/1-v1.zip",
+            ),
+            "azure://task-debug-archives/task_debug_archives/2026/03/23/task/1-v1.zip"
         );
     }
 }

@@ -160,9 +160,10 @@ reconstruct/debug a past run after the Azure ACI container is gone.
   archive_version: NumberInt,
   status: String,                   // "uploaded" | "upload_failed" | "local_only"
   storage_backend: String,
+  storage_account: String,          // nullable, actual Azure account used for upload
   blob_container: String,           // nullable
   blob_path: String,                // nullable
-  blob_reference: String,           // nullable
+  blob_reference: String,           // nullable, precise azure://account/container/path reference
   local_fallback_path: String,      // nullable
   sha256: String,
   size_bytes: NumberLong,

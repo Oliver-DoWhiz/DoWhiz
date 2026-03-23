@@ -16,7 +16,7 @@
 |------------|-------|---------------|
 | tasks | Per-user (owner_scope) | Full task definition, schedule, enabled, retry_count |
 | task_executions | Per-user (owner_scope) | Execution history: started_at, finished_at, status, error_message (used for frontend tasksync) |
-| task_debug_archives | Per-user (owner_scope) | One row per `task_id + execution_id`, mapping execution to Azure Blob zip (or local fallback path), plus size/checksum/overhead metrics |
+| task_debug_archives | Per-user (owner_scope) | One row per `task_id + execution_id`, mapping execution to Azure Blob zip (or local fallback path), plus actual storage account/container/blob coordinates and size/checksum/overhead metrics |
 | task_index | Global | Lightweight index: user_id, task_id, next_run, enabled |
 
 ---
@@ -66,9 +66,10 @@
   "archive_version": 1,
   "status": "uploaded",
   "storage_backend": "azure_blob",
+  "storage_account": "archiveacct",
   "blob_container": "task-debug-archives",
   "blob_path": "task_debug_archives/2026/03/10/550e8400-e29b-41d4-a716-446655440000/12345-v1.zip",
-  "blob_reference": "azure://task-debug-archives/task_debug_archives/2026/03/10/550e8400-e29b-41d4-a716-446655440000/12345-v1.zip",
+  "blob_reference": "azure://archiveacct/task-debug-archives/task_debug_archives/2026/03/10/550e8400-e29b-41d4-a716-446655440000/12345-v1.zip",
   "local_fallback_path": null,
   "sha256": "<zip sha256>",
   "size_bytes": 482190,
