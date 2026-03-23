@@ -96,15 +96,29 @@ pub struct NotionCommentCreatedBy {
 }
 
 /// Main webhook payload structure
+/// Based on actual Notion webhook format (API version 2026-03-11)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NotionWebhookPayload {
+    /// Event ID
+    pub id: String,
+    /// Event type (e.g., "comment.created")
     #[serde(rename = "type")]
-    pub event_type: NotionEventType,
+    pub event_type: Option<NotionEventType>,
+    /// Timestamp of the event
+    pub timestamp: Option<String>,
     /// The integration that received this webhook (same as bot_id from OAuth)
     pub integration_id: String,
     pub workspace_id: String,
+    pub workspace_name: Option<String>,
+    pub subscription_id: Option<String>,
+    /// Authors who triggered this event
     pub authors: Option<Vec<NotionWebhookAuthor>>,
+    /// Users/bots who can access the affected resource
+    pub accessible_by: Option<Vec<NotionWebhookAuthor>>,
+    /// Comment data (for comment.created events) - might be under "data" or "entity"
     pub data: Option<NotionCommentData>,
+    #[serde(rename = "entity")]
+    pub entity: Option<NotionCommentData>,
     /// Verification token for signature validation
     pub verification_token: Option<String>,
 }
@@ -128,9 +142,14 @@ impl NotionWebhookPayload {
         false
     }
 
+    /// Get the comment data (from either `data` or `entity` field)
+    fn comment_data(&self) -> Option<&NotionCommentData> {
+        self.data.as_ref().or(self.entity.as_ref())
+    }
+
     /// Extract the plain text content from the comment's rich_text array.
     pub fn extract_comment_text(&self) -> String {
-        let Some(data) = &self.data else {
+        let Some(data) = self.comment_data() else {
             return String::new();
         };
         let Some(rich_text) = &data.rich_text else {
@@ -150,29 +169,26 @@ impl NotionWebhookPayload {
 
     /// Get the page ID from the comment parent
     pub fn page_id(&self) -> Option<&str> {
-        self.data
-            .as_ref()
+        self.comment_data()
             .and_then(|d| d.parent.as_ref())
             .and_then(|p| p.page_id.as_deref())
     }
 
     /// Get the comment ID
     pub fn comment_id(&self) -> Option<&str> {
-        self.data.as_ref().map(|d| d.id.as_str())
+        self.comment_data().map(|d| d.id.as_str())
     }
 
     /// Get the author name (created_by.name)
     pub fn author_name(&self) -> Option<&str> {
-        self.data
-            .as_ref()
+        self.comment_data()
             .and_then(|d| d.created_by.as_ref())
             .and_then(|c| c.name.as_deref())
     }
 
     /// Get the author ID (created_by.id)
     pub fn author_id(&self) -> Option<&str> {
-        self.data
-            .as_ref()
+        self.comment_data()
             .and_then(|d| d.created_by.as_ref())
             .map(|c| c.id.as_str())
     }
@@ -181,7 +197,7 @@ impl NotionWebhookPayload {
     ///
     /// Looks for mention elements in rich_text where mention.user.id matches the integration_id.
     pub fn contains_bot_mention(&self, integration_id: &str) -> bool {
-        let Some(data) = &self.data else {
+        let Some(data) = self.comment_data() else {
             return false;
         };
         let Some(rich_text) = &data.rich_text else {
@@ -203,6 +219,11 @@ impl NotionWebhookPayload {
         }
 
         false
+    }
+
+    /// Check if this is a comment.created event
+    pub fn is_comment_created(&self) -> bool {
+        matches!(self.event_type, Some(NotionEventType::CommentCreated))
     }
 }
 
@@ -259,7 +280,7 @@ pub async fn ingest_notion_webhook(
     );
 
     // Only handle comment.created events
-    if payload.event_type != NotionEventType::CommentCreated {
+    if !payload.is_comment_created() {
         debug!(
             "notion webhook ignoring event type: {:?}",
             payload.event_type
