@@ -526,7 +526,7 @@ pub async fn ingest_notion_webhook(
             "notion webhook comment text empty, fetching via API: page_id={} comment_id={}",
             page_id, comment_id
         );
-        let http_client = reqwest::blocking::Client::new();
+        let http_client = reqwest::Client::new();
         let mut next_cursor: Option<String> = None;
         let mut total_comments_checked = 0;
         let max_pages = 10; // Safety limit: 10 pages * 100 = 1000 comments max
@@ -551,10 +551,11 @@ pub async fn ingest_notion_webhook(
                 .header("Authorization", format!("Bearer {}", credential.access_token))
                 .header("Notion-Version", "2022-06-28")
                 .send()
+                .await
             {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        if let Ok(data) = resp.json::<serde_json::Value>() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
                             if let Some(results) = data["results"].as_array() {
                                 total_comments_checked += results.len();
                                 for c in results {
@@ -604,7 +605,7 @@ pub async fn ingest_notion_webhook(
                         warn!(
                             "notion webhook API returned status {}: {:?}",
                             resp.status(),
-                            resp.text()
+                            resp.text().await
                         );
                         break;
                     }
