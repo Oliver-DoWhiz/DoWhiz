@@ -18,7 +18,6 @@ use serde_json::json;
 use tracing::{debug, info, warn};
 
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundMessage};
-use scheduler_module::notion_browser::api_client::NotionApiClient;
 use scheduler_module::notion_browser::models::NotionMention;
 use scheduler_module::notion_store::NotionStore;
 
@@ -526,29 +525,57 @@ pub async fn ingest_notion_webhook(
             "notion webhook comment text empty, fetching via API: page_id={} comment_id={}",
             page_id, comment_id
         );
-        let api_client = NotionApiClient::new(notion_store);
-        match api_client.get_comments(&payload.workspace_id, &page_id) {
-            Ok(comments) => {
-                // Find the comment matching our comment_id
-                for c in comments {
-                    if c.id == comment_id {
-                        comment_text = c.text.clone();
-                        if author_name.is_none() {
-                            author_name = Some(c.author_name.clone());
+        // Use reqwest directly with the credential's access token
+        let http_client = reqwest::blocking::Client::new();
+        let url = format!("https://api.notion.com/v1/comments?block_id={}", page_id);
+        match http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", credential.access_token))
+            .header("Notion-Version", "2022-06-28")
+            .send()
+        {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>() {
+                        if let Some(results) = data["results"].as_array() {
+                            for c in results {
+                                let cid = c["id"].as_str().unwrap_or("");
+                                if cid == comment_id {
+                                    // Extract plain text from rich_text array
+                                    if let Some(rich_text) = c["rich_text"].as_array() {
+                                        comment_text = rich_text
+                                            .iter()
+                                            .filter_map(|rt| rt["plain_text"].as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("");
+                                    }
+                                    // Extract author name
+                                    if author_name.is_none() {
+                                        if let Some(name) = c["created_by"]["name"].as_str() {
+                                            author_name = Some(name.to_string());
+                                        }
+                                    }
+                                    info!(
+                                        "notion webhook fetched comment text: {} chars",
+                                        comment_text.len()
+                                    );
+                                    break;
+                                }
+                            }
+                            if comment_text.is_empty() {
+                                warn!(
+                                    "notion webhook comment_id={} not found in {} comments on page",
+                                    comment_id,
+                                    results.len()
+                                );
+                            }
                         }
-                        info!(
-                            "notion webhook fetched comment text: {} chars, author={}",
-                            comment_text.len(),
-                            c.author_name
-                        );
-                        break;
                     }
-                }
-                if comment_text.is_empty() {
+                } else {
                     warn!(
-                        "notion webhook comment_id={} not found in {} comments on page",
-                        comment_id,
-                        comments.len()
+                        "notion webhook API returned status {}: {:?}",
+                        resp.status(),
+                        resp.text()
                     );
                 }
             }
