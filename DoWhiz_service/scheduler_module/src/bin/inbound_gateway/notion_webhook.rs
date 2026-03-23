@@ -433,12 +433,13 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    let credential = match notion_store.get_credential_by_bot_id(&payload.integration_id) {
+    // Look up credential by workspace_id (not integration_id, which is the public integration ID)
+    let credential = match notion_store.get_credential_by_workspace(&payload.workspace_id) {
         Ok(cred) => cred,
         Err(e) => {
             warn!(
-                "notion webhook no credential found for integration_id={}: {}",
-                payload.integration_id, e
+                "notion webhook no credential found for workspace_id={}: {}",
+                payload.workspace_id, e
             );
             return (
                 StatusCode::OK,
