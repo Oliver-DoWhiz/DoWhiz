@@ -17,6 +17,11 @@ VM shortcuts:
 - Staging VM: `ssh dowhizstaging`
 - Use Azure CLI for management of Azure resources (will let you know if `az login` has been completed).
 
+Historical `RunTask` debugging:
+- Start with `DoWhiz_service/docs/task_debug_archives.md` for any active or historical task-run investigation.
+- Use Mongo collection `task_debug_archives` as the durable lookup table from `task_id + execution_id` to the Azure blob zip or `local_fallback_path`.
+- On staging, `service_real_email` should set `POSTMARK_SMTP_PORT=2525`; stop `dw_gateway` and `dw_worker` first if the test needs ports `9100` and `9001`.
+
 ## Runtime Configuration Policy (Source of Truth)
 
 - Runtime services load **unprefixed** keys from `DoWhiz_service/.env`.

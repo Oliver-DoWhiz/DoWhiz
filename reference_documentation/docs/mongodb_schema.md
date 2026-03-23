@@ -144,6 +144,65 @@ db.task_executions.createIndex(
 
 ### 4. `task_index` (keep in v1 for scheduler parity)
 
+### 4. `task_debug_archives`
+
+Per-execution lookup table for historical task debug bundles. This is the durable mapping from a
+task execution to the Azure Blob zip (or local fallback path) that preserves enough context to
+reconstruct/debug a past run after the Azure ACI container is gone.
+
+```javascript
+{
+  _id: ObjectId,
+  owner_scope: { kind: String, id: String },
+  task_id: String,
+  execution_id: NumberLong,
+  archive_type: "full_debug_bundle",
+  archive_version: NumberInt,
+  status: String,                   // "uploaded" | "upload_failed" | "local_only"
+  storage_backend: String,
+  storage_account: String,          // nullable, actual Azure account used for upload
+  blob_container: String,           // nullable
+  blob_path: String,                // nullable
+  blob_reference: String,           // nullable, precise azure://account/container/path reference
+  local_fallback_path: String,      // nullable
+  sha256: String,
+  size_bytes: NumberLong,
+  runner: String,
+  model: String,
+  deploy_target: String,
+  started_at: ISODate,
+  finished_at: ISODate,
+  duration_ms: NumberLong,
+  archive_build_duration_ms: NumberLong,
+  upload_duration_ms: NumberLong,
+  workspace_before_file_count: NumberLong,
+  workspace_after_file_count: NumberLong,
+  redacted_file_count: NumberLong,
+  skipped_file_count: NumberLong,
+  has_workspace_before: Boolean,
+  has_workspace_after: Boolean,
+  has_run_task_trace: Boolean,
+  has_aci_logs: Boolean,
+  error_summary: String,            // nullable, task execution failure summary
+  created_at: ISODate
+}
+```
+
+Indexes:
+
+```javascript
+db.task_debug_archives.createIndex(
+  { "owner_scope.kind": 1, "owner_scope.id": 1, task_id: 1, execution_id: 1 },
+  { unique: true }
+);
+db.task_debug_archives.createIndex(
+  { "owner_scope.kind": 1, "owner_scope.id": 1, task_id: 1, created_at: -1 }
+);
+db.task_debug_archives.createIndex({ status: 1, created_at: -1 });
+```
+
+### 5. `task_index` (keep in v1 for scheduler parity)
+
 Keep this materialized view in Mongo for low-risk scheduler migration.
 
 ```javascript
@@ -166,7 +225,7 @@ db.task_index.createIndex(
 db.task_index.createIndex({ enabled: 1, next_run: 1 });
 ```
 
-### 5. `account_task_views` (replace account shadow `tasks.db`)
+### 6. `account_task_views` (replace account shadow `tasks.db`)
 
 Current code writes duplicate task rows into account-level Legacy Local DB to power `/api/account/tasks`. Replace that with an explicit read model, not duplicated runnable tasks.
 

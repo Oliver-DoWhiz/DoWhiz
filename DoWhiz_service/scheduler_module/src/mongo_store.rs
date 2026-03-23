@@ -77,6 +77,7 @@ pub fn bootstrap_indexes_from_env() -> Result<(), MongoStoreError> {
     ensure_users_indexes(&db)?;
     ensure_tasks_indexes(&db)?;
     ensure_task_executions_indexes(&db)?;
+    ensure_task_debug_archives_indexes(&db)?;
     ensure_task_index_indexes(&db)?;
     ensure_account_task_views_indexes(&db)?;
     ensure_slack_installation_indexes(&db)?;
@@ -263,6 +264,40 @@ fn ensure_task_executions_indexes(db: &Database) -> Result<(), mongodb::error::E
         &collection,
         IndexModel::builder()
             .keys(doc! { "started_at": -1 })
+            .build(),
+    )?;
+    Ok(())
+}
+
+fn ensure_task_debug_archives_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
+    let collection = db.collection::<Document>("task_debug_archives");
+    ensure_index_compatible(
+        &collection,
+        IndexModel::builder()
+            .keys(doc! {
+                "owner_scope.kind": 1,
+                "owner_scope.id": 1,
+                "task_id": 1,
+                "execution_id": 1
+            })
+            .options(IndexOptions::builder().unique(Some(true)).build())
+            .build(),
+    )?;
+    ensure_index_compatible(
+        &collection,
+        IndexModel::builder()
+            .keys(doc! {
+                "owner_scope.kind": 1,
+                "owner_scope.id": 1,
+                "task_id": 1,
+                "created_at": -1
+            })
+            .build(),
+    )?;
+    ensure_index_compatible(
+        &collection,
+        IndexModel::builder()
+            .keys(doc! { "status": 1, "created_at": -1 })
             .build(),
     )?;
     Ok(())

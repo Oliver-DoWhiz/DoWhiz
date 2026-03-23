@@ -23,6 +23,7 @@ use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
+use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
 use super::utils::{run_command_with_timeout, run_task_timeout, tail_string};
 use super::workspace::{canonicalize_dir, workspace_path_in_container};
@@ -192,6 +193,13 @@ struct AzureAciConfig {
     container_share_root: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct AzureAciExecutionArtifacts {
+    container_state: String,
+    container_logs: String,
+    container_show_json: Option<String>,
+}
+
 /// Check if cross-channel routing was requested and return the correct expected reply path.
 /// If reply_routing.json specifies a different target channel, compute the expected file for that target.
 fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> PathBuf {
@@ -353,9 +361,63 @@ pub(super) fn run_codex_task(
         request.user_identities,
     );
 
+    let mut trace_env_overrides = vec![
+        (
+            "AZURE_OPENAI_API_KEY_BACKUP".to_string(),
+            api_key.to_string(),
+        ),
+        (
+            "AZURE_OPENAI_ENDPOINT_BACKUP".to_string(),
+            azure_endpoint.to_string(),
+        ),
+    ];
+    if let Some(token) = request.google_access_token {
+        trace_env_overrides.push(("GOOGLE_ACCESS_TOKEN".to_string(), token.to_string()));
+        trace_env_overrides.push(("GOOGLE_WORKSPACE_CLI_TOKEN".to_string(), token.to_string()));
+    }
+    for (key, value) in &payment_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &bright_data_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &google_workspace_cli_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &human_approval_gate_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &github_auth.env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+
     let timeout = run_task_timeout();
+    let mut trace = RunTaskTraceRecorder::new(
+        request.workspace_dir,
+        runner,
+        if use_docker {
+            "codex_docker"
+        } else {
+            "codex_local"
+        },
+        &model_name,
+        &prompt,
+        timeout,
+        serde_json::json!({
+            "reply_expected": !request.reply_to.is_empty(),
+            "sandbox_mode": sandbox_mode.clone(),
+            "bypass_sandbox": bypass_sandbox,
+            "use_docker": use_docker,
+            "docker_image": if use_docker { serde_json::Value::String(docker_image.clone()) } else { serde_json::Value::Null },
+            "add_dirs": add_dirs.clone(),
+        }),
+        &trace_env_overrides,
+    )?;
     let output = if use_docker {
-        ensure_docker_image_available(&docker_image)?;
+        if let Err(err) = ensure_docker_image_available(&docker_image) {
+            let _ = trace.finish(None, false, Some(&err.to_string()), None);
+            return Err(err);
+        }
         let host_workspace_dir = host_workspace_dir
             .as_ref()
             .ok_or(RunTaskError::MissingEnv {
@@ -494,9 +556,14 @@ pub(super) fn run_codex_task(
         match run_command_with_timeout(cmd, timeout, "docker run") {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
-                return Err(RunTaskError::DockerNotFound)
+                let failure = RunTaskError::DockerNotFound;
+                let _ = trace.finish(None, false, Some(&failure.to_string()), None);
+                return Err(failure);
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                let _ = trace.finish(None, false, Some(&err.to_string()), None);
+                return Err(err);
+            }
         }
     } else {
         let mut cmd = Command::new("codex");
@@ -580,9 +647,14 @@ pub(super) fn run_codex_task(
         match run_command_with_timeout(cmd, timeout, "codex") {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
-                return Err(RunTaskError::CodexNotFound)
+                let failure = RunTaskError::CodexNotFound;
+                let _ = trace.finish(None, false, Some(&failure.to_string()), None);
+                return Err(failure);
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                let _ = trace.finish(None, false, Some(&err.to_string()), None);
+                return Err(err);
+            }
         }
     };
 
@@ -591,6 +663,7 @@ pub(super) fn run_codex_task(
     let mut combined_output = String::new();
     combined_output.push_str(&stdout_output);
     combined_output.push_str(&stderr_output);
+    let _ = trace.record_outputs(&stdout_output, &stderr_output, &combined_output);
 
     let (scheduled_tasks, scheduled_tasks_error, scheduler_actions, scheduler_actions_error) =
         parse_scheduling_from_outputs(
@@ -603,7 +676,7 @@ pub(super) fn run_codex_task(
     let output_tail = tail_string(&combined_output, 2000);
 
     if !output.status.success() {
-        return Err(if use_docker {
+        let err = if use_docker {
             RunTaskError::DockerFailed {
                 status: output.status.code(),
                 output: output_tail.clone(),
@@ -613,7 +686,14 @@ pub(super) fn run_codex_task(
                 status: output.status.code(),
                 output: output_tail.clone(),
             }
-        });
+        };
+        let _ = trace.finish(
+            output.status.code(),
+            false,
+            Some(&err.to_string()),
+            token_usage.as_ref(),
+        );
+        return Err(err);
     }
 
     // Codex can return process exit code 0 while reporting turn/task failure in JSON events.
@@ -627,7 +707,7 @@ pub(super) fn run_codex_task(
             failure_output.push('\n');
             failure_output.push_str(&output_tail);
         }
-        return Err(if use_docker {
+        let err = if use_docker {
             RunTaskError::DockerFailed {
                 status,
                 output: failure_output,
@@ -637,7 +717,9 @@ pub(super) fn run_codex_task(
                 status,
                 output: failure_output,
             }
-        });
+        };
+        let _ = trace.finish(status, false, Some(&err.to_string()), token_usage.as_ref());
+        return Err(err);
     }
 
     // Only check for reply file if a reply was expected
@@ -645,11 +727,20 @@ pub(super) fn run_codex_task(
     let expected_reply_path =
         resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
     if !request.reply_to.is_empty() && !expected_reply_path.exists() {
-        return Err(RunTaskError::OutputMissing {
+        let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail.clone(),
-        });
+        };
+        let _ = trace.finish(
+            output.status.code(),
+            false,
+            Some(&err.to_string()),
+            token_usage.as_ref(),
+        );
+        return Err(err);
     }
+    let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
+    let _ = trace.finish(output.status.code(), true, None, token_usage.as_ref());
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,
@@ -868,6 +959,33 @@ fn run_codex_task_azure_aci(
     }
 
     let container_name = build_aci_container_name();
+    let timeout = run_task_timeout();
+    let mut trace = RunTaskTraceRecorder::new(
+        request.workspace_dir,
+        runner,
+        "codex_azure_aci",
+        &model_name,
+        &prompt,
+        timeout,
+        serde_json::json!({
+            "reply_expected": !request.reply_to.is_empty(),
+            "sandbox_mode": sandbox_mode.clone(),
+            "bypass_sandbox": bypass_sandbox,
+            "container_name": container_name.clone(),
+            "resource_group": config.resource_group.clone(),
+            "image": config.image.clone(),
+            "cpu": config.cpu.clone(),
+            "memory_gb": config.memory_gb.clone(),
+            "file_share": config.file_share.clone(),
+            "host_workspace_dir": host_workspace_dir.to_string_lossy().into_owned(),
+            "container_workspace_dir": container_workspace_dir.to_string_lossy().into_owned(),
+            "add_dirs": add_dirs.clone(),
+        }),
+        &env_overrides,
+    )?;
+    let _ = trace.record_text("aci/prompt_path.txt", &prompt_path.to_string_lossy());
+    let env_override_keys: Vec<&str> = env_overrides.iter().map(|(key, _)| key.as_str()).collect();
+    let _ = trace.record_json("aci/env_override_keys.json", &env_override_keys);
     // Register container BEFORE creation so it gets cleaned up on shutdown
     // even if creation succeeds but execution fails partway through
     register_aci_container(&container_name);
@@ -875,7 +993,6 @@ fn run_codex_task_azure_aci(
         "[run_task] azure_aci create container={} resource_group={} image={}",
         container_name, config.resource_group, config.image
     );
-    let timeout = run_task_timeout();
     let execution = run_azure_aci_execution(
         &config,
         &container_name,
@@ -908,58 +1025,91 @@ fn run_codex_task_azure_aci(
         );
     }
     deregister_aci_container(&container_name);
-
-    let (container_state, container_logs) = execution?;
-    eprintln!(
-        "[run_task] azure_aci finished container={} state={}",
-        container_name, container_state
-    );
     let output_content = fs::read_to_string(&remote_output_path).unwrap_or_default();
     let exit_status = read_remote_exit_code(&remote_exit_code_path);
+    if remote_output_path.exists() {
+        let _ = trace.copy_file(&remote_output_path, "aci/remote_output.log");
+    }
+    if remote_exit_code_path.exists() {
+        let _ = trace.copy_file(&remote_exit_code_path, "aci/remote_exit_code.txt");
+    }
+    let execution = match execution {
+        Ok(execution) => execution,
+        Err(err) => {
+            let _ = trace.record_text("logs/combined.log", &output_content);
+            let _ = trace.finish(exit_status, false, Some(&err.to_string()), None);
+            return Err(err);
+        }
+    };
+    eprintln!(
+        "[run_task] azure_aci finished container={} state={}",
+        container_name, execution.container_state
+    );
+    if let Some(show_json) = execution.container_show_json.as_deref() {
+        let _ = trace.record_text("aci/container_show.json", show_json);
+    }
+    let _ = trace.record_text("aci/container_logs.txt", &execution.container_logs);
 
     let mut combined_output = String::new();
     combined_output.push_str(&output_content);
-    if !container_logs.trim().is_empty() {
+    if !execution.container_logs.trim().is_empty() {
         if !combined_output.trim().is_empty() {
             combined_output.push('\n');
         }
-        combined_output.push_str(&container_logs);
+        combined_output.push_str(&execution.container_logs);
     }
+    let _ = trace.record_outputs(&output_content, &execution.container_logs, &combined_output);
 
     let (scheduled_tasks, scheduled_tasks_error, scheduler_actions, scheduler_actions_error) =
         parse_scheduling_from_outputs(
             &output_content,
-            &container_logs,
+            &execution.container_logs,
             &combined_output,
             request.workspace_dir,
         );
     let token_usage = extract_token_usage(&combined_output);
     let output_tail = tail_string(&combined_output, 4000);
 
-    if container_state != "Succeeded" || exit_status != Some(0) {
-        return Err(RunTaskError::CodexFailed {
+    if execution.container_state != "Succeeded" || exit_status != Some(0) {
+        let err = RunTaskError::CodexFailed {
             status: exit_status,
             output: format!(
                 "azure_aci_state={}{}\n{}",
-                container_state,
+                execution.container_state,
                 match exit_status {
                     Some(code) => format!(" exit_code={code}"),
                     None => String::new(),
                 },
                 output_tail
             ),
-        });
+        };
+        let _ = trace.finish(
+            exit_status,
+            false,
+            Some(&err.to_string()),
+            token_usage.as_ref(),
+        );
+        return Err(err);
     }
 
     // Use cross-channel routing to determine actual expected path
     let expected_reply_path =
         resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
     if !request.reply_to.is_empty() && !expected_reply_path.exists() {
-        return Err(RunTaskError::OutputMissing {
+        let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail,
-        });
+        };
+        let _ = trace.finish(
+            exit_status,
+            false,
+            Some(&err.to_string()),
+            token_usage.as_ref(),
+        );
+        return Err(err);
     }
+    let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
+    let _ = trace.finish(exit_status, true, None, token_usage.as_ref());
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,
@@ -1124,7 +1274,7 @@ fn run_azure_aci_execution(
     bypass_sandbox: bool,
     env_overrides: &[(String, String)],
     timeout: Duration,
-) -> Result<(String, String), RunTaskError> {
+) -> Result<AzureAciExecutionArtifacts, RunTaskError> {
     let workspace_sh = shell_quote(&container_workspace_dir.to_string_lossy());
     let output_file = shell_quote(
         &container_workspace_dir
@@ -1277,7 +1427,12 @@ exit \"$status\"\n",
     let poll_timeout = timeout.saturating_sub(elapsed_after_create);
     let container_state = poll_aci_state(config, container_name, poll_timeout)?;
     let logs = fetch_aci_logs(config, container_name).unwrap_or_default();
-    Ok((container_state, logs))
+    let container_show_json = fetch_aci_show_json(config, container_name).ok();
+    Ok(AzureAciExecutionArtifacts {
+        container_state,
+        container_logs: logs,
+        container_show_json,
+    })
 }
 
 fn poll_aci_state(
@@ -1358,6 +1513,31 @@ fn fetch_aci_logs(config: &AzureAciConfig, container_name: &str) -> Result<Strin
     let output = run_command_with_timeout(logs_cmd, Duration::from_secs(120), "az container logs")?;
     if !output.status.success() {
         return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn fetch_aci_show_json(
+    config: &AzureAciConfig,
+    container_name: &str,
+) -> Result<String, RunTaskError> {
+    let mut show_cmd = Command::new("az");
+    show_cmd
+        .arg("container")
+        .arg("show")
+        .arg("--name")
+        .arg(container_name)
+        .arg("--resource-group")
+        .arg(&config.resource_group)
+        .arg("--only-show-errors")
+        .arg("--output")
+        .arg("json");
+    let output = run_command_with_timeout(show_cmd, Duration::from_secs(120), "az container show")?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

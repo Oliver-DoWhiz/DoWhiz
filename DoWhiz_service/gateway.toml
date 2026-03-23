@@ -54,3 +54,17 @@ channel = "notion"
 key = "*"
 employee_id = "little_bear"
 tenant_id = "default"
+
+# WeChat Work routing
+[[routes]]
+channel = "wechat"
+key = "*"
+employee_id = "little_bear"
+tenant_id = "default"
+
+# WhatsApp routing
+[[routes]]
+channel = "whatsapp"
+key = "*"
+employee_id = "little_bear"
+tenant_id = "default"

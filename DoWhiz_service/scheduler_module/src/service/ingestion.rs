@@ -131,27 +131,27 @@ fn process_ingestion_envelope(
             let (payload, raw_payload) = resolve_email_payload(envelope)?;
             let subject = payload.subject.as_deref().unwrap_or("");
 
-            // Check if this looks like a forwarded Notion notification (by subject pattern)
-            // This allows self-forwarded Notion emails to pass the blacklist
-            let looks_like_notion = subject.contains("mentioned you")
+            // Notion notifications via email are DISABLED - webhook is the primary path.
+            // Skip all Notion notification emails entirely.
+            let looks_like_notion_notification = subject.contains("mentioned you")
                 || subject.contains("replied to")
                 || subject.contains("commented in")
                 || subject.contains("commented on")
                 || subject.contains("发表了评论")
                 || subject.contains("中提及了您");
 
-            let sender = envelope.payload.sender.trim();
-            if !looks_like_notion
-                && is_blacklisted_email_sender(sender, &config.employee_directory.service_addresses)
-            {
-                info!("skipping blacklisted sender: {}", sender);
+            if looks_like_notion_notification {
+                info!(
+                    "skipping Notion email notification (webhook is primary path): subject={}",
+                    subject
+                );
                 return Ok(());
             }
-            if looks_like_notion && is_blacklisted_email_sender(sender, &config.employee_directory.service_addresses) {
-                info!(
-                    "allowing forwarded Notion email from blacklisted sender: {} (subject: {})",
-                    sender, subject
-                );
+
+            let sender = envelope.payload.sender.trim();
+            if is_blacklisted_email_sender(sender, &config.employee_directory.service_addresses) {
+                info!("skipping blacklisted sender: {}", sender);
+                return Ok(());
             }
             if is_human_approval_gate_subject(subject) {
                 info!(

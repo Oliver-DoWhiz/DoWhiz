@@ -356,6 +356,21 @@ impl NotionWebhookPayload {
     pub fn is_comment_created(&self) -> bool {
         matches!(self.event_type, Some(NotionEventType::CommentCreated))
     }
+
+    /// Check if any author is a bot (regardless of which bot).
+    ///
+    /// This prevents cross-environment triggers where one employee's bot reply
+    /// triggers another employee's webhook handler.
+    pub fn is_from_any_bot(&self) -> bool {
+        if let Some(authors) = &self.authors {
+            for author in authors {
+                if author.author_type == "bot" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Check if this webhook is for our environment's integration.
@@ -474,6 +489,18 @@ pub async fn ingest_notion_webhook(
         );
     }
 
+    // Also filter out comments from ANY bot (not just our own)
+    // This prevents cross-environment triggers (e.g., prod Oliver triggering staging Boiled-Egg)
+    if payload.is_from_any_bot() {
+        info!(
+            "notion webhook from bot author (ignoring to prevent cross-env trigger)"
+        );
+        return (
+            StatusCode::OK,
+            Json(json!({"status": "ignored", "reason": "bot_author"})),
+        );
+    }
+
     // Build routing decision based on employee directory
     let route = resolve_notion_route(&payload, &credential, &state);
     let Some(route) = route else {
@@ -485,12 +512,78 @@ pub async fn ingest_notion_webhook(
     };
 
     // Extract message details
-    let comment_text = payload.extract_comment_text();
+    let mut comment_text = payload.extract_comment_text();
     let page_id = payload.get_page_id().unwrap_or_else(|| "unknown".to_string());
     let comment_id = payload.get_comment_id().unwrap_or_else(|| payload.id.clone());
     let discussion_id = payload.get_discussion_id().unwrap_or_else(|| comment_id.clone());
-    let author_name = payload.author_name();
+    let mut author_name = payload.author_name();
     let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
+
+    // Notion webhook v2 doesn't include comment text in payload - need to fetch via API
+    if comment_text.is_empty() && page_id != "unknown" {
+        info!(
+            "notion webhook comment text empty, fetching via API: page_id={} comment_id={}",
+            page_id, comment_id
+        );
+        // Use reqwest directly with the credential's access token
+        let http_client = reqwest::blocking::Client::new();
+        let url = format!("https://api.notion.com/v1/comments?block_id={}", page_id);
+        match http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", credential.access_token))
+            .header("Notion-Version", "2022-06-28")
+            .send()
+        {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>() {
+                        if let Some(results) = data["results"].as_array() {
+                            for c in results {
+                                let cid = c["id"].as_str().unwrap_or("");
+                                if cid == comment_id {
+                                    // Extract plain text from rich_text array
+                                    if let Some(rich_text) = c["rich_text"].as_array() {
+                                        comment_text = rich_text
+                                            .iter()
+                                            .filter_map(|rt| rt["plain_text"].as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("");
+                                    }
+                                    // Extract author name
+                                    if author_name.is_none() {
+                                        if let Some(name) = c["created_by"]["name"].as_str() {
+                                            author_name = Some(name.to_string());
+                                        }
+                                    }
+                                    info!(
+                                        "notion webhook fetched comment text: {} chars",
+                                        comment_text.len()
+                                    );
+                                    break;
+                                }
+                            }
+                            if comment_text.is_empty() {
+                                warn!(
+                                    "notion webhook comment_id={} not found in {} comments on page",
+                                    comment_id,
+                                    results.len()
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    warn!(
+                        "notion webhook API returned status {}: {:?}",
+                        resp.status(),
+                        resp.text()
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("notion webhook failed to fetch comments via API: {}", e);
+            }
+        }
+    }
 
     // Log payload structure for debugging
     info!(

@@ -44,6 +44,24 @@ Raw payload download auth for Azure Blob can use any one of:
 - `AZURE_STORAGE_CONTAINER_INGEST` + `AZURE_STORAGE_SAS_TOKEN` + `AZURE_STORAGE_ACCOUNT`
 - `AZURE_STORAGE_CONNECTION_STRING_INGEST` (or `AZURE_STORAGE_CONNECTION_STRING`)
 
+Task debug archive bundles can either reuse the same Azure auth chain or use a dedicated archive
+container:
+- `TASK_DEBUG_ARCHIVE_ENABLED=1` (default enabled)
+- optional dedicated container name: `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES`
+- optional dedicated container SAS URL: `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL`
+
+Recommended staging/prod policy:
+- Keep task debug archives enabled so historical `RunTask` investigations remain possible after an
+  Azure ACI container is deleted.
+- Prefer a dedicated archive container when retention/ACL needs differ from raw ingest.
+- Provision the dedicated archive container in every storage account that might be used by the
+  configured auth chain, or set `AZURE_STORAGE_CONTAINER_TASK_DEBUG_ARCHIVES_SAS_URL` explicitly so
+  the worker does not need to guess.
+- If Azure upload fails, the worker falls back to a local zip under `.task_debug_archives_failed/`
+  and records the local path in Mongo collection `task_debug_archives`.
+- For the actual Mongo lookup, blob download, and zip-inspection workflow, see
+  `DoWhiz_service/docs/task_debug_archives.md`.
+
 Staging ingest isolation policy:
 - Use a staging-dedicated storage account for raw payload ingress.
 - Current staging account: `dwhzoliverstg26261234`
@@ -78,7 +96,7 @@ PM2 is the only process supervisor for DoWhiz.
 ### Staging (`dev`)
 ```bash
 ssh dowhizstaging
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 set -a
 source .env
 set +a
@@ -92,7 +110,7 @@ pm2 list
 ### Production (`main`)
 ```bash
 ssh dowhizprod1
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 set -a
 source .env
 set +a
@@ -167,6 +185,9 @@ RUN_CODEX_E2E=1 POSTMARK_LIVE_TEST=1 cargo test -p scheduler_module --test servi
 ```
 
 If SMTP 25 is blocked on the VM, set `POSTMARK_SMTP_PORT=2525` in `.env`.
+
+If running this test on a VM that already has PM2-managed `dw_gateway` and `dw_worker`, stop them
+first so the test can bind `9100` and `9001`, then restart them afterwards.
 
 ## 7) Rollback
 

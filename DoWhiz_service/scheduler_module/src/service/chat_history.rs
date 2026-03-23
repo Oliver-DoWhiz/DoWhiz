@@ -10,7 +10,9 @@ use axum::Json;
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use reqwest::blocking::Client;
+use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde::{Deserialize, Serialize};
+use std::time::Duration as StdDuration;
 
 use super::state::AppState;
 use super::{BoxError, ServiceConfig};
@@ -30,6 +32,9 @@ const CHAT_HISTORY_SLACK_MAX_THREAD_PAGES_ENV: &str = "CHAT_HISTORY_SLACK_MAX_TH
 const CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL_ENV: &str =
     "CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL";
 const CHAT_HISTORY_DISCORD_MAX_CHANNELS_ENV: &str = "CHAT_HISTORY_DISCORD_MAX_CHANNELS";
+const CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES_ENV: &str = "CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES";
+const CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS_ENV: &str =
+    "CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS";
 
 const DEFAULT_SCOPE_TTL_MINUTES: i64 = 12 * 60;
 const DEFAULT_SEARCH_RESULT_LIMIT: usize = 20;
@@ -37,8 +42,11 @@ const MAX_SEARCH_RESULT_LIMIT: usize = 100;
 const MAX_QUERY_CHARS: usize = 240;
 const DEFAULT_SLACK_MAX_HISTORY_PAGES: usize = 100;
 const DEFAULT_SLACK_MAX_THREAD_PAGES: usize = 20;
+const DISCORD_OFFICIAL_SEARCH_PAGE_LIMIT: usize = 25;
 const DEFAULT_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL: usize = 40;
 const DEFAULT_DISCORD_MAX_CHANNELS: usize = 200;
+const DEFAULT_DISCORD_RATE_LIMIT_RETRIES: usize = 3;
+const DEFAULT_DISCORD_RATE_LIMIT_FALLBACK_MS: u64 = 1_500;
 const DISCORD_TEXT_CHANNEL_TYPES: &[u8] = &[0, 5, 10, 11, 12, 15];
 const AZURE_ACI_EXECUTION_BACKEND: &str = "azure_aci";
 
@@ -55,6 +63,14 @@ enum ChatHistoryScopeMode {
     CurrentConversation,
     CurrentGuild,
     DirectMessage,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ChatHistorySearchEngine {
+    SlackConversationsApi,
+    DiscordOfficialSearch,
+    DiscordChannelScan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +147,9 @@ pub(crate) struct ChatHistorySearchResponse {
     scope_mode: ChatHistoryScopeMode,
     query: String,
     limit: usize,
+    engine: ChatHistorySearchEngine,
+    #[serde(default, skip_serializing_if = "is_false")]
+    fallback_used: bool,
     searched_channels: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -253,6 +272,60 @@ struct DiscordAuthor {
 #[derive(Debug, Deserialize)]
 struct DiscordAttachment {
     filename: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordOfficialSearchResponse {
+    #[serde(default)]
+    messages: Vec<Vec<DiscordOfficialSearchMessage>>,
+    #[serde(default)]
+    doing_deep_historical_index: bool,
+    #[serde(default)]
+    total_results: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordOfficialSearchMessage {
+    id: String,
+    channel_id: String,
+    #[serde(default)]
+    content: String,
+    timestamp: String,
+    author: DiscordAuthor,
+    #[serde(default)]
+    attachments: Vec<DiscordAttachment>,
+    #[serde(default)]
+    thread: Option<DiscordThreadReference>,
+    #[serde(default)]
+    hit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordThreadReference {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordSearchIndexNotReadyPayload {
+    #[serde(default)]
+    documents_indexed: Option<usize>,
+    #[serde(default)]
+    retry_after: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordRateLimitPayload {
+    #[serde(default)]
+    retry_after: Option<f64>,
+}
+
+#[derive(Debug)]
+struct DiscordSearchOutcome {
+    engine: ChatHistorySearchEngine,
+    fallback_used: bool,
+    searched_channels: usize,
+    warnings: Vec<String>,
+    results: Vec<ChatHistoryMatch>,
 }
 
 pub(crate) fn write_slack_chat_history_scope_file(
@@ -481,6 +554,8 @@ fn execute_chat_history_search(
                 scope_mode: claims.scope_mode,
                 query: query.to_string(),
                 limit,
+                engine: ChatHistorySearchEngine::SlackConversationsApi,
+                fallback_used: false,
                 searched_channels: 1,
                 warnings: Vec::new(),
                 results,
@@ -499,7 +574,7 @@ fn execute_chat_history_search(
                     "discord bot token is not configured",
                 )
             })?;
-            let (results, searched_channels, warnings) = search_discord_history(
+            let outcome = search_discord_history(
                 &token,
                 &discord,
                 request.channel_id.as_deref(),
@@ -517,9 +592,11 @@ fn execute_chat_history_search(
                 scope_mode: claims.scope_mode,
                 query: query.to_string(),
                 limit,
-                searched_channels,
-                warnings,
-                results,
+                engine: outcome.engine,
+                fallback_used: outcome.fallback_used,
+                searched_channels: outcome.searched_channels,
+                warnings: outcome.warnings,
+                results: outcome.results,
             })
         }
     }
@@ -735,6 +812,10 @@ fn format_unix_ts(seconds: usize) -> Result<String, BoxError> {
     Ok(dt.to_rfc3339())
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn history_client() -> Result<Client, BoxError> {
     Ok(Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -767,6 +848,19 @@ fn discord_max_channels() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_DISCORD_MAX_CHANNELS)
+}
+
+fn discord_rate_limit_retries() -> usize {
+    env_trimmed(CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES_ENV)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_DISCORD_RATE_LIMIT_RETRIES)
+}
+
+fn discord_rate_limit_fallback_delay() -> StdDuration {
+    let millis = env_trimmed(CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS_ENV)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_DISCORD_RATE_LIMIT_FALLBACK_MS);
+    StdDuration::from_millis(millis)
 }
 
 fn search_slack_channel_history(
@@ -965,15 +1059,285 @@ fn search_discord_history(
     requested_channel_id: Option<&str>,
     query: &str,
     limit: usize,
+) -> Result<DiscordSearchOutcome, BoxError> {
+    let api_base = env_trimmed("DISCORD_API_BASE_URL")
+        .unwrap_or_else(|| "https://discord.com/api/v10".to_string());
+    let client = history_client()?;
+    let mut warnings = Vec::new();
+
+    let validated_channel_id = validate_requested_discord_channel_in_scope(
+        &client,
+        api_base.as_str(),
+        bot_token,
+        scope,
+        requested_channel_id,
+        &mut warnings,
+    )?;
+
+    if scope.guild_id.is_some() {
+        if let Some((results, searched_channels)) = try_search_discord_history_with_official_search(
+            &client,
+            api_base.as_str(),
+            bot_token,
+            scope,
+            validated_channel_id.as_deref(),
+            query,
+            limit,
+            &mut warnings,
+        )? {
+            return Ok(DiscordSearchOutcome {
+                engine: ChatHistorySearchEngine::DiscordOfficialSearch,
+                fallback_used: false,
+                searched_channels,
+                warnings,
+                results,
+            });
+        }
+    }
+
+    let (results, searched_channels, scan_warnings) =
+        search_discord_history_via_channel_scan_with_client(
+            &client,
+            api_base.as_str(),
+            bot_token,
+            scope,
+            validated_channel_id.as_deref().or(requested_channel_id),
+            query,
+            limit,
+        )?;
+    let fallback_used = scope.guild_id.is_some();
+    warnings.extend(scan_warnings);
+    Ok(DiscordSearchOutcome {
+        engine: ChatHistorySearchEngine::DiscordChannelScan,
+        fallback_used,
+        searched_channels,
+        warnings,
+        results,
+    })
+}
+
+fn validate_requested_discord_channel_in_scope(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    scope: &DiscordScopeGrant,
+    requested_channel_id: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<Option<String>, BoxError> {
+    let requested = requested_channel_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+
+    resolve_discord_search_channels(
+        client,
+        api_base,
+        bot_token,
+        scope,
+        Some(&requested),
+        warnings,
+    )?;
+    Ok(Some(requested))
+}
+
+fn try_search_discord_history_with_official_search(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    scope: &DiscordScopeGrant,
+    requested_channel_id: Option<&str>,
+    query: &str,
+    limit: usize,
+    warnings: &mut Vec<String>,
+) -> Result<Option<(Vec<ChatHistoryMatch>, usize)>, BoxError> {
+    let Some(guild_id) = scope.guild_id else {
+        return Ok(None);
+    };
+
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    let mut offset = 0usize;
+    let mut deep_index_warning_emitted = false;
+
+    while results.len() < limit {
+        let page_limit = (limit - results.len()).min(DISCORD_OFFICIAL_SEARCH_PAGE_LIMIT);
+        if page_limit == 0 {
+            break;
+        }
+
+        let mut attempts = 0usize;
+        let response = loop {
+            let mut query_params = vec![
+                ("content", query.to_string()),
+                ("limit", page_limit.to_string()),
+                ("offset", offset.to_string()),
+                ("sort_by", "timestamp".to_string()),
+                ("sort_order", "desc".to_string()),
+            ];
+            if let Some(channel_id) = requested_channel_id {
+                query_params.push(("channel_id", channel_id.to_string()));
+            }
+            let response = client
+                .get(format!(
+                    "{}/guilds/{guild_id}/messages/search",
+                    api_base.trim_end_matches('/')
+                ))
+                .header("Authorization", format!("Bot {bot_token}"))
+                .query(&query_params)
+                .send();
+
+            let response = match response {
+                Ok(response) => response,
+                Err(err) => {
+                    warnings.push(format!(
+                        "Discord official guild search failed to reach Discord ({err}); falling back to scoped channel scan."
+                    ));
+                    return Ok(None);
+                }
+            };
+
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let headers = response.headers().clone();
+                let body = response.text().unwrap_or_default();
+                if attempts < discord_rate_limit_retries() {
+                    attempts += 1;
+                    std::thread::sleep(discord_rate_limit_delay(&headers, &body));
+                    continue;
+                }
+                warnings.push(
+                    "Discord official guild search hit repeated rate limits; falling back to scoped channel scan."
+                        .to_string(),
+                );
+                return Ok(None);
+            }
+
+            break response;
+        };
+
+        match response.status() {
+            reqwest::StatusCode::ACCEPTED => {
+                let body = response.text().unwrap_or_default();
+                if let Ok(payload) =
+                    serde_json::from_str::<DiscordSearchIndexNotReadyPayload>(&body)
+                {
+                    warnings.push(format!(
+                        "Discord official guild search index is not ready yet (documents_indexed={}, retry_after={}s); falling back to scoped channel scan.",
+                        payload.documents_indexed.unwrap_or(0),
+                        payload.retry_after.unwrap_or(0.0)
+                    ));
+                } else {
+                    warnings.push(
+                        "Discord official guild search index is not ready yet; falling back to scoped channel scan."
+                            .to_string(),
+                    );
+                }
+                return Ok(None);
+            }
+            status if status.is_success() => {
+                let payload: DiscordOfficialSearchResponse = match response.json() {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warnings.push(format!(
+                            "Discord official guild search returned an unreadable payload ({err}); falling back to scoped channel scan."
+                        ));
+                        return Ok(None);
+                    }
+                };
+                if payload.doing_deep_historical_index && !deep_index_warning_emitted {
+                    warnings.push(
+                        "Discord official guild search is still deep-indexing older messages; the result set may be incomplete."
+                            .to_string(),
+                    );
+                    deep_index_warning_emitted = true;
+                }
+
+                let page_count = payload.messages.len();
+                for group in payload.messages {
+                    for message in group.into_iter().filter(|message| message.hit) {
+                        let key = format!("{}:{}", message.channel_id, message.id);
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        let text =
+                            discord_search_message_text(&message.content, &message.attachments);
+                        results.push(ChatHistoryMatch {
+                            channel_id: message.channel_id,
+                            channel_name: None,
+                            message_id: message.id,
+                            thread_id: message.thread.map(|thread| thread.id),
+                            timestamp: message.timestamp,
+                            author_id: Some(message.author.id),
+                            author_name: Some(
+                                message
+                                    .author
+                                    .global_name
+                                    .unwrap_or(message.author.username),
+                            ),
+                            text: truncate_match_text(&text),
+                            source: "discord_official_search".to_string(),
+                        });
+                    }
+                }
+                sort_matches_desc(&mut results);
+                results.truncate(limit);
+
+                if page_count < page_limit || offset + page_count >= payload.total_results {
+                    break;
+                }
+                offset += page_count;
+            }
+            status => {
+                warnings.push(format!(
+                    "Discord official guild search returned {status}; falling back to scoped channel scan."
+                ));
+                return Ok(None);
+            }
+        }
+    }
+
+    let searched_channels = requested_channel_id.map(|_| 1).unwrap_or(0);
+    Ok(Some((results, searched_channels)))
+}
+
+#[cfg(test)]
+fn search_discord_history_via_channel_scan(
+    bot_token: &str,
+    scope: &DiscordScopeGrant,
+    requested_channel_id: Option<&str>,
+    query: &str,
+    limit: usize,
 ) -> Result<(Vec<ChatHistoryMatch>, usize, Vec<String>), BoxError> {
     let api_base = env_trimmed("DISCORD_API_BASE_URL")
         .unwrap_or_else(|| "https://discord.com/api/v10".to_string());
     let client = history_client()?;
+    search_discord_history_via_channel_scan_with_client(
+        &client,
+        api_base.as_str(),
+        bot_token,
+        scope,
+        requested_channel_id,
+        query,
+        limit,
+    )
+}
+
+fn search_discord_history_via_channel_scan_with_client(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    scope: &DiscordScopeGrant,
+    requested_channel_id: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Result<(Vec<ChatHistoryMatch>, usize, Vec<String>), BoxError> {
     let query_norm = query.to_ascii_lowercase();
     let mut warnings = Vec::new();
     let channels = resolve_discord_search_channels(
-        &client,
-        api_base.as_str(),
+        client,
+        api_base,
         bot_token,
         scope,
         requested_channel_id,
@@ -985,8 +1349,8 @@ fn search_discord_history(
 
     for channel in channels {
         let channel_matches = search_discord_channel_messages(
-            &client,
-            api_base.as_str(),
+            client,
+            api_base,
             bot_token,
             &channel.id,
             channel.name.as_deref(),
@@ -1134,28 +1498,43 @@ fn search_discord_channel_messages(
     let mut results = Vec::new();
     let mut before: Option<String> = None;
     for _ in 0..discord_max_history_pages_per_channel() {
-        let mut request = client
-            .get(format!(
-                "{}/channels/{channel_id}/messages",
-                api_base.trim_end_matches('/')
-            ))
-            .header("Authorization", format!("Bot {bot_token}"))
-            .query(&[("limit", "100")]);
-        if let Some(before_id) = before.as_deref() {
-            request = request.query(&[("before", before_id)]);
-        }
-        let response = request.send()?;
-        if !response.status().is_success() {
+        let label = discord_channel_label(channel_id, channel_name);
+        let mut rate_limit_attempt = 0usize;
+        let messages: Vec<DiscordHistoryMessage> = loop {
+            let mut request = client
+                .get(format!(
+                    "{}/channels/{channel_id}/messages",
+                    api_base.trim_end_matches('/')
+                ))
+                .header("Authorization", format!("Bot {bot_token}"))
+                .query(&[("limit", "100")]);
+            if let Some(before_id) = before.as_deref() {
+                request = request.query(&[("before", before_id)]);
+            }
+
+            let response = request.send()?;
+            if response.status().is_success() {
+                break response.json()?;
+            }
+
             let status = response.status();
             if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND
             {
-                let label = channel_name
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| format!("{value} ({channel_id})"))
-                    .unwrap_or_else(|| channel_id.to_string());
                 warnings.push(format!(
                     "Skipped Discord channel {label} because the bot could not read its history ({status})."
+                ));
+                return Ok(Vec::new());
+            }
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let headers = response.headers().clone();
+                let body = response.text().unwrap_or_default();
+                if rate_limit_attempt < discord_rate_limit_retries() {
+                    rate_limit_attempt += 1;
+                    std::thread::sleep(discord_rate_limit_delay(&headers, &body));
+                    continue;
+                }
+                warnings.push(format!(
+                    "Skipped Discord channel {label} after repeated rate limits ({status})."
                 ));
                 return Ok(Vec::new());
             }
@@ -1164,8 +1543,7 @@ fn search_discord_channel_messages(
                 status
             )
             .into());
-        }
-        let messages: Vec<DiscordHistoryMessage> = response.json()?;
+        };
         if messages.is_empty() {
             break;
         }
@@ -1199,13 +1577,55 @@ fn search_discord_channel_messages(
     Ok(results)
 }
 
+fn discord_channel_label(channel_id: &str, channel_name: Option<&str>) -> String {
+    channel_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{value} ({channel_id})"))
+        .unwrap_or_else(|| channel_id.to_string())
+}
+
+fn discord_rate_limit_delay(headers: &ReqwestHeaderMap, body: &str) -> StdDuration {
+    for header_name in ["retry-after", "x-ratelimit-reset-after"] {
+        if let Some(value) = headers
+            .get(header_name)
+            .and_then(|value| value.to_str().ok())
+        {
+            if let Some(delay) = parse_discord_rate_limit_seconds(value) {
+                return delay;
+            }
+        }
+    }
+    if let Ok(payload) = serde_json::from_str::<DiscordRateLimitPayload>(body) {
+        if let Some(retry_after) = payload.retry_after {
+            if let Some(delay) = parse_discord_rate_limit_seconds(&retry_after.to_string()) {
+                return delay;
+            }
+        }
+    }
+    discord_rate_limit_fallback_delay()
+}
+
+fn parse_discord_rate_limit_seconds(raw: &str) -> Option<StdDuration> {
+    let seconds = raw.trim().parse::<f64>().ok()?;
+    let delay = StdDuration::from_secs_f64(seconds.max(0.0));
+    if delay.is_zero() {
+        Some(StdDuration::from_millis(50))
+    } else {
+        Some(delay)
+    }
+}
+
 fn discord_message_text(message: &DiscordHistoryMessage) -> String {
-    let text = message.content.trim();
+    discord_search_message_text(&message.content, &message.attachments)
+}
+
+fn discord_search_message_text(content: &str, attachments: &[DiscordAttachment]) -> String {
+    let text = content.trim();
     if !text.is_empty() {
         return text.to_string();
     }
-    let attachment_names = message
-        .attachments
+    let attachment_names = attachments
         .iter()
         .map(|attachment| attachment.filename.trim())
         .filter(|value| !value.is_empty())
@@ -1555,6 +1975,186 @@ mod tests {
     }
 
     #[test]
+    fn discord_guild_search_prefers_official_search() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+
+        let official = server
+            .mock("GET", "/guilds/42/messages/search")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("content".into(), "needle".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "10".into()),
+                mockito::Matcher::UrlEncoded("offset".into(), "0".into()),
+                mockito::Matcher::UrlEncoded("sort_by".into(), "timestamp".into()),
+                mockito::Matcher::UrlEncoded("sort_order".into(), "desc".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"messages":[[{"id":"200","channel_id":"222","content":"Needle from official search","timestamp":"2026-03-23T01:00:00Z","author":{"id":"user-1","username":"alice","global_name":"Alice"},"attachments":[],"hit":true}]],"doing_deep_historical_index":false,"total_results":1}"#,
+            )
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 222,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let outcome = search_discord_history("discord-secret", &scope, None, "needle", 10)
+            .expect("official search should succeed");
+
+        official.assert();
+        assert_eq!(
+            outcome.engine,
+            ChatHistorySearchEngine::DiscordOfficialSearch
+        );
+        assert!(!outcome.fallback_used);
+        assert_eq!(outcome.searched_channels, 0);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].channel_id, "222");
+        assert_eq!(outcome.results[0].source, "discord_official_search");
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[test]
+    fn discord_guild_search_falls_back_when_official_index_is_not_ready() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+
+        let official = server
+            .mock("GET", "/guilds/42/messages/search")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("content".into(), "needle".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "10".into()),
+                mockito::Matcher::UrlEncoded("offset".into(), "0".into()),
+                mockito::Matcher::UrlEncoded("sort_by".into(), "timestamp".into()),
+                mockito::Matcher::UrlEncoded("sort_order".into(), "desc".into()),
+            ]))
+            .with_status(202)
+            .with_body(r#"{"message":"Index not ready","documents_indexed":123,"retry_after":3}"#)
+            .create();
+        let guild_channels = server
+            .mock("GET", "/guilds/42/channels")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"[{"id":"222","name":"general","type":0}]"#)
+            .create();
+        let active_threads = server
+            .mock("GET", "/guilds/42/threads/active")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"{"threads":[]}"#)
+            .create();
+        let general_page_one = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"200","content":"Needle from fallback scan","timestamp":"2026-03-23T00:00:00Z","author":{"id":"user-1","username":"alice","global_name":"Alice"},"attachments":[]}]"#,
+            )
+            .create();
+        let general_page_two = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("before".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 222,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let outcome = search_discord_history("discord-secret", &scope, None, "needle", 10)
+            .expect("scan fallback should succeed");
+
+        official.assert();
+        guild_channels.assert();
+        active_threads.assert();
+        general_page_one.assert();
+        general_page_two.assert();
+        assert_eq!(outcome.engine, ChatHistorySearchEngine::DiscordChannelScan);
+        assert!(outcome.fallback_used);
+        assert_eq!(outcome.searched_channels, 1);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].source, "discord_message");
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("official guild search index is not ready yet") }));
+    }
+
+    #[test]
+    fn discord_guild_search_retries_rate_limited_official_search() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+        let _retries = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES_ENV, "1");
+        let _fallback_ms = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS_ENV, "0");
+
+        let rate_limited = server
+            .mock("GET", "/guilds/42/messages/search")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("content".into(), "needle".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "10".into()),
+                mockito::Matcher::UrlEncoded("offset".into(), "0".into()),
+                mockito::Matcher::UrlEncoded("sort_by".into(), "timestamp".into()),
+                mockito::Matcher::UrlEncoded("sort_order".into(), "desc".into()),
+            ]))
+            .with_status(429)
+            .with_header("retry-after", "0")
+            .with_body(r#"{"message":"You are being rate limited.","retry_after":0.0}"#)
+            .expect(1)
+            .create();
+        let official = server
+            .mock("GET", "/guilds/42/messages/search")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("content".into(), "needle".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "10".into()),
+                mockito::Matcher::UrlEncoded("offset".into(), "0".into()),
+                mockito::Matcher::UrlEncoded("sort_by".into(), "timestamp".into()),
+                mockito::Matcher::UrlEncoded("sort_order".into(), "desc".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"messages":[[{"id":"200","channel_id":"222","content":"Needle from official search","timestamp":"2026-03-23T01:00:00Z","author":{"id":"user-1","username":"alice","global_name":"Alice"},"attachments":[],"hit":true}]],"doing_deep_historical_index":false,"total_results":1}"#,
+            )
+            .expect(1)
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 222,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let outcome = search_discord_history("discord-secret", &scope, None, "needle", 10)
+            .expect("official search should succeed after retry");
+
+        rate_limited.assert();
+        official.assert();
+        assert_eq!(
+            outcome.engine,
+            ChatHistorySearchEngine::DiscordOfficialSearch
+        );
+        assert!(!outcome.fallback_used);
+        assert_eq!(outcome.results.len(), 1);
+        assert!(outcome
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("falling back")));
+    }
+
+    #[test]
     fn discord_guild_search_skips_forbidden_channels() {
         let _lock = env_lock();
         let mut server = mockito::Server::new();
@@ -1606,7 +2206,7 @@ mod tests {
             thread_id: Some("thread-1".to_string()),
         };
         let (results, searched_channels, warnings) =
-            search_discord_history("discord-secret", &scope, None, "needle", 10)
+            search_discord_history_via_channel_scan("discord-secret", &scope, None, "needle", 10)
                 .expect("search should succeed");
 
         guild_channels.assert();
@@ -1619,6 +2219,162 @@ mod tests {
         assert_eq!(results[0].channel_id, "222");
         assert!(warnings.iter().any(|warning| {
             warning.contains("Skipped Discord channel") && warning.contains("111")
+        }));
+    }
+
+    #[test]
+    fn discord_guild_search_retries_rate_limited_channels() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+        let _retries = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES_ENV, "2");
+        let _fallback_ms = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS_ENV, "0");
+
+        let guild_channels = server
+            .mock("GET", "/guilds/42/channels")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"[{"id":"111","name":"general","type":0}]"#)
+            .create();
+        let active_threads = server
+            .mock("GET", "/guilds/42/threads/active")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"{"threads":[]}"#)
+            .create();
+        let rate_limited = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(429)
+            .with_header("retry-after", "0")
+            .with_body(r#"{"message":"You are being rate limited.","retry_after":0.0}"#)
+            .expect(1)
+            .create();
+        let general_page_one = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"200","content":"Needle from general","timestamp":"2026-03-23T00:00:00Z","author":{"id":"user-1","username":"alice","global_name":"Alice"},"attachments":[]}]"#,
+            )
+            .expect(1)
+            .create();
+        let general_page_two = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("before".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 111,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let (results, searched_channels, warnings) =
+            search_discord_history_via_channel_scan("discord-secret", &scope, None, "needle", 10)
+                .expect("search should succeed");
+
+        guild_channels.assert();
+        active_threads.assert();
+        rate_limited.assert();
+        general_page_one.assert();
+        general_page_two.assert();
+        assert_eq!(searched_channels, 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].channel_id, "111");
+        assert!(warnings
+            .iter()
+            .all(|warning| !warning.contains("rate limits")));
+    }
+
+    #[test]
+    fn discord_guild_search_skips_repeatedly_rate_limited_channels() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("DISCORD_API_BASE_URL", &server.url());
+        let _retries = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_RETRIES_ENV, "1");
+        let _fallback_ms = EnvGuard::set(CHAT_HISTORY_DISCORD_RATE_LIMIT_FALLBACK_MS_ENV, "0");
+
+        let guild_channels = server
+            .mock("GET", "/guilds/42/channels")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"111","name":"busy","type":0},{"id":"222","name":"general","type":0}]"#,
+            )
+            .create();
+        let active_threads = server
+            .mock("GET", "/guilds/42/threads/active")
+            .match_header("authorization", "Bot discord-secret")
+            .with_status(200)
+            .with_body(r#"{"threads":[]}"#)
+            .create();
+        let rate_limited_once = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(429)
+            .with_header("retry-after", "0")
+            .with_body(r#"{"message":"You are being rate limited.","retry_after":0.0}"#)
+            .expect(1)
+            .create();
+        let rate_limited_twice = server
+            .mock("GET", "/channels/111/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(429)
+            .with_header("retry-after", "0")
+            .with_body(r#"{"message":"You are being rate limited.","retry_after":0.0}"#)
+            .expect(1)
+            .create();
+        let general_page_one = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "100".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"id":"300","content":"Needle from fallback channel","timestamp":"2026-03-23T00:00:00Z","author":{"id":"user-2","username":"bob","global_name":"Bob"},"attachments":[]}]"#,
+            )
+            .create();
+        let general_page_two = server
+            .mock("GET", "/channels/222/messages")
+            .match_header("authorization", "Bot discord-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("before".into(), "300".into()),
+            ]))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+
+        let scope = DiscordScopeGrant {
+            guild_id: Some(42),
+            channel_id: 222,
+            thread_id: Some("thread-1".to_string()),
+        };
+        let (results, searched_channels, warnings) =
+            search_discord_history_via_channel_scan("discord-secret", &scope, None, "needle", 10)
+                .expect("search should succeed");
+
+        guild_channels.assert();
+        active_threads.assert();
+        rate_limited_once.assert();
+        rate_limited_twice.assert();
+        general_page_one.assert();
+        general_page_two.assert();
+        assert_eq!(searched_channels, 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].channel_id, "222");
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("Skipped Discord channel busy (111)")
+                && warning.contains("repeated rate limits")
         }));
     }
 }

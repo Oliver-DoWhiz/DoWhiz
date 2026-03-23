@@ -34,11 +34,20 @@ Runtime environment policy:
 
 ## 3) Common Paths
 
-Typical repo location on VM:
+Current repo location on staging/prod VM:
+- `/home/azureuser/server/DoWhiz`
+
+Legacy helper/runtime path still seen in some local tooling:
 - `/home/azureuser/server/.dowhiz/DoWhiz`
 
-Service directory:
-- `/home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service`
+Service directory used by current CI/CD:
+- `/home/azureuser/server/DoWhiz/DoWhiz_service`
+
+If you are unsure which path a VM currently uses:
+
+```bash
+find /home/azureuser/server -maxdepth 3 -type d -name DoWhiz_service 2>/dev/null
+```
 
 Common logs:
 - `DoWhiz_service/gateway.log`
@@ -59,7 +68,7 @@ confuse incident response.
 ### 4.1 Script-based (foreground/local style)
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz
+cd /home/azureuser/server/DoWhiz
 ./DoWhiz_service/scripts/run_gateway_local.sh
 ./DoWhiz_service/scripts/run_employee.sh <employee_id> 9001 --skip-hook --skip-ngrok
 ```
@@ -69,10 +78,13 @@ Use `boiled_egg` on staging and `little_bear` on production.
 ### 4.2 PM2-based (recommended on VM)
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 set -a
 source .env
 set +a
+if [ -s /home/azureuser/.nvm/nvm.sh ]; then
+  source /home/azureuser/.nvm/nvm.sh
+fi
 
 # worker
 pm2 restart dw_worker --update-env || \
@@ -102,7 +114,7 @@ curl -sS http://127.0.0.1:9001/health
 Queue/config sanity:
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 grep -E '^(INGESTION_QUEUE_BACKEND|SERVICE_BUS_CONNECTION_STRING|SERVICE_BUS_NAMESPACE|SERVICE_BUS_POLICY_NAME|SERVICE_BUS_POLICY_KEY|SERVICE_BUS_QUEUE_NAME|GATEWAY_CONFIG_PATH|EMPLOYEE_CONFIG_PATH|RUN_TASK_EXECUTION_BACKEND|DEPLOY_TARGET)=' .env
 ```
 
@@ -111,7 +123,7 @@ Process sanity:
 ```bash
 pgrep -af inbound_gateway
 pgrep -af rust_service
-HOME=/home/azureuser/server pm2 list
+pm2 list
 ```
 
 ## 6) Azure ACI Prerequisite (Worker)
@@ -121,7 +133,7 @@ When `RUN_TASK_EXECUTION_BACKEND=azure_aci`, the worker requires Azure Files mou
 Check/mount helper:
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 ./scripts/ensure_aci_share_mount.sh
 ```
 
@@ -130,14 +142,71 @@ If the mount is missing, worker startup should fail fast.
 ## 7) Live Email E2E Notes
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 RUN_CODEX_E2E=1 POSTMARK_LIVE_TEST=1 cargo test -p scheduler_module --test service_real_email -- --nocapture
 ```
 
 If SMTP 25 is blocked by cloud policy, set:
 - `POSTMARK_SMTP_PORT=2525`
 
-## 8) Common Failure Patterns
+`service_real_email` binds `9100` and `9001`. On staging/prod, stop `dw_gateway` and `dw_worker`
+first, then restart them after the test.
+
+## 8) Historical RunTask Debugging
+
+Full runbook:
+- `DoWhiz_service/docs/task_debug_archives.md`
+
+Quick checks:
+
+```bash
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
+set -a
+source .env
+set +a
+
+mongosh "$MONGODB_URI" --quiet <<'MONGO'
+db = db.getSiblingDB(process.env.MONGODB_DATABASE);
+print(EJSON.stringify(
+  db.task_debug_archives.find().sort({ created_at: -1 }).limit(5).toArray(),
+  null,
+  2
+));
+MONGO
+```
+
+Look at:
+- `status`
+- `storage_account`
+- `blob_container`
+- `blob_path`
+- `blob_reference`
+- `local_fallback_path`
+- `archive_build_duration_ms`
+- `upload_duration_ms`
+- `has_run_task_trace`
+- `has_aci_logs`
+
+If `status=uploaded`, use the matching Azure auth path to download the zip.
+
+If `status=upload_failed` or `local_only`, inspect `local_fallback_path`. If that path is gone or
+was created under a temporary E2E workspace, fix Azure archive auth before treating the archive as
+durable.
+
+For active or stuck runs:
+
+```bash
+pm2 logs dw_worker --lines 200
+pm2 logs dw_gateway --lines 200
+pgrep -af rust_service
+pgrep -af inbound_gateway
+```
+
+If the live ACI container has already been deleted, the archive zip becomes the source of truth.
+Check `.run_task_trace/aci/container_show.json` and `.run_task_trace/aci/container_logs.txt` inside
+the downloaded bundle.
+
+## 9) Common Failure Patterns
 
 1. Gateway startup error about backend
 - Cause: `INGESTION_QUEUE_BACKEND` is not `servicebus`.
@@ -155,12 +224,12 @@ If SMTP 25 is blocked by cloud policy, set:
 - Cause: storage backend credentials incomplete.
 - Fix: verify selected backend and full credential set.
 
-## 9) Rollback
+## 10) Rollback
 
 Operational rollback (same code, restart services):
 
 ```bash
-cd /home/azureuser/server/.dowhiz/DoWhiz/DoWhiz_service
+cd /home/azureuser/server/DoWhiz/DoWhiz_service
 pm2 restart dw_gateway --update-env
 pm2 restart dw_worker --update-env
 ```

@@ -24,13 +24,23 @@ python3 .agents/skills/discord-history-search/scripts/discord_history_search.py 
 - It cannot cross into another Discord server.
 - Do not try to use raw Discord tokens directly.
 
+## Search Strategy
+
+- Keep using this single skill for Discord history lookups.
+- For guild-scoped requests, the backend now tries Discord's official guild search first.
+- If official search is unavailable, not ready, or rate-limited, the backend automatically falls back to the scoped channel-history scan.
+- DM-scoped requests still use the scoped DM-channel history scan.
+- The helper prints which engine was used so you can verify whether the request stayed on official search or fell back.
+
 ## Workflow
 
 1. Run `status` first if you need to confirm the current scope or expiry.
 2. Use `search --query ...` with a focused keyword, phrase, project name, or user name.
 3. If you already know the specific Discord channel or thread area to inspect inside the same server, pass `--channel-id ...` to narrow the scan.
-4. If results are large, save them with `--output work/discord_history.json` and summarize from that file.
-5. If the user asks about another Discord server, explain that the current grant blocks cross-server access.
+4. Do not launch multiple guild-wide `search` commands in parallel. Run one search, inspect the results or warnings, then refine the next query.
+5. If a guild-wide search warns about rate limits, narrow the next attempt with `--channel-id ...` when you can infer the likely channel from local context.
+6. If results are large, save them with `--output work/discord_history.json` and summarize from that file.
+7. If the user asks about another Discord server, explain that the current grant blocks cross-server access.
 
 ## Examples
 
