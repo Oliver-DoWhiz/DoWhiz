@@ -77,11 +77,19 @@ CRITICAL RESTRICTIONS:
 - Do NOT create reply_email_draft.html - this is a Notion @mention, not email.
 - ONLY use the notion_api_cli command-line tool.
 
-To reply:
-1. Source the OAuth token: `source .notion_env`
-2. Read context from .notion_context.json to get page_id
-3. Post your reply: `notion_api_cli create-comment <page_id> "Your message"`
-4. Create the marker: `touch .notion_api_replied`
+STEP 0 - GET THE TASK CONTENT (IMPORTANT):
+The incoming_email may have empty/minimal content due to API timing. You MUST fetch the actual task:
+1. Read .notion_context.json to get `page_id` and `comment_id`
+2. Source the OAuth token: `source .notion_env`
+3. Fetch ALL comments: `notion_api_cli get-comments <page_id>`
+4. Find YOUR task by matching `comment_id` from .notion_context.json
+5. The text of that comment is YOUR TASK - execute it
+
+If there are multiple comments, each ACI handles ONE specific comment_id. Only execute the task from YOUR comment_id.
+
+To reply after completing the task:
+1. Post your reply: `notion_api_cli create-comment <page_id> "Your message"`
+2. Create the marker: `touch .notion_api_replied`
 
 The .notion_env file contains NOTION_API_TOKEN. The .notion_context.json has page_id and comment_id.
 
