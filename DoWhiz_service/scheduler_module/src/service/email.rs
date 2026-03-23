@@ -76,12 +76,9 @@ pub fn process_inbound_payload(
         return Ok(());
     }
 
-    // Check if this is a Notion email notification
-    // If so, route to the specialized Notion email handler
-    // Can be disabled via NOTION_EMAIL_DETECTION_DISABLED=1 when using webhooks instead
-    let notion_email_disabled = std::env::var("NOTION_EMAIL_DETECTION_DISABLED")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    // Notion email detection is DISABLED - webhook integration is now the primary path.
+    // See inbound_gateway/notion_webhook.rs for the active Notion integration.
+    let notion_email_disabled = true;
 
     if !notion_email_disabled && is_notion_sender(sender) {
         if let Some(notification) = detect_notion_email(
