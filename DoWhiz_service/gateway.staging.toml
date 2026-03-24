@@ -53,3 +53,10 @@ channel = "whatsapp"
 key = "*"
 employee_id = "boiled_egg"
 tenant_id = "staging"
+
+# Lark (Feishu) routing
+[[routes]]
+channel = "lark"
+key = "*"
+employee_id = "boiled_egg"
+tenant_id = "staging"

@@ -18,10 +18,11 @@ use super::config::ServiceConfig;
 use super::email::{process_inbound_payload, PostmarkInbound};
 use super::inbound::{
     process_bluebubbles_event, process_discord_inbound_message, process_google_workspace_message,
-    process_notion_message, process_slack_event, process_sms_message, process_telegram_event,
-    process_wechat_event, process_whatsapp_event, try_quick_response_bluebubbles,
-    try_quick_response_discord, try_quick_response_google_workspace, try_quick_response_slack,
-    try_quick_response_telegram, try_quick_response_wechat, try_quick_response_whatsapp,
+    process_lark_event, process_notion_message, process_slack_event, process_sms_message,
+    process_telegram_event, process_wechat_event, process_whatsapp_event,
+    try_quick_response_bluebubbles, try_quick_response_discord, try_quick_response_google_workspace,
+    try_quick_response_slack, try_quick_response_telegram, try_quick_response_wechat,
+    try_quick_response_whatsapp,
 };
 use super::BoxError;
 
@@ -299,6 +300,11 @@ Channel::Notion => {
             }
             let raw_payload = envelope.raw_payload_bytes();
             process_wechat_event(config, user_store, index_store, &message, &raw_payload)
+        }
+        Channel::Lark => {
+            let message = envelope.to_inbound_message();
+            let raw_payload = envelope.raw_payload_bytes();
+            process_lark_event(config, user_store, index_store, &message, &raw_payload)
         }
     }
 }
