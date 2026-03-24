@@ -147,10 +147,64 @@ Environment:
   EMPLOYEE_ID              Required for OAuth token lookup
   NOTION_DEFAULT_WORKSPACE Default workspace ID if not specified
 
+Security:
+  When .notion_context.json exists (agent task context), the workspace_id
+  from that file is ENFORCED for user isolation. The --workspace-id parameter
+  is ignored to prevent cross-workspace access.
+
 Output:
   JSON to stdout on success, error message to stderr on failure.
 "#
     );
+}
+
+/// Get the enforced workspace ID from .notion_context.json if it exists.
+/// This ensures user isolation - agents can only access the workspace
+/// that triggered the current task, not other workspaces the employee
+/// may have access to.
+fn get_enforced_workspace_id() -> Option<String> {
+    let context_path = std::path::Path::new(".notion_context.json");
+    if !context_path.exists() {
+        return None;
+    }
+
+    let content = match std::fs::read_to_string(context_path) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let ctx: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    ctx["workspace_id"].as_str().map(|s| s.to_string())
+}
+
+/// Resolve workspace ID with user isolation enforcement.
+/// Priority:
+/// 1. .notion_context.json workspace_id (ENFORCED if exists)
+/// 2. --workspace-id parameter (only if no context file)
+/// 3. NOTION_DEFAULT_WORKSPACE env var
+/// 4. "default" fallback
+fn resolve_workspace_id(param_workspace_id: Option<String>) -> String {
+    // Check for enforced workspace from task context
+    if let Some(enforced_ws) = get_enforced_workspace_id() {
+        if let Some(ref param_ws) = param_workspace_id {
+            if param_ws != &enforced_ws {
+                eprintln!(
+                    "Warning: --workspace-id {} ignored. Using enforced workspace {} from .notion_context.json for user isolation.",
+                    param_ws, enforced_ws
+                );
+            }
+        }
+        return enforced_ws;
+    }
+
+    // No context file - use parameter or fallback
+    param_workspace_id
+        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
+        .unwrap_or_else(|| "default".to_string())
 }
 
 fn cmd_read_page(args: &[String]) -> ExitCode {
@@ -175,9 +229,7 @@ fn cmd_read_page(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     // Use the API client
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
@@ -237,9 +289,7 @@ fn cmd_get_comments(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.get_comments(&workspace_id, &page_id) {
@@ -318,9 +368,7 @@ fn cmd_reply(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.reply_to_comment(&workspace_id, &discussion_id, &content) {
@@ -389,9 +437,7 @@ fn cmd_create_comment(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.create_comment(&workspace_id, &page_id, &content) {
@@ -451,9 +497,7 @@ fn cmd_search(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.search_pages(&workspace_id, &query) {
@@ -531,9 +575,7 @@ fn cmd_create_page(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     // Build initial content blocks if provided
     let content_blocks = content.map(|text| {
@@ -632,9 +674,7 @@ fn cmd_append_blocks(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.append_blocks(&workspace_id, &page_id, block_inputs) {
@@ -697,9 +737,7 @@ fn cmd_get_database(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.get_database(&workspace_id, &database_id) {
@@ -783,9 +821,7 @@ fn cmd_query_database(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => {
@@ -871,9 +907,7 @@ fn cmd_update_page(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.update_page(&workspace_id, &page_id, properties) {
@@ -924,9 +958,7 @@ fn cmd_archive_page(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.archive_page(&workspace_id, &page_id) {
@@ -979,9 +1011,7 @@ fn cmd_list_pages(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.list_pages(&workspace_id, limit) {
@@ -1045,9 +1075,7 @@ fn cmd_get_children(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.get_child_pages(&workspace_id, &parent_id) {
@@ -1122,9 +1150,7 @@ fn cmd_bulk_read(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => {
@@ -1198,9 +1224,7 @@ fn cmd_export_workspace(args: &[String]) -> ExitCode {
         }
     };
 
-    let workspace_id = workspace_id
-        .or_else(|| env::var("NOTION_DEFAULT_WORKSPACE").ok())
-        .unwrap_or_else(|| "default".to_string());
+    let workspace_id = resolve_workspace_id(workspace_id);
 
     match scheduler_module::notion_browser::NotionApiClient::from_env(&employee_id) {
         Ok(client) => match client.export_workspace(&workspace_id, max_pages) {
