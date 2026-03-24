@@ -290,10 +290,7 @@ impl NotionApiClient {
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", access_token)).unwrap(),
         );
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "Notion-Version",
             HeaderValue::from_static(NOTION_API_VERSION),
@@ -328,7 +325,12 @@ impl NotionApiClient {
     }
 
     /// Make an API POST request.
-    fn api_post(&self, workspace_id: &str, endpoint: &str, body: &Value) -> Result<Value, NotionApiError> {
+    fn api_post(
+        &self,
+        workspace_id: &str,
+        endpoint: &str,
+        body: &Value,
+    ) -> Result<Value, NotionApiError> {
         let token = self.get_token(workspace_id)?;
         let url = format!("{}{}", NOTION_API_BASE, endpoint);
         let headers = self.build_headers(&token);
@@ -347,7 +349,12 @@ impl NotionApiClient {
     }
 
     /// Make an API PATCH request.
-    fn api_patch(&self, workspace_id: &str, endpoint: &str, body: &Value) -> Result<Value, NotionApiError> {
+    fn api_patch(
+        &self,
+        workspace_id: &str,
+        endpoint: &str,
+        body: &Value,
+    ) -> Result<Value, NotionApiError> {
         let token = self.get_token(workspace_id)?;
         let url = format!("{}{}", NOTION_API_BASE, endpoint);
         let headers = self.build_headers(&token);
@@ -366,7 +373,10 @@ impl NotionApiClient {
     }
 
     /// Handle API response.
-    fn handle_response(&self, response: reqwest::blocking::Response) -> Result<Value, NotionApiError> {
+    fn handle_response(
+        &self,
+        response: reqwest::blocking::Response,
+    ) -> Result<Value, NotionApiError> {
         let status = response.status();
         let body = response
             .text()
@@ -378,7 +388,10 @@ impl NotionApiClient {
         } else if status.as_u16() == 429 {
             // Rate limited
             let retry_after = 60; // Default to 60 seconds
-            warn!("Notion API rate limited, retry after {} seconds", retry_after);
+            warn!(
+                "Notion API rate limited, retry after {} seconds",
+                retry_after
+            );
             Err(NotionApiError::RateLimited(retry_after))
         } else if status.as_u16() == 404 {
             Err(NotionApiError::NotFound(body))
@@ -394,7 +407,11 @@ impl NotionApiClient {
     }
 
     /// Get page metadata.
-    pub fn get_page(&self, workspace_id: &str, page_id: &str) -> Result<NotionPage, NotionApiError> {
+    pub fn get_page(
+        &self,
+        workspace_id: &str,
+        page_id: &str,
+    ) -> Result<NotionPage, NotionApiError> {
         let data = self.api_get(workspace_id, &format!("/pages/{}", page_id))?;
 
         let title = extract_page_title(&data);
@@ -408,14 +425,8 @@ impl NotionApiClient {
             cover: data["cover"]["external"]["url"]
                 .as_str()
                 .map(|s| s.to_string()),
-            created_time: data["created_time"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            last_edited_time: data["last_edited_time"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            created_time: data["created_time"].as_str().unwrap_or("").to_string(),
+            last_edited_time: data["last_edited_time"].as_str().unwrap_or("").to_string(),
         })
     }
 
@@ -463,10 +474,7 @@ impl NotionApiClient {
         workspace_id: &str,
         block_id: &str,
     ) -> Result<Vec<NotionComment>, NotionApiError> {
-        let data = self.api_get(
-            workspace_id,
-            &format!("/comments?block_id={}", block_id),
-        )?;
+        let data = self.api_get(workspace_id, &format!("/comments?block_id={}", block_id))?;
 
         let mut comments = Vec::new();
         if let Some(results) = data["results"].as_array() {
@@ -556,10 +564,7 @@ impl NotionApiClient {
                     url: page_data["url"].as_str().unwrap_or("").to_string(),
                     icon: page_data["icon"]["emoji"].as_str().map(|s| s.to_string()),
                     cover: None,
-                    created_time: page_data["created_time"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
+                    created_time: page_data["created_time"].as_str().unwrap_or("").to_string(),
                     last_edited_time: page_data["last_edited_time"]
                         .as_str()
                         .unwrap_or("")
@@ -816,17 +821,190 @@ impl NotionApiClient {
     }
 
     /// Archive (soft delete) a page.
-    pub fn archive_page(
-        &self,
-        workspace_id: &str,
-        page_id: &str,
-    ) -> Result<(), NotionApiError> {
+    pub fn archive_page(&self, workspace_id: &str, page_id: &str) -> Result<(), NotionApiError> {
         let body = serde_json::json!({
             "archived": true
         });
 
         self.api_patch(workspace_id, &format!("/pages/{}", page_id), &body)?;
         Ok(())
+    }
+
+    /// List all pages accessible to the integration.
+    ///
+    /// This uses the search API with an empty query to enumerate all pages.
+    /// For large workspaces, this may return many results.
+    ///
+    /// # Arguments
+    /// * `workspace_id` - The workspace ID for OAuth lookup
+    /// * `limit` - Maximum number of pages to return (default 100)
+    pub fn list_pages(
+        &self,
+        workspace_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<NotionPage>, NotionApiError> {
+        let limit = limit.unwrap_or(100);
+        let mut all_pages = Vec::new();
+        let mut start_cursor: Option<String> = None;
+
+        loop {
+            let mut body = serde_json::json!({
+                "filter": {
+                    "value": "page",
+                    "property": "object"
+                },
+                "page_size": std::cmp::min(100, limit - all_pages.len())
+            });
+
+            if let Some(cursor) = &start_cursor {
+                body["start_cursor"] = serde_json::json!(cursor);
+            }
+
+            let data = self.api_post(workspace_id, "/search", &body)?;
+
+            if let Some(results) = data["results"].as_array() {
+                for page_data in results {
+                    let title = extract_page_title(page_data);
+                    all_pages.push(NotionPage {
+                        id: page_data["id"].as_str().unwrap_or("").to_string(),
+                        title,
+                        url: page_data["url"].as_str().unwrap_or("").to_string(),
+                        icon: page_data["icon"]["emoji"].as_str().map(|s| s.to_string()),
+                        cover: None,
+                        created_time: page_data["created_time"].as_str().unwrap_or("").to_string(),
+                        last_edited_time: page_data["last_edited_time"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string(),
+                    });
+                }
+            }
+
+            // Check if we've reached the limit or no more pages
+            if all_pages.len() >= limit {
+                break;
+            }
+
+            // Check for next page
+            if data["has_more"].as_bool() == Some(true) {
+                start_cursor = data["next_cursor"].as_str().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        Ok(all_pages)
+    }
+
+    /// Get child pages under a parent page.
+    ///
+    /// # Arguments
+    /// * `workspace_id` - The workspace ID for OAuth lookup
+    /// * `parent_id` - The parent page/block ID
+    pub fn get_child_pages(
+        &self,
+        workspace_id: &str,
+        parent_id: &str,
+    ) -> Result<Vec<NotionPage>, NotionApiError> {
+        let data = self.api_get(workspace_id, &format!("/blocks/{}/children", parent_id))?;
+
+        let mut pages = Vec::new();
+        if let Some(results) = data["results"].as_array() {
+            for block in results {
+                // Check if this is a child_page block
+                if block["type"].as_str() == Some("child_page") {
+                    let page_id = block["id"].as_str().unwrap_or("").to_string();
+                    let title = block["child_page"]["title"]
+                        .as_str()
+                        .unwrap_or("Untitled")
+                        .to_string();
+
+                    pages.push(NotionPage {
+                        id: page_id,
+                        title,
+                        url: String::new(), // Not available in block children response
+                        icon: None,
+                        cover: None,
+                        created_time: block["created_time"].as_str().unwrap_or("").to_string(),
+                        last_edited_time: block["last_edited_time"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(pages)
+    }
+
+    /// Delete a comment by ID.
+    ///
+    /// Note: Only comments created by the integration can be deleted.
+    ///
+    /// # Arguments
+    /// * `workspace_id` - The workspace ID for OAuth lookup
+    /// * `comment_id` - The comment ID to delete
+    pub fn delete_comment(
+        &self,
+        workspace_id: &str,
+        comment_id: &str,
+    ) -> Result<(), NotionApiError> {
+        self.api_delete(workspace_id, &format!("/comments/{}", comment_id))?;
+        Ok(())
+    }
+
+    /// Perform a DELETE request to the Notion API.
+    fn api_delete(&self, workspace_id: &str, path: &str) -> Result<Value, NotionApiError> {
+        let token = self
+            .oauth_store
+            .get_token(workspace_id, &self.employee_id)
+            .map_err(|e| {
+                warn!(
+                    "Failed to get OAuth token for workspace {}: {}",
+                    workspace_id, e
+                );
+                NotionApiError::NoAuthorization(workspace_id.to_string())
+            })?
+            .ok_or_else(|| NotionApiError::NoAuthorization(workspace_id.to_string()))?;
+
+        let url = format!("{}{}", NOTION_API_BASE, path);
+        debug!("Notion API DELETE: {}", url);
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .header("Notion-Version", NOTION_API_VERSION)
+            .send()
+            .map_err(|e| NotionApiError::RequestFailed(e.to_string()))?;
+
+        let status = response.status();
+        let body: Value = response
+            .json()
+            .unwrap_or_else(|_| serde_json::json!({"status": "ok"}));
+
+        if status.is_success() {
+            Ok(body)
+        } else if status.as_u16() == 404 {
+            Err(NotionApiError::NotFound(path.to_string()))
+        } else if status.as_u16() == 429 {
+            let retry_after = body["retry_after"].as_u64().unwrap_or(60);
+            Err(NotionApiError::RateLimited(retry_after))
+        } else if status.as_u16() == 403 {
+            Err(NotionApiError::PermissionDenied(
+                body["message"]
+                    .as_str()
+                    .unwrap_or("Access denied")
+                    .to_string(),
+            ))
+        } else {
+            Err(NotionApiError::RequestFailed(format!(
+                "Status {}: {}",
+                status,
+                body["message"].as_str().unwrap_or("Unknown error")
+            )))
+        }
     }
 }
 
