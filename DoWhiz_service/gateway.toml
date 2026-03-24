@@ -68,3 +68,10 @@ channel = "whatsapp"
 key = "*"
 employee_id = "little_bear"
 tenant_id = "default"
+
+# Lark (Feishu) routing
+[[routes]]
+channel = "lark"
+key = "*"
+employee_id = "little_bear"
+tenant_id = "default"
