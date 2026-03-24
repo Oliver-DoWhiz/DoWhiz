@@ -68,6 +68,9 @@ pub(super) fn build_prompt(
             "wechat" => {
                 "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Do not use HTML or markdown. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
             }
+            "lark" | "feishu" => {
+                "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Lark supports basic markdown: **bold**, *italic*, ~~strikethrough~~, `code`. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
+            }
             "notion" => {
                 r#"2. After finishing the task (step one), you MUST reply directly to the Notion comment using the Notion API CLI.
 
@@ -993,6 +996,8 @@ mod tests {
             discord_user_ids: vec!["987654321".to_string()],
             phone_numbers: vec!["+15551234567".to_string()],
             telegram_user_ids: vec!["12345678".to_string()],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![],
         };
         let section = build_user_identities_section(&identities);
@@ -1209,6 +1214,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![],
         };
 
@@ -1245,6 +1252,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![user_uuid.to_string()],
         };
 
@@ -1286,6 +1295,8 @@ mod tests {
             discord_user_ids: vec!["987654321012345678".to_string()],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![
                 email_uuid.to_string(),
                 slack_uuid.to_string(),
@@ -1327,6 +1338,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![], // Empty even though account exists
         };
 
@@ -1459,6 +1472,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec!["uuid-email-alice".to_string()],
         };
 
@@ -1498,6 +1513,8 @@ mod tests {
             discord_user_ids: vec!["123456789012345678".to_string()],
             phone_numbers: vec!["+15551234567".to_string()],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             // Each channel has its own filesystem user directory
             allowed_user_ids: vec![
                 "uuid-email-bob".to_string(),
@@ -1551,6 +1568,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             // In production, identifiers_to_user_identities deduplicates
             // So if email and slack both map to same user_id, only one entry
             allowed_user_ids: vec!["uuid-charlie-shared".to_string()],
@@ -1590,6 +1609,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec!["uuid-email-dave".to_string(), "uuid-slack-dave".to_string()],
         };
 

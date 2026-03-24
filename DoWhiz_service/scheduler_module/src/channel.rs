@@ -34,6 +34,8 @@ pub enum Channel {
     Notion,
     /// WeChat Work (企业微信) via qyapi
     WeChat,
+    /// Lark (飞书) via Open Platform API
+    Lark,
 }
 
 impl Default for Channel {
@@ -57,6 +59,7 @@ impl std::fmt::Display for Channel {
             Channel::BlueBubbles => write!(f, "bluebubbles"),
 Channel::Notion => write!(f, "notion"),
             Channel::WeChat => write!(f, "wechat"),
+            Channel::Lark => write!(f, "lark"),
         }
     }
 }
@@ -78,6 +81,7 @@ impl std::str::FromStr for Channel {
             "bluebubbles" | "imessage" => Ok(Channel::BlueBubbles),
 "notion" => Ok(Channel::Notion),
             "wechat" | "weixin" => Ok(Channel::WeChat),
+            "lark" | "feishu" => Ok(Channel::Lark),
             _ => Err(format!("unknown channel: {}", s)),
         }
     }
@@ -207,6 +211,16 @@ pub struct ChannelMetadata {
     pub wechat_user_id: Option<String>,
     /// WeChat Work-specific: Agent ID (应用ID)
     pub wechat_agent_id: Option<String>,
+    /// Lark-specific: App ID
+    pub lark_app_id: Option<String>,
+    /// Lark-specific: Tenant key (workspace identifier)
+    pub lark_tenant_key: Option<String>,
+    /// Lark-specific: User's open_id
+    pub lark_open_id: Option<String>,
+    /// Lark-specific: Chat ID (group or P2P chat)
+    pub lark_chat_id: Option<String>,
+    /// Lark-specific: Message ID
+    pub lark_message_id: Option<String>,
 
     // =========================================================================
     // Multi-channel collaboration support

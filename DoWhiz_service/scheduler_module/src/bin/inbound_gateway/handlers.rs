@@ -20,6 +20,7 @@ use scheduler_module::adapters::slack::{
     is_url_verification, SlackChallengeResponse, SlackEventWrapper, SlackInboundAdapter,
 };
 use scheduler_module::adapters::telegram::TelegramInboundAdapter;
+use scheduler_module::adapters::lark::LarkInboundAdapter;
 use scheduler_module::adapters::wechat::WeChatInboundAdapter;
 use scheduler_module::adapters::whatsapp::WhatsAppInboundAdapter;
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundAdapter, InboundMessage};
@@ -31,8 +32,8 @@ use scheduler_module::user_store::extract_emails;
 use super::routes::{build_dedupe_key, normalize_email, normalize_phone_number, resolve_route};
 use super::state::{find_service_address, GatewayState, RouteDecision, RouteKey, RouteTarget};
 use super::verify::{
-    verify_bluebubbles, verify_postmark, verify_slack, verify_twilio, verify_wechat,
-    verify_whatsapp_subscription,
+    verify_bluebubbles, verify_lark, verify_lark_challenge, verify_postmark, verify_slack,
+    verify_twilio, verify_wechat, verify_whatsapp_subscription,
 };
 
 /// Request payload for creating a workspace brief document
@@ -654,6 +655,58 @@ pub(super) async fn ingest_wechat(
     let external_message_id = message.message_id.clone();
     let envelope =
         match build_envelope(route, Channel::WeChat, external_message_id, &message, &body).await {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                error!("gateway failed to store raw payload: {}", err);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"status": "payload_store_failed"})),
+                );
+            }
+        };
+    enqueue_envelope(state.queue.clone(), envelope).await
+}
+
+/// Handle Lark inbound messages (POST request)
+pub(super) async fn ingest_lark(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    // Handle URL verification challenge
+    if let Some(challenge) = verify_lark_challenge(&body) {
+        info!("lark URL verification, returning challenge");
+        return (StatusCode::OK, Json(json!({"challenge": challenge})));
+    }
+
+    // Verify signature
+    if let Err(reason) = verify_lark(&headers, &body) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"status": reason})));
+    }
+
+    let adapter = LarkInboundAdapter::new();
+    let message = match adapter.parse(&body) {
+        Ok(message) => message,
+        Err(err) => {
+            debug!("gateway ignoring lark event: {}", err);
+            return (StatusCode::OK, Json(json!({"status": "ignored"})));
+        }
+    };
+
+    let chat_id = message
+        .metadata
+        .lark_chat_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let Some(route) = resolve_route(Channel::Lark, &chat_id, &state) else {
+        info!("gateway no route for lark chat_id={}", chat_id);
+        return (StatusCode::OK, Json(json!({"status": "no_route"})));
+    };
+
+    let external_message_id = message.message_id.clone();
+    let envelope =
+        match build_envelope(route, Channel::Lark, external_message_id, &message, &body).await {
             Ok(envelope) => envelope,
             Err(err) => {
                 error!("gateway failed to store raw payload: {}", err);

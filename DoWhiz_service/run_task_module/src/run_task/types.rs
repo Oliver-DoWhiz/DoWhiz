@@ -31,6 +31,12 @@ pub struct UserIdentities {
     /// Telegram user IDs
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub telegram_user_ids: Vec<String>,
+    /// Lark (Feishu) open_ids (e.g., "ou_xxxxxxxxxxxxxxxxx")
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lark_user_ids: Vec<String>,
+    /// WeChat Work user IDs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wechat_user_ids: Vec<String>,
     /// Filesystem user IDs (UUIDs) that this account can access
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_user_ids: Vec<String>,

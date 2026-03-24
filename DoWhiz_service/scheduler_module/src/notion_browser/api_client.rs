@@ -950,7 +950,7 @@ impl NotionApiClient {
         &self,
         workspace_id: &str,
         page_ids: &[String],
-    ) -> Vec<(String, Result<NotionPageContent, String>)> {
+    ) -> Vec<(String, Result<PageContent, String>)> {
         page_ids
             .iter()
             .map(|page_id| {

@@ -2,6 +2,7 @@ mod bluebubbles;
 mod discord;
 mod discord_context;
 mod google_workspace;
+mod lark;
 mod notion;
 mod notion_email;
 mod quick_responses;
@@ -29,5 +30,6 @@ pub(super) use quick_responses::{
 pub(super) use slack::process_slack_event;
 pub(super) use sms::process_sms_message;
 pub(super) use telegram::process_telegram_event;
+pub(super) use lark::process_lark_event;
 pub(super) use wechat::process_wechat_event;
 pub(super) use whatsapp::process_whatsapp_event;

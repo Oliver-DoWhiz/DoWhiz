@@ -656,6 +656,58 @@ pub(crate) fn execute_wechat_send(task: &SendReplyTask) -> Result<(), SchedulerE
     Ok(())
 }
 
+/// Execute a SendReplyTask via Lark (飞书).
+pub(crate) fn execute_lark_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    use crate::adapters::lark::LarkOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter, OutboundMessage};
+
+    dotenvy::dotenv().ok();
+    let adapter = LarkOutboundAdapter::from_env()
+        .map_err(|err| SchedulerError::TaskFailed(format!("Lark config error: {}", err)))?;
+
+    // Read plain text content from reply_message.txt
+    let text_body = if task.html_path.exists() {
+        fs::read_to_string(&task.html_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let message = OutboundMessage {
+        channel: Channel::Lark,
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: vec![],
+        bcc: vec![],
+        subject: task.subject.clone(),
+        text_body,
+        html_body: String::new(),
+        html_path: Some(task.html_path.clone()),
+        attachments_dir: Some(task.attachments_dir.clone()),
+        thread_id: task.in_reply_to.clone(),
+        metadata: ChannelMetadata {
+            lark_open_id: task.to.first().cloned(),
+            ..Default::default()
+        },
+    };
+
+    let result = adapter
+        .send(&message)
+        .map_err(|err| SchedulerError::TaskFailed(format!("Lark send failed: {}", err)))?;
+
+    if !result.success {
+        return Err(SchedulerError::TaskFailed(format!(
+            "Lark API error: {}",
+            result.error.unwrap_or_default()
+        )));
+    }
+
+    info!(
+        "sent Lark message to {:?}, message_id={}",
+        task.to, result.message_id
+    );
+    Ok(())
+}
+
 /// Execute a SendReplyTask via SMS (Twilio).
 pub(crate) fn execute_sms_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
     dotenvy::dotenv().ok();
