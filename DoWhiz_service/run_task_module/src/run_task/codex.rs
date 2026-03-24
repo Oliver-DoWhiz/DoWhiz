@@ -230,7 +230,7 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
         "email" | "googledocs" | "googlesheets" | "googleslides" => {
             workspace_dir.join("reply_email_draft.html")
         }
-        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" => {
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark" | "wechat" => {
             workspace_dir.join("reply_message.txt")
         }
         "notion" => {
