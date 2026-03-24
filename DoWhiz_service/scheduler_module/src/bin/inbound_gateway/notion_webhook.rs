@@ -401,6 +401,18 @@ pub async fn ingest_notion_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Check for verification token (webhook setup handshake)
+    // Notion sends {"verification_token": "<token>"} and expects it echoed back
+    if let Ok(verification) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if let Some(token) = verification.get("verification_token").and_then(|v| v.as_str()) {
+            info!("notion webhook verification request received");
+            return (
+                StatusCode::OK,
+                Json(json!({"verification_token": token})),
+            );
+        }
+    }
+
     // Verify signature
     if let Err(reason) = super::verify::verify_notion(&headers, &body) {
         warn!("notion webhook signature verification failed: {}", reason);
