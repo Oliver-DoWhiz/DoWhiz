@@ -4,7 +4,11 @@
 //! - `LarkInboundAdapter`: Parses Lark webhook payloads (JSON)
 //! - `LarkOutboundAdapter`: Sends messages via Lark Open Platform API
 
+use aes::cipher::{BlockDecryptMut, KeyIvInit};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::sync::RwLock;
 use tracing::info;
 
@@ -21,12 +25,61 @@ impl LarkInboundAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// Decrypt Lark encrypted payload using AES-256-CBC.
+    /// Key derivation: SHA256(encrypt_key)
+    /// Format: base64(IV + ciphertext)
+    fn decrypt_payload(encrypted: &str, encrypt_key: &str) -> Result<Vec<u8>, AdapterError> {
+        // Derive AES key from encrypt_key using SHA256
+        let key = Sha256::digest(encrypt_key.as_bytes());
+
+        // Decode base64
+        let encrypted_bytes = BASE64
+            .decode(encrypted)
+            .map_err(|e| AdapterError::ParseError(format!("invalid base64: {}", e)))?;
+
+        if encrypted_bytes.len() < 16 {
+            return Err(AdapterError::ParseError(
+                "encrypted data too short".to_string(),
+            ));
+        }
+
+        // First 16 bytes are IV, rest is ciphertext
+        let (iv, ciphertext) = encrypted_bytes.split_at(16);
+
+        // Decrypt using AES-256-CBC
+        type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+        let mut buf = ciphertext.to_vec();
+        let decrypted = Aes256CbcDec::new(key.as_slice().into(), iv.into())
+            .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
+            .map_err(|e| AdapterError::ParseError(format!("decryption failed: {}", e)))?;
+
+        Ok(decrypted.to_vec())
+    }
 }
 
 impl InboundAdapter for LarkInboundAdapter {
     fn parse(&self, raw_payload: &[u8]) -> Result<InboundMessage, AdapterError> {
         let payload: LarkWebhookPayload = serde_json::from_slice(raw_payload)
             .map_err(|e| AdapterError::ParseError(format!("invalid JSON: {}", e)))?;
+
+        // Handle encrypted payloads
+        let payload = if let Some(encrypted) = payload.encrypt {
+            let encrypt_key = std::env::var("LARK_ENCRYPT_KEY").map_err(|_| {
+                AdapterError::ConfigError(
+                    "LARK_ENCRYPT_KEY required for encrypted payloads".to_string(),
+                )
+            })?;
+            let decrypted = Self::decrypt_payload(&encrypted, &encrypt_key)?;
+            info!(
+                "lark payload decrypted, len={}",
+                decrypted.len()
+            );
+            serde_json::from_slice::<LarkWebhookPayload>(&decrypted)
+                .map_err(|e| AdapterError::ParseError(format!("invalid decrypted JSON: {}", e)))?
+        } else {
+            payload
+        };
 
         // Handle different event types
         let event = payload
@@ -267,6 +320,8 @@ pub struct LarkWebhookPayload {
     pub event_type: Option<String>,
     /// Verification token (for URL verification)
     pub token: Option<String>,
+    /// Encrypted payload (when encryption is enabled in Lark console)
+    pub encrypt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -538,6 +593,164 @@ mod tests {
         let adapter = LarkInboundAdapter::new();
         let message = adapter.parse(json.as_bytes()).unwrap();
         assert_eq!(message.raw_payload, json.as_bytes());
+    }
+
+    // ==================== Encryption/Decryption Tests ====================
+
+    /// Helper to encrypt payload using the same AES-256-CBC scheme Lark uses
+    fn encrypt_payload(plaintext: &[u8], encrypt_key: &str) -> String {
+        use aes::cipher::{BlockEncryptMut, KeyIvInit};
+        use rand::RngCore;
+
+        // Derive AES key from encrypt_key using SHA256
+        let key = Sha256::digest(encrypt_key.as_bytes());
+
+        // Generate random IV
+        let mut iv = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut iv);
+
+        // Encrypt using AES-256-CBC with PKCS7 padding
+        type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+
+        // Calculate padded length (PKCS7 padding)
+        let block_size = 16;
+        let padding_len = block_size - (plaintext.len() % block_size);
+        let padded_len = plaintext.len() + padding_len;
+
+        // Create buffer with plaintext + padding
+        let mut buf = vec![0u8; padded_len];
+        buf[..plaintext.len()].copy_from_slice(plaintext);
+        for byte in buf[plaintext.len()..].iter_mut() {
+            *byte = padding_len as u8;
+        }
+
+        // Encrypt in place
+        Aes256CbcEnc::new(key.as_slice().into(), (&iv).into())
+            .encrypt_padded_mut::<aes::cipher::block_padding::NoPadding>(&mut buf, padded_len)
+            .unwrap();
+
+        // Combine IV + ciphertext and base64 encode
+        let mut combined = iv.to_vec();
+        combined.extend(&buf);
+        BASE64.encode(&combined)
+    }
+
+    #[test]
+    fn decrypt_payload_roundtrip() {
+        let plaintext = r#"{"schema":"2.0","header":{},"event":{"message":{"chat_id":"oc_test"}}}"#;
+        let encrypt_key = "test_encrypt_key_12345";
+
+        let encrypted = encrypt_payload(plaintext.as_bytes(), encrypt_key);
+        let decrypted = LarkInboundAdapter::decrypt_payload(&encrypted, encrypt_key).unwrap();
+
+        assert_eq!(decrypted, plaintext.as_bytes());
+    }
+
+    #[test]
+    fn decrypt_payload_produces_valid_json() {
+        let inner_json = r#"{
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt_encrypted",
+                "event_type": "im.message.receive_v1",
+                "app_id": "cli_xxx",
+                "tenant_key": "tenant_xxx"
+            },
+            "event": {
+                "sender": {
+                    "sender_id": {
+                        "open_id": "ou_encrypted_user"
+                    }
+                },
+                "message": {
+                    "message_id": "msg_encrypted",
+                    "chat_id": "oc_encrypted_chat",
+                    "content": "{\"text\": \"Encrypted message!\"}"
+                }
+            }
+        }"#;
+        let encrypt_key = "XVWeZ5UsNFHLcbgXpAFeogbSA4ET8QPQ";
+
+        let encrypted = encrypt_payload(inner_json.as_bytes(), encrypt_key);
+        let decrypted = LarkInboundAdapter::decrypt_payload(&encrypted, encrypt_key).unwrap();
+
+        // Verify decrypted content is valid JSON with expected structure
+        let payload: LarkWebhookPayload = serde_json::from_slice(&decrypted).unwrap();
+        assert!(payload.event.is_some());
+        let event = payload.event.unwrap();
+        assert!(event.message.is_some());
+        let message = event.message.unwrap();
+        assert_eq!(message.chat_id, "oc_encrypted_chat");
+    }
+
+    #[test]
+    fn parse_encrypted_payload_end_to_end() {
+        let inner_json = r#"{
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt_e2e",
+                "app_id": "cli_e2e"
+            },
+            "event": {
+                "sender": {
+                    "sender_id": {
+                        "open_id": "ou_e2e_user",
+                        "name": "E2E Test User"
+                    }
+                },
+                "message": {
+                    "message_id": "msg_e2e",
+                    "chat_id": "oc_e2e_chat",
+                    "content": "{\"text\": \"End to end encrypted!\"}"
+                }
+            }
+        }"#;
+        let encrypt_key = "test_key_for_e2e_test";
+
+        // Create encrypted wrapper payload
+        let encrypted = encrypt_payload(inner_json.as_bytes(), encrypt_key);
+        let wrapper_json = format!(r#"{{"encrypt":"{}"}}"#, encrypted);
+
+        // Set env var for the test
+        std::env::set_var("LARK_ENCRYPT_KEY", encrypt_key);
+
+        let adapter = LarkInboundAdapter::new();
+        let message = adapter.parse(wrapper_json.as_bytes()).unwrap();
+
+        assert_eq!(message.channel, Channel::Lark);
+        assert_eq!(message.sender, "ou_e2e_user");
+        assert_eq!(message.text_body, Some("End to end encrypted!".to_string()));
+        assert_eq!(message.metadata.lark_chat_id, Some("oc_e2e_chat".to_string()));
+        assert_eq!(message.sender_name, Some("E2E Test User".to_string()));
+
+        // Clean up env var
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+    }
+
+    #[test]
+    fn decrypt_fails_with_wrong_key() {
+        let plaintext = b"test payload";
+        let correct_key = "correct_key";
+        let wrong_key = "wrong_key";
+
+        let encrypted = encrypt_payload(plaintext, correct_key);
+        let result = LarkInboundAdapter::decrypt_payload(&encrypted, wrong_key);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_fails_with_invalid_base64() {
+        let result = LarkInboundAdapter::decrypt_payload("not_valid_base64!!!", "any_key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_fails_with_short_data() {
+        // Less than 16 bytes (IV size)
+        let short_data = BASE64.encode(b"short");
+        let result = LarkInboundAdapter::decrypt_payload(&short_data, "any_key");
+        assert!(result.is_err());
     }
 
     // ==================== Outbound Adapter Tests ====================
