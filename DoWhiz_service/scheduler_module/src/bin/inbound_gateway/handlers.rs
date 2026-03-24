@@ -688,7 +688,7 @@ pub(super) async fn ingest_lark(
     let message = match adapter.parse(&body) {
         Ok(message) => message,
         Err(err) => {
-            debug!("gateway ignoring lark event: {}", err);
+            info!("gateway ignoring lark event: {}", err);
             return (StatusCode::OK, Json(json!({"status": "ignored"})));
         }
     };
@@ -699,8 +699,21 @@ pub(super) async fn ingest_lark(
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
+    info!(
+        "lark message received: chat_id={}, sender={}, message_id={:?}, text_preview={}",
+        chat_id,
+        message.sender,
+        message.message_id,
+        message.text_body.as_deref().unwrap_or("").chars().take(50).collect::<String>()
+    );
+
     let Some(route) = resolve_route(Channel::Lark, &chat_id, &state) else {
-        info!("gateway no route for lark chat_id={}", chat_id);
+        info!(
+            "gateway no route for lark chat_id={}, channel_defaults_has_lark={}, global_default_employee={:?}",
+            chat_id,
+            state.config.channel_defaults.contains_key(&Channel::Lark),
+            state.config.defaults.employee_id
+        );
         return (StatusCode::OK, Json(json!({"status": "no_route"})));
     };
 
