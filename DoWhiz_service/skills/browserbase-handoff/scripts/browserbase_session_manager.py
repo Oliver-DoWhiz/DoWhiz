@@ -32,9 +32,16 @@ class ApiError(CliError):
     """HTTP/API error with a surfaced status code."""
 
     def __init__(self, status_code: int, path: str, message: str) -> None:
-        super().__init__(f"Browserbase API error {status_code} for {path}: {message}")
         self.status_code = status_code
         self.path = path
+        self.raw_message = message
+        self.body_summary = summarize_api_error_body(message)
+        self.error_kind = classify_api_error(status_code, path, self.body_summary)
+        self.guidance = api_error_guidance(self.error_kind)
+        error_message = f"Browserbase API error {status_code} for {path}: {self.body_summary}"
+        if self.guidance:
+            error_message = f"{error_message} {self.guidance}"
+        super().__init__(error_message)
 
 
 @dataclass
@@ -51,6 +58,67 @@ def utc_now() -> datetime:
 
 def isoformat_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def summarize_api_error_body(raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        return "empty response body"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text[:800]
+    if isinstance(parsed, dict):
+        message = str(parsed.get("message", "")).strip()
+        error = str(parsed.get("error", "")).strip()
+        parts = []
+        if error:
+            parts.append(error)
+        if message and message not in parts:
+            parts.append(message)
+        if parts:
+            return ": ".join(parts)
+    return text[:800]
+
+
+def classify_api_error(status_code: int, path: str, body_summary: str) -> Optional[str]:
+    normalized_path = path.strip()
+    if status_code == 402 and normalized_path == "/v1/sessions":
+        return "browserbase_quota_exhausted"
+    if status_code == 429 and normalized_path == "/v1/sessions":
+        return "browserbase_rate_limited"
+    if status_code == 401:
+        return "browserbase_auth_failed"
+    if "project not found" in body_summary.lower():
+        return "browserbase_project_missing"
+    return None
+
+
+def api_error_guidance(error_kind: Optional[str]) -> Optional[str]:
+    if error_kind == "browserbase_quota_exhausted":
+        return (
+            "Browserbase could not create a live browser session for this task because the "
+            "configured project has no remaining browser minutes or billing is inactive. "
+            "Upgrade the Browserbase plan, or switch DoWhiz to a Browserbase API key/project "
+            "that can create sessions. Until this is fixed, the agent cannot open a live "
+            "Browserbase page or send a live browser handoff link."
+        )
+    if error_kind == "browserbase_rate_limited":
+        return (
+            "Browserbase is rate limiting session creation right now. Retry after the limit "
+            "window, or reduce concurrent Browserbase session starts."
+        )
+    if error_kind == "browserbase_auth_failed":
+        return (
+            "Verify that the Browserbase API key configured for this environment is valid and "
+            "belongs to the intended project."
+        )
+    if error_kind == "browserbase_project_missing":
+        return (
+            "Verify that BROWSERBASE_PROJECT_ID points to a project that exists and is accessible "
+            "by the configured API key."
+        )
+    return None
 
 
 def read_json(path: Path) -> Dict[str, Any]:
@@ -516,16 +584,19 @@ def main(argv: list[str]) -> int:
     try:
         return int(args.func(args))
     except CliError as exc:
-        print(
-            json.dumps(
-                {
-                    "status": "error",
-                    "error": str(exc),
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-            )
-        )
+        payload: Dict[str, Any] = {
+            "status": "error",
+            "error": str(exc),
+        }
+        if isinstance(exc, ApiError):
+            payload["provider"] = "browserbase"
+            payload["provider_path"] = exc.path
+            payload["provider_status_code"] = exc.status_code
+            if exc.error_kind:
+                payload["error_kind"] = exc.error_kind
+            if exc.guidance:
+                payload["action_required"] = exc.guidance
+        print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
         return 1
     except KeyboardInterrupt:
         print(json.dumps({"status": "error", "error": "interrupted"}, ensure_ascii=True, sort_keys=True))

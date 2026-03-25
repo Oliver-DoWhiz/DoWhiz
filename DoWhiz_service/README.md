@@ -260,7 +260,10 @@ Azure ACI execution path (required vars):
   only mirrors the durable Browserbase context state between per-user secrets and each
   task workspace; it does not persist `active_session.json` across tasks, so every new
   task restores the user's auth context into a fresh live Browserbase session instead of
-  inheriting a stale expiring session from an older container.
+  inheriting a stale expiring session from an older container. If Browserbase rejects
+  session creation with HTTP 402, `browserbase_session_manager` now surfaces an
+  explicit quota/billing message so operators know why no live browser or handoff
+  link could be created.
 - `human_approval_gate` (via skill `human-approval-gate`) provides a blocking
   approval flow for login CAPTCHA/password/OTP/device-approval steps. In
   run_task/Codex environments, the preferred path is the injected MCP tool

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -164,6 +165,56 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
         self.assertIn("export BROWSERBASE_SESSION_ID=sess_test", text)
         self.assertIn("export BROWSERBASE_CONTEXT_ID=ctx_test", text)
         self.assertIn("export PLAYWRIGHT_MCP_CDP_ENDPOINT='wss://connect.example.com?token=abc'", text)
+
+    def test_api_error_classifies_browserbase_quota_exhaustion(self):
+        error = MODULE.ApiError(
+            402,
+            "/v1/sessions",
+            json.dumps(
+                {
+                    "statusCode": 402,
+                    "error": "Payment Required",
+                    "message": "Free plan browser minutes limit reached. Please upgrade your account.",
+                }
+            ),
+        )
+
+        self.assertEqual(error.error_kind, "browserbase_quota_exhausted")
+        self.assertIn("Free plan browser minutes limit reached", error.body_summary)
+        self.assertIn("cannot open a live Browserbase page", str(error))
+
+    def test_main_emits_structured_quota_error_payload(self):
+        original_cmd = MODULE.cmd_ensure_session
+        module_stdout = sys.stdout
+        capture = io.StringIO()
+        sys.stdout = capture
+        try:
+            def fail(_args):
+                raise MODULE.ApiError(
+                    402,
+                    "/v1/sessions",
+                    json.dumps(
+                        {
+                            "statusCode": 402,
+                            "error": "Payment Required",
+                            "message": "Free plan browser minutes limit reached. Please upgrade your account.",
+                        }
+                    ),
+                )
+
+            MODULE.cmd_ensure_session = fail
+            exit_code = MODULE.main(["ensure-session"])
+        finally:
+            MODULE.cmd_ensure_session = original_cmd
+            sys.stdout = module_stdout
+
+        self.assertEqual(exit_code, 1)
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["provider"], "browserbase")
+        self.assertEqual(payload["provider_status_code"], 402)
+        self.assertEqual(payload["error_kind"], "browserbase_quota_exhausted")
+        self.assertIn("upgrade the browserbase plan", payload["action_required"].lower())
 
 
 if __name__ == "__main__":
