@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -127,9 +128,24 @@ def read_json(path: Path) -> Dict[str, Any]:
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
+    temp_path_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.stem}-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path_name = handle.name
+            handle.write(json.dumps(payload, indent=2, sort_keys=True))
+        Path(temp_path_name).replace(path)
+    finally:
+        if temp_path_name:
+            temp_path = Path(temp_path_name)
+            if temp_path.exists():
+                temp_path.unlink()
 
 
 def get_env_first(*keys: str) -> Optional[str]:
