@@ -17,7 +17,7 @@ ensure_browserbase_session() {
 
   local state_dir="${BROWSERBASE_STATE_DIR:-.secrets/browserbase}"
   local exports
-  if ! exports="$(browserbase_session_manager ensure-session --state-dir "$state_dir" --format shell 2>&1)"; then
+  if ! exports="$(browserbase_session_manager --state-dir "$state_dir" ensure-session --format shell 2>&1)"; then
     echo "$exports" >&2
     exit 1
   fi
