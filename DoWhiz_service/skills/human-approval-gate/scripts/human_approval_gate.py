@@ -199,6 +199,24 @@ def page_looks_live(page: Dict[str, Any]) -> bool:
     return not page_text_is_blank(page.get("url")) or not page_text_is_blank(page.get("title"))
 
 
+def find_debug_page_by_id(payload: Dict[str, Any], page_id: str) -> Optional[Dict[str, Any]]:
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        return None
+
+    for raw_page in pages:
+        if not isinstance(raw_page, dict):
+            continue
+        current_page_id = str(raw_page.get("id", "")).strip()
+        if current_page_id != page_id:
+            continue
+        if not page_debug_url(raw_page):
+            return None
+        return raw_page
+
+    return None
+
+
 def resolve_browserbase_debug_page_id(payload: Dict[str, Any]) -> str:
     pages = payload.get("pages")
     if not isinstance(pages, list):
@@ -217,24 +235,25 @@ def resolve_browserbase_debug_page_id(payload: Dict[str, Any]) -> str:
         if page_looks_live(page):
             return page_id
 
-    for _page, page_id in iter_candidates():
-        return page_id
-
     return ""
 
 
 def resolve_browser_handoff_page_id(active_session: Dict[str, Any]) -> str:
     page_id = str(active_session.get("page_id", "")).strip()
-    if page_id:
-        return page_id
 
     session_id = str(active_session.get("session_id", "")).strip()
     if not session_id:
-        return ""
+        return page_id
 
     payload = fetch_browserbase_debug_payload(session_id)
     if not payload:
-        return ""
+        return page_id
+
+    if page_id:
+        page = find_debug_page_by_id(payload, page_id)
+        if page is not None and page_looks_live(page):
+            return page_id
+
     return resolve_browserbase_debug_page_id(payload)
 
 

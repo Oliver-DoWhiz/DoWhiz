@@ -207,6 +207,17 @@ class HumanApprovalGateTests(unittest.TestCase):
             os.environ[MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY] = "https://api.example.com/service"
             os.environ[MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY] = "secret-key"
             os.environ[MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY] = str(active_session_path)
+            original_fetch = MODULE.fetch_browserbase_debug_payload
+            MODULE.fetch_browserbase_debug_payload = lambda session_id: {
+                "pages": [
+                    {
+                        "id": "page_live_456",
+                        "url": "https://example.com/captcha",
+                        "title": "Captcha",
+                        "debuggerFullscreenUrl": "https://live.example.com",
+                    }
+                ]
+            }
             try:
                 args = self.parse_request(
                     "--challenge-type",
@@ -220,6 +231,7 @@ class HumanApprovalGateTests(unittest.TestCase):
                 )
                 state = MODULE.build_request_state(args)
             finally:
+                MODULE.fetch_browserbase_debug_payload = original_fetch
                 for key, value in previous.items():
                     if value is None:
                         os.environ.pop(key, None)
@@ -369,6 +381,73 @@ class HumanApprovalGateTests(unittest.TestCase):
             token = state["browser_handoff_url"].split("token=", 1)[1]
             claims = self.decode_token_claims(token)
             self.assertEqual(claims["page_id"], "page_from_debug")
+
+    def test_browser_handoff_replaces_stored_blank_page_id_with_live_debug_page(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot = self.create_screenshot(temp_dir)
+            active_session_path = Path(temp_dir) / "active_session.json"
+            active_session_path.write_text(
+                json.dumps({"session_id": "sess_live_123", "page_id": "page_blank"}),
+                encoding="utf-8",
+            )
+
+            previous = {
+                MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY),
+                MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY),
+                MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY: os.environ.get(MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY),
+            }
+            os.environ[MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY] = "https://api.example.com/service"
+            os.environ[MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY] = "secret-key"
+            os.environ[MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY] = str(active_session_path)
+
+            original_fetch = MODULE.fetch_browserbase_debug_payload
+            MODULE.fetch_browserbase_debug_payload = lambda session_id: {
+                "pages": [
+                    {
+                        "id": "page_blank",
+                        "url": "about:blank",
+                        "title": "about:blank",
+                        "debuggerFullscreenUrl": "https://blank.example.com",
+                    },
+                    {
+                        "id": "page_live",
+                        "url": "https://accounts.google.com/signin/v2/challenge/ipp",
+                        "title": "2-Step Verification",
+                        "debuggerFullscreenUrl": "https://live.example.com",
+                    },
+                ]
+            }
+            try:
+                args = self.parse_request(
+                    "--challenge-type",
+                    "two_factor",
+                    "--page-state",
+                    "waiting_for_code_input",
+                    "--scope",
+                    "admin",
+                    "--account-label",
+                    "dowhiz@deep-tutor.com Google account",
+                    "--screenshot",
+                    screenshot,
+                    "--verification-destination",
+                    "phone ending in 15",
+                    "--two-factor-method",
+                    "sms",
+                )
+                state = MODULE.build_request_state(args)
+            finally:
+                MODULE.fetch_browserbase_debug_payload = original_fetch
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertEqual(state["browser_session_id"], "sess_live_123")
+            self.assertEqual(state["browser_page_id"], "page_live")
+            token = state["browser_handoff_url"].split("token=", 1)[1]
+            claims = self.decode_token_claims(token)
+            self.assertEqual(claims["page_id"], "page_live")
 
     def test_poll_for_reply_once_retries_without_recipient_filter_for_alias_deliveries(self):
         challenge = {

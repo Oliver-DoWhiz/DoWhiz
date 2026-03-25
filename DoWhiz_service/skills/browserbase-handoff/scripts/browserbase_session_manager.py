@@ -360,9 +360,6 @@ def select_page_id_from_debug_payload(debug_urls: Dict[str, Any]) -> Optional[st
         if page_looks_live(page):
             return page_id
 
-    for _page, page_id in iter_candidates():
-        return page_id
-
     return None
 
 
