@@ -1,0 +1,4 @@
+interface:
+  display_name: "US Tax Filing Assistant"
+  short_description: "Route and prep U.S. tax filing tasks"
+  default_prompt: "Use $us-tax-filing-assistant to intake my U.S. tax filing case, collect missing documents, and route me to Sprintax or TurboTax."
