@@ -981,6 +981,7 @@ fn run_codex_task_azure_aci(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
+    let env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
 
     let container_name = build_aci_container_name();
     let timeout = run_task_timeout();
@@ -1573,9 +1574,10 @@ fn create_aci_container(
     env_overrides: &[(String, String)],
 ) -> Result<(), RunTaskError> {
     let mut create_cmd = build_aci_create_command(config, container_name, create_command);
+    let env_overrides = dedupe_env_overrides_last_wins(env_overrides);
     if !env_overrides.is_empty() {
         create_cmd.arg("--environment-variables");
-        for (key, value) in env_overrides {
+        for (key, value) in &env_overrides {
             create_cmd.arg(format!("{key}={value}"));
         }
     }
@@ -1655,6 +1657,18 @@ fn build_aci_create_command(
             .arg(password);
     }
     create_cmd
+}
+
+fn dedupe_env_overrides_last_wins(env_overrides: &[(String, String)]) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(env_overrides.len());
+    for (key, value) in env_overrides.iter().rev() {
+        if seen.insert(key.clone()) {
+            deduped.push((key.clone(), value.clone()));
+        }
+    }
+    deduped.reverse();
+    deduped
 }
 
 fn cleanup_stale_aci_containers(config: &AzureAciConfig) -> Result<usize, RunTaskError> {
@@ -3617,6 +3631,105 @@ printf '%s\n' "$@" > "$capture_file"
         assert!(args.contains("BRIGHT_DATA_API_KEY=bright-key"));
         assert!(args.contains("BRIGHTDATA_API_KEY=bright-key"));
         assert!(args.contains("BRIGHT_DATA_XIAOHONGSHU_COLLECTOR=collector-123"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_create_aci_container_dedupes_duplicate_env_keys_with_last_value() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let capture_path = temp.path().join("az-args.txt");
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake az");
+        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "stg-rg".to_string(),
+            image: "stg.azurecr.io/dowhiz-service:test".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "storageacct".to_string(),
+            storage_key: "storagekey".to_string(),
+            file_share: "run-task-share".to_string(),
+            host_share_root: PathBuf::from("/host/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+        let env_overrides = vec![
+            (
+                BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY.to_string(),
+                "first-secret".to_string(),
+            ),
+            ("OTHER_KEY".to_string(), "other-value".to_string()),
+            (
+                BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY.to_string(),
+                "final-secret".to_string(),
+            ),
+        ];
+
+        create_aci_container(
+            &config,
+            "dwz-codex-env-dedupe-test",
+            "/bin/bash -lc 'echo ok'",
+            &env_overrides,
+        )
+        .expect("create container");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert_eq!(
+            args.matches("BROWSER_HANDOFF_SIGNING_SECRET=").count(),
+            1,
+            "expected duplicate env key to be emitted once"
+        );
+        assert!(args.contains("BROWSER_HANDOFF_SIGNING_SECRET=final-secret"));
+        assert!(!args.contains("BROWSER_HANDOFF_SIGNING_SECRET=first-secret"));
+        assert!(args.contains("OTHER_KEY=other-value"));
+    }
+
+    #[test]
+    fn test_dedupe_env_overrides_last_wins_preserves_order() {
+        let env_overrides = vec![
+            ("FIRST".to_string(), "1".to_string()),
+            ("SHARED".to_string(), "old".to_string()),
+            ("SECOND".to_string(), "2".to_string()),
+            ("SHARED".to_string(), "new".to_string()),
+        ];
+
+        let deduped = dedupe_env_overrides_last_wins(&env_overrides);
+
+        assert_eq!(
+            deduped,
+            vec![
+                ("FIRST".to_string(), "1".to_string()),
+                ("SECOND".to_string(), "2".to_string()),
+                ("SHARED".to_string(), "new".to_string()),
+            ]
+        );
     }
 
     #[test]
