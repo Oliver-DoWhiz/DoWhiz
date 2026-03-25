@@ -2,6 +2,7 @@ pub mod agent_market;
 pub mod analytics;
 pub mod auth;
 pub mod billing;
+mod browser_handoff;
 mod chat_history;
 mod config;
 mod email;

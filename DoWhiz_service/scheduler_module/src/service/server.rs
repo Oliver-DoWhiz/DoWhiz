@@ -30,6 +30,7 @@ use super::agent_market::{agent_market_router, AgentMarketState};
 use super::analytics::{analytics_router, AnalyticsState};
 use super::auth::{auth_router, verify_slack_bot_access, AuthState};
 use super::billing::{billing_router, BillingState};
+use super::browser_handoff::browser_handoff_router;
 use super::chat_history::search_chat_history;
 
 use super::config::ServiceConfig;
@@ -220,6 +221,7 @@ pub async fn run_server(
         .with_state(state)
         .merge(auth_router(auth_state))
         .merge(analytics_router(analytics_state))
+        .merge(browser_handoff_router())
         .merge(agent_market_router(agent_market_state));
 
     // Add billing routes if Stripe is configured

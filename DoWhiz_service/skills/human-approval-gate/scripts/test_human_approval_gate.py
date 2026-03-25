@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from base64 import urlsafe_b64decode
 from pathlib import Path
 
 
@@ -25,6 +26,11 @@ MCP_SPEC.loader.exec_module(MCP_MODULE)
 
 
 class HumanApprovalGateTests(unittest.TestCase):
+    def decode_token_claims(self, token: str):
+        _header, claims, _signature = token.split(".")
+        padding = "=" * (-len(claims) % 4)
+        return json.loads(urlsafe_b64decode(claims + padding).decode("utf-8"))
+
     def create_screenshot(self, directory: str, name: str = "screen.png") -> str:
         path = Path(directory) / name
         path.write_bytes(
@@ -165,6 +171,55 @@ class HumanApprovalGateTests(unittest.TestCase):
 
             self.assertIn("Current browser state: Browser is currently blocked on a CAPTCHA challenge", rendered["text_body"])
             self.assertNotIn("attempted one built-in visual solve", rendered["text_body"])
+
+    def test_browser_handoff_link_is_included_when_active_session_exists(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot = self.create_screenshot(temp_dir)
+            active_session_path = Path(temp_dir) / "active_session.json"
+            active_session_path.write_text(
+                json.dumps({"session_id": "sess_live_123", "page_id": "page_live_456"}),
+                encoding="utf-8",
+            )
+
+            previous = {
+                MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY),
+                MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY),
+                MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY: os.environ.get(MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY),
+            }
+            os.environ[MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY] = "https://api.example.com/service"
+            os.environ[MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY] = "secret-key"
+            os.environ[MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY] = str(active_session_path)
+            try:
+                args = self.parse_request(
+                    "--challenge-type",
+                    "captcha",
+                    "--scope",
+                    "admin",
+                    "--account-label",
+                    "Oliver Google account",
+                    "--screenshot",
+                    screenshot,
+                )
+                state = MODULE.build_request_state(args)
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertEqual(state["browser_session_id"], "sess_live_123")
+            self.assertEqual(state["browser_page_id"], "page_live_456")
+            self.assertIn(
+                "https://api.example.com/service/auth/browser-handoff?token=",
+                state["browser_handoff_url"],
+            )
+            token = state["browser_handoff_url"].split("token=", 1)[1]
+            claims = self.decode_token_claims(token)
+            self.assertEqual(claims["session_id"], "sess_live_123")
+            self.assertEqual(claims["page_id"], "page_live_456")
+            self.assertIn("Live browser handoff:", state["_rendered_email"]["text_body"])
+            self.assertIn("Open live browser handoff", state["_rendered_email"]["html_body"])
 
     def test_cli_rejects_shell_usage_when_mcp_required(self):
         previous = os.environ.get(MODULE.HAG_REQUIRE_MCP_ENV_KEY)

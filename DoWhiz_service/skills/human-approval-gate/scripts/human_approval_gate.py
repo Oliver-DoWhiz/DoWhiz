@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -48,6 +50,12 @@ DEFAULT_PASSWORD_ENV_KEY = "GOOGLE_PASSWORD"
 CHALLENGE_TYPES = ("captcha", "password", "two_factor")
 TWO_FACTOR_METHODS = ("sms", "email", "auth_app", "device_tap", "other")
 EVENTS_LOG_FILENAME = "events.jsonl"
+BROWSERBASE_STATE_DIR_DEFAULT = ".secrets/browserbase"
+BROWSERBASE_ACTIVE_SESSION_FILENAME = "active_session.json"
+BROWSERBASE_STATE_DIR_ENV_KEY = "BROWSERBASE_STATE_DIR"
+BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY = "BROWSERBASE_ACTIVE_SESSION_PATH"
+BROWSER_HANDOFF_BASE_URL_ENV_KEY = "BROWSER_HANDOFF_BASE_URL"
+BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY = "BROWSER_HANDOFF_SIGNING_SECRET"
 PAGE_STATES_BY_TYPE = {
     "captcha": {"captcha_blocked"},
     "password": {"waiting_for_password"},
@@ -106,6 +114,81 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
     temp_path = path.with_suffix(".tmp")
     temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     temp_path.replace(path)
+
+
+def resolve_browserbase_active_session_path() -> Path:
+    explicit = get_env_first(BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY)
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        state_dir = get_env_first(BROWSERBASE_STATE_DIR_ENV_KEY) or BROWSERBASE_STATE_DIR_DEFAULT
+        path = Path(state_dir).expanduser() / BROWSERBASE_ACTIVE_SESSION_FILENAME
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+
+def load_active_browserbase_session() -> Optional[Dict[str, Any]]:
+    path = resolve_browserbase_active_session_path()
+    if not path.exists():
+        return None
+    try:
+        payload = read_json(path)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    session_id = str(payload.get("session_id", "")).strip()
+    if not session_id:
+        return None
+    return payload
+
+
+def encode_browser_handoff_token(claims: Dict[str, Any], secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    encoded_header = base64.urlsafe_b64encode(
+        json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    encoded_claims = base64.urlsafe_b64encode(
+        json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signing_input = f"{encoded_header}.{encoded_claims}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    return f"{encoded_header}.{encoded_claims}.{encoded_signature}"
+
+
+def build_browser_handoff_details(challenge_id: str, expires_at: str) -> Optional[Dict[str, str]]:
+    base_url = get_env_first(BROWSER_HANDOFF_BASE_URL_ENV_KEY)
+    signing_secret = get_env_first(BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY)
+    active_session = load_active_browserbase_session()
+    if not base_url or not signing_secret or not active_session:
+        return None
+
+    session_id = str(active_session.get("session_id", "")).strip()
+    if not session_id:
+        return None
+    page_id = str(active_session.get("page_id", "")).strip()
+
+    now = utc_now()
+    expires = parse_iso8601(expires_at)
+    claims: Dict[str, Any] = {
+        "version": 1,
+        "challenge_id": challenge_id,
+        "session_id": session_id,
+        "iat": int(now.timestamp()),
+        "exp": int(expires.timestamp()),
+    }
+    if page_id:
+        claims["page_id"] = page_id
+    token = encode_browser_handoff_token(claims, signing_secret)
+    payload = {
+        "browser_handoff_url": f"{base_url.rstrip('/')}/auth/browser-handoff?token={urllib.parse.quote(token, safe='')}",
+        "browser_session_id": session_id,
+    }
+    if page_id:
+        payload["browser_page_id"] = page_id
+    return payload
 
 
 def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
@@ -529,6 +612,7 @@ def build_text_body(state: Dict[str, Any]) -> str:
     password_env_key = str(state.get("password_env_key", ""))
     password_lookup_status = str(state.get("password_lookup_status", ""))
     screenshots = state.get("request_attachments") or []
+    browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
 
     lines = [
         "DoWhiz agent needs your help to continue a blocked authentication step.",
@@ -559,6 +643,8 @@ def build_text_body(state: Dict[str, Any]) -> str:
         lines.append(
             f"Attached screenshot(s): {screenshot_names or f'{len(screenshots)} file(s)'}"
         )
+    if browser_handoff_url:
+        lines.append(f"Live browser handoff: {browser_handoff_url}")
     if action_text.strip():
         lines.append(f"Action needed: {action_text.strip()}")
     if context.strip():
@@ -568,6 +654,7 @@ def build_text_body(state: Dict[str, Any]) -> str:
             "",
             "Please reply in this same email thread with the exact information",
             "the current browser screen needs so the agent can continue.",
+            "If you complete the blocked step in the live browser handoff, reply here when it is done.",
             "",
             f"The agent will wait for up to {timeout_minutes} minutes.",
             "It will not continue until a reply is received.",
@@ -576,9 +663,22 @@ def build_text_body(state: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_html_body(text_body: str) -> str:
+def build_html_body(state: Dict[str, Any], text_body: str) -> str:
+    browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
     escaped = escape(text_body).replace("\n", "<br>")
-    return f"<html><body><p>{escaped}</p></body></html>"
+    button_html = ""
+    if browser_handoff_url:
+        button_html = (
+            '<p>'
+            f'<a href="{escape(browser_handoff_url, quote=True)}" '
+            'style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;'
+            'text-decoration:none;border-radius:8px;font-weight:600;">'
+            "Open live browser handoff"
+            "</a>"
+            "</p>"
+            "<p>If you complete the blocked step inside the live browser, reply to this email thread so the agent can continue.</p>"
+        )
+    return f"<html><body>{button_html}<p>{escaped}</p></body></html>"
 
 
 def send_approval_email(
@@ -844,6 +944,9 @@ def build_send_event_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "password_lookup_status": state.get("password_lookup_status"),
         "attachment_count": len(state.get("request_attachments") or []),
         "attachments": state.get("request_attachments") or [],
+        "browser_handoff_url": state.get("browser_handoff_url"),
+        "browser_session_id": state.get("browser_session_id"),
+        "browser_page_id": state.get("browser_page_id"),
         "outbound_message_id": state.get("outbound_message_id"),
         "outbound_dry_run": state.get("outbound_dry_run"),
         "created_at": state.get("created_at"),
@@ -941,11 +1044,14 @@ def build_request_state(args: argparse.Namespace) -> Dict[str, Any]:
         "outbound_dry_run": bool(args.dry_run),
         "message_stream": "outbound",
     }
+    handoff = build_browser_handoff_details(challenge_id, state["expires_at"])
+    if handoff:
+        state.update(handoff)
     text_body = build_text_body(state)
     state["_rendered_email"] = {
         "subject": state["subject"],
         "text_body": text_body,
-        "html_body": build_html_body(text_body),
+        "html_body": build_html_body(state, text_body),
         "attachments": postmark_attachments,
     }
     return state
