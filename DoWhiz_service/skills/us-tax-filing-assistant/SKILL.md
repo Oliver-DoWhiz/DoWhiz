@@ -1,13 +1,13 @@
 ---
 name: us-tax-filing-assistant
-description: Coordinate U.S. tax filing intake, document collection, account setup, and platform routing for individuals, married couples, cross-border households, and small businesses. Use whenever the user asks about U.S. taxes, tax residency, NRA vs resident alien vs citizen status, dual-status, nonresident spouse elections, foreign wages, foreign tax credits, foreign accounts, 1040/1040-NR/8843/W-2/1099/1042-S/I-94/ITIN, tax treaties, Sprintax, TurboTax, or asks in Chinese about 报税, 税务, 税表, 税务居民, 非居民, 美国税, W-2, 1040NR, 1042-S, 海外收入, 海外账户, or wants help collecting tax documents, creating filing accounts, or preparing to file a federal or state return.
+description: Coordinate U.S. tax filing intake, document collection, account setup, and platform routing for individuals, married couples, cross-border households, small businesses, nonprofits, retirement-plan administration, and digital-asset reporting. Use whenever the user asks about U.S. taxes, tax residency, NRA vs resident alien vs citizen status, dual-status, nonresident spouse elections, foreign wages, foreign tax credits, foreign accounts, exempt organizations, Form 990, Form 5500, 401(k), SEP, SIMPLE, digital assets, crypto, 1040/1040-NR/8843/W-2/1099/1042-S/I-94/ITIN, tax treaties, Sprintax, TurboTax, or asks in Chinese about 报税, 税务, 税表, 税务居民, 非居民, 美国税, W-2, 1040NR, 1042-S, 海外收入, 海外账户, 非营利组织, 退休计划, 加密货币, or wants help collecting tax documents, creating filing accounts, or preparing to file a federal or state return.
 ---
 
 # US Tax Filing Assistant
 
 ## Overview
 
-Act as a tax workflow coordinator for English- or Chinese-language requests. Start every tax task by extracting the facts already in the thread, then proactively ask only for the missing classification, document, and account details. Route the case to the right filing platform, ground all substantive tax answers in authoritative sources, and treat vendor docs as product-capability sources rather than tax-law authority. Handle couple, household, and cross-border cases by classifying each person and each income stream before deciding the filing route.
+Act as a tax workflow coordinator for English- or Chinese-language requests. Start every tax task by extracting the facts already in the thread, then proactively ask only for the missing classification, document, and account details. Route the case to the right filing platform, ground all substantive tax answers in authoritative sources, and treat vendor docs as product-capability sources rather than tax-law authority. Handle couple, household, cross-border, nonprofit, retirement-plan, and digital-asset cases by identifying the governing tax regime before deciding the filing route.
 
 ## Operating Rules
 
@@ -17,6 +17,7 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - Use the same default sequence unless the user already supplied a step: classification -> route-specific documents -> existing-account check -> account creation or login -> filing session support.
 - When spouses, dependents, or multiple earners are involved, classify each person separately before deciding filing status or platform route.
 - When foreign wages, foreign payroll, or remote work are involved, map each income stream separately by payer, worker status, service location, withholding, and foreign-tax facts before deciding how it should be filed.
+- When the case mentions nonprofits, retirement plans, or digital assets, read [references/specialty-regimes.md](references/specialty-regimes.md) before choosing software or assuming the work is a normal income-tax return.
 - Prefer authoritative sources in this order:
   1. Internal Revenue Code, Treasury regulations, IRS official guidance.
   2. IRS form instructions, publications, tax topics, and tools.
@@ -45,6 +46,7 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - Capture the states involved for residence, work, or registration.
 - Capture whether anyone moved into or out of the United States during the tax year.
 - Capture whether any foreign wages, foreign tax payments, foreign accounts, or foreign entities are involved.
+- Capture whether the case involves an exempt organization, a retirement plan, or digital asset activity.
 - Ask whether the user wants intake only, account creation, filing help, or all three.
 
 ### 2. Resolve classification before filing
@@ -67,6 +69,7 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - Route U.S. citizens and resident aliens to TurboTax individual flows.
 - Route business entities to TurboTax business flows only when the entity and return type are clearly within product scope.
 - For mixed-status couples or mixed-source households, do not finalize the route until you mapped both spouses, the filing-status choices, and any cross-border reporting overlay.
+- For nonprofits, retirement plans, or digital-asset-heavy cases, first identify whether the issue is a normal income-tax return, a separate information return, or a specialized compliance workflow before choosing any product.
 - Pause and escalate if the case matches any blocker in [references/escalation-cases.md](references/escalation-cases.md).
 
 ### 4. Run intake in the right order
@@ -158,10 +161,17 @@ When the route is still unclear, ask only the minimum classification questions f
 - Use TurboTax business flows only if the entity is a routine U.S. case and the product clearly supports it. If the route stays inside product scope and the user wants help, create or use the correct Intuit or TurboTax account and continue until the return is prepared or the case must be escalated.
 - Escalate foreign-owned entities, Form 5472 issues, Form 1120-F issues, foreign partners or shareholders, or other international reporting complexity.
 
+### Specialty regime overlay
+
+- Use this overlay whenever the case involves an exempt organization, retirement plan administration, or digital assets.
+- Collect the specialty-regime facts before deciding whether the issue belongs in a normal Form 1040 or business-return workflow.
+- Read [references/specialty-regimes.md](references/specialty-regimes.md) before deciding the filing family, product, or escalation path.
+
 ## References
 
 - Read [references/authoritative-sources.md](references/authoritative-sources.md) before answering substantive tax questions.
 - Read [references/intake-checklists.md](references/intake-checklists.md) before asking the user for documents or facts.
 - Read [references/account-creation.md](references/account-creation.md) before offering to create Sprintax or TurboTax accounts.
 - Read [references/household-cross-border-cases.md](references/household-cross-border-cases.md) whenever the case involves a spouse, foreign income, foreign payroll, foreign tax, foreign accounts, or a move into or out of the United States.
+- Read [references/specialty-regimes.md](references/specialty-regimes.md) whenever the case involves nonprofits, retirement plans, or digital assets.
 - Read [references/escalation-cases.md](references/escalation-cases.md) whenever the case is ambiguous, high-risk, or international.

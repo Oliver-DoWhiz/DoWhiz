@@ -19,8 +19,20 @@ Collect these for every case before you drill deeper:
 - whether a spouse, dependent, or another household member changes the filing analysis
 - whether anyone moved into or out of the United States during the tax year
 - whether there was any foreign income, foreign employer payroll, foreign tax paid, foreign account, or foreign entity
+- whether the case involves an exempt organization, retirement plan administration, or digital asset activity
 - whether the user wants intake only, account creation, filing help, or all three
 - any account status the user already volunteered
+
+## Specialty regime triggers
+
+Switch to [specialty-regimes.md](specialty-regimes.md) if any of these are true:
+
+- the user mentions a nonprofit, charity, church, private foundation, tax-exempt organization, Form 990, Form 1023, Form 1024, or Form 990-T
+- the user mentions a 401(k), 403(b), SEP, SIMPLE, solo 401(k), pension plan, employee benefit plan, Form 5500, or EPCRS correction
+- the user mentions cryptocurrency, bitcoin, ethereum, stablecoins, NFTs, wallets, staking, mining, airdrops, or Form 1099-DA
+- the main question is whether the case belongs in an information return, plan-compliance filing, or digital-asset reporting workflow instead of a normal income-tax return
+
+Use the exact intake prompts in [specialty-regimes.md](specialty-regimes.md) once one of those triggers is present.
 
 ## Household or cross-border triggers
 

@@ -4,7 +4,7 @@ Use this file to decide what sources control the answer and where to research ne
 
 ## Research workflow
 
-1. Identify the question type: classification, filing obligation, document meaning, treaty, resident return, business return, state issue, product support, spouse-election issue, mixed-source compensation, or foreign-account reporting.
+1. Identify the question type: classification, filing obligation, document meaning, treaty, resident return, business return, exempt-organization filing, retirement-plan administration, digital-asset reporting, state issue, product support, spouse-election issue, mixed-source compensation, or foreign-account reporting.
 2. Check the highest-priority official source for that topic first.
 3. Verify the current filing year when forms or thresholds matter.
 4. In household or couple cases, classify each spouse separately before deciding the filing route.
@@ -27,7 +27,7 @@ These may help you find search terms, but they do not decide the tax answer.
 1. Primary law and official federal guidance.
 2. Current-year IRS form instructions and form pages.
 3. IRS publications, tax topics, and official tools.
-4. Official supporting agencies for presence, identity, wage records, and foreign-account reporting.
+4. Official supporting agencies for presence, identity, wage records, foreign-account reporting, and retirement-plan reporting.
 5. Official state tax agencies.
 6. Product docs from Sprintax and TurboTax for platform capability, signup, and product scope only.
 
@@ -125,6 +125,50 @@ Use these when the case is clearly not 1040-NR.
 | U.S. residents | IRS hub for resident-alien rules after classification is settled | https://www.irs.gov/individuals/international-taxpayers/us-residents |
 | U.S. citizens and resident aliens abroad | Worldwide-income reminder and related rules | https://www.irs.gov/individuals/international-taxpayers/us-citizens-and-resident-aliens-abroad |
 
+## Exempt organization and nonprofit sources
+
+Use these when the case involves a charity, nonprofit, church, private foundation, exempt-status issue, or Form 990-series filing.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| Charities and nonprofits hub | Main IRS entry point for exempt-organization guidance | https://www.irs.gov/charities-and-nonprofits |
+| Required filing (Form 990 series) | Determine which 990-series return or notice may apply | https://www.irs.gov/charities-non-profits/required-filing-form-990-series |
+| Exempt organizations forms and instructions | Central index for Forms 990, 990-EZ, 990-N, 990-PF, 990-T, 1023, 1024, and related materials | https://www.irs.gov/charities-non-profits/exempt-organizations-forms-and-instructions |
+| About Form 990 | General annual-return page for exempt organizations | https://www.irs.gov/forms-pubs/about-form-990 |
+| About Form 990-T | Unrelated business income and proxy tax filing page | https://www.irs.gov/forms-pubs/about-form-990-t |
+| Tax Exempt Organization Search | Verify status, filings, and revocation history | https://www.irs.gov/charities-non-profits/tax-exempt-organization-search |
+| Automatic revocation of exemption | Reinstatement and nonfiling-revocation starting point | https://www.irs.gov/charities-non-profits/automatic-revocation-of-exemption |
+
+## Retirement plan and employee benefit plan sources
+
+Use these when the case involves a 401(k), 403(b), SEP, SIMPLE, Form 5500, plan correction, or plan-sponsor compliance.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| Retirement plans hub | Main IRS entry point for plan types, limits, administration, and reporting | https://www.irs.gov/retirement-plans |
+| A plan sponsor's responsibilities | Core plan-sponsor compliance responsibilities | https://www.irs.gov/retirement-plans/plan-sponsor/a-plan-sponsors-responsibilities |
+| Types of retirement plans | Identify the plan family before collecting filing facts | https://www.irs.gov/retirement-plans/plan-sponsor/types-of-retirement-plans |
+| Form 5500 corner | IRS entry point for Form 5500-series and related reporting materials | https://www.irs.gov/retirement-plans/form-5500-corner |
+| About Form 5500-EZ | One-participant retirement-plan filing page | https://www.irs.gov/forms-pubs/about-form-5500-ez |
+| Retirement plan reporting and disclosure | IRS summary of required filings, notices, and disclosure resources | https://www.irs.gov/retirement-plans/retirement-plan-reporting-and-disclosure |
+| Correcting plan errors | IRS correction workflow for plan failures | https://www.irs.gov/retirement-plans/correcting-plan-errors |
+| EPCRS overview | High-level correction framework for plan mistakes | https://www.irs.gov/retirement-plans/epcrs-overview |
+| DOL Form 5500 series | Official DOL reporting-and-filing hub for employee benefit plans | https://www.dol.gov/agencies/ebsa/employers-and-advisers/plan-administration-and-compliance/reporting-and-filing/form-5500 |
+
+## Digital asset sources
+
+Use these when the case involves cryptocurrency, other digital assets, broker reporting, or digital-asset basis and disposition issues.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| Digital assets hub | Main IRS entry point for digital-asset tax rules and reporting | https://www.irs.gov/filing/digital-assets |
+| Determine how to answer the digital asset question | Official questionnaire for the annual digital-asset return question | https://www.irs.gov/filing/determine-how-to-answer-the-digital-asset-question |
+| Frequently asked questions on digital asset transactions | IRS treatment of transactions, basis, income, and dispositions | https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions |
+| About Form 1099-DA | Official form page for broker reporting of digital asset dispositions | https://www.irs.gov/forms-pubs/about-form-1099-da |
+| Understanding your Form 1099-DA | Taxpayer-facing guide to using the broker statement | https://www.irs.gov/businesses/understanding-your-form-1099-da |
+| About Form 8949 | Capital-gain and loss reporting page | https://www.irs.gov/forms-pubs/about-form-8949 |
+| Instructions for Form 8949 | Current-year reporting details for digital-asset dispositions and adjustments | https://www.irs.gov/instructions/i8949 |
+
 ## Mixed-source compensation and foreign tax sources
 
 Use these when a foreign employer, foreign payroll, or foreign tax paid may affect compensation reporting.
@@ -221,6 +265,8 @@ Use these only for what the product supports and how signup or filing works in t
 Remember: IRS sources decide the law. Product docs only decide whether Sprintax or TurboTax supports the case and what the signup flow looks like.
 Sprintax may block some non-browser requests, so verify in a browser when needed.
 
+For nonprofit, retirement-plan, and digital-asset cases, also read [specialty-regimes.md](specialty-regimes.md) before choosing a route. These regimes often require a specialized intake and may not belong in Sprintax or TurboTax at all.
+
 ## Research shortcuts
 
 When browsing, start with these search patterns instead of general web searches:
@@ -236,6 +282,10 @@ When browsing, start with these search patterns instead of general web searches:
 - `site:irs.gov source of income personal service income`
 - `site:irs.gov form 1116 foreign tax credit`
 - `site:irs.gov form 8938 FBAR comparison`
+- `site:irs.gov charities and nonprofits form 990`
+- `site:irs.gov retirement plans form 5500 EPCRS`
+- `site:irs.gov digital assets form 1099-da form 8949`
+- `site:dol.gov form 5500 EBSA`
 - `site:<official-state-domain> resident nonresident income tax`
 - `site:ttlc.intuit.com 1040-NR TurboTax`
 - `site:sprintax.com 1042-S W-2 1099 Sprintax`
