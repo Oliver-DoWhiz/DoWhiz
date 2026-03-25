@@ -255,10 +255,12 @@ Azure ACI execution path (required vars):
   When configured, run_task forwards these env vars into local, docker, and Azure ACI
   task environments. The bundled `playwright-cli` wrapper then calls
   `browserbase_session_manager` to create or reuse a persistent Browserbase Context,
-  storing durable state in `.secrets/browserbase/registry.json` and the currently live
-  session in `.secrets/browserbase/active_session.json`. `scheduler_module` mirrors that
-  directory between durable per-user secrets and each task workspace so auth survives ACI
-  container deletion and later recreation.
+  storing durable per-user auth state in `.secrets/browserbase/registry.json` and the
+  currently live task session in `.secrets/browserbase/active_session.json`. `scheduler_module`
+  only mirrors the durable Browserbase context state between per-user secrets and each
+  task workspace; it does not persist `active_session.json` across tasks, so every new
+  task restores the user's auth context into a fresh live Browserbase session instead of
+  inheriting a stale expiring session from an older container.
 - `human_approval_gate` (via skill `human-approval-gate`) provides a blocking
   approval flow for login CAPTCHA/password/OTP/device-approval steps. In
   run_task/Codex environments, the preferred path is the injected MCP tool
