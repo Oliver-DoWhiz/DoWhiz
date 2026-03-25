@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelMetadata};
 
 pub(crate) const RUN_TASK_FAILURE_LIMIT: u32 = 3;
 
@@ -47,6 +47,9 @@ pub struct SendReplyTask {
     /// Employee ID for per-employee credentials (optional)
     #[serde(default)]
     pub employee_id: Option<String>,
+    /// Normalized channel metadata carried from inbound context to outbound delivery.
+    #[serde(default)]
+    pub channel_metadata: ChannelMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +97,9 @@ pub struct RunTaskTask {
     /// The resolved account ID for this task (avoids re-lookup during status sync)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<Uuid>,
+    /// Normalized channel metadata carried from the inbound event.
+    #[serde(default)]
+    pub channel_metadata: ChannelMetadata,
 }
 
 fn default_runner() -> String {

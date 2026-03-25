@@ -16,6 +16,7 @@ use crate::account_store::{AccountStore, AccountStoreError, AnalyticsEventInsert
 use crate::blob_store::BlobStore;
 use crate::google_auth::GoogleAuthConfig;
 use crate::notion_store::{NotionCredential, NotionStore};
+use crate::slack_store::{SlackInstallation, SlackStore};
 use crate::user_store::UserStore;
 use crate::{load_tasks_with_status, TaskStatusSummary};
 
@@ -33,6 +34,7 @@ use super::startup_workspace::{
 pub struct AuthState {
     pub account_store: Arc<AccountStore>,
     pub blob_store: Option<Arc<BlobStore>>,
+    pub slack_store: Arc<SlackStore>,
     pub supabase_url: String,
     // Discord OAuth config
     pub discord_client_id: Option<String>,
@@ -2646,8 +2648,12 @@ pub async fn discord_bot_callback(
             &state.discord_redirect_uri,
         ) {
             (Some(id), Some(secret), Some(_)) => {
-                let uri = format!("{}/auth/discord/bot-callback",
-                    std::env::var("DOWHIZ_API_URL").unwrap_or_else(|_| "https://api.production1.dowhiz.com/service".to_string()));
+                let uri = format!(
+                    "{}/auth/discord/bot-callback",
+                    std::env::var("DOWHIZ_API_URL").unwrap_or_else(|_| {
+                        "https://api.production1.dowhiz.com/service".to_string()
+                    })
+                );
                 (id.clone(), secret.clone(), uri)
             }
             _ => {
@@ -2672,18 +2678,23 @@ pub async fn discord_bot_callback(
         match token_res {
             Ok(res) if res.status().is_success() => {
                 match res.json::<DiscordBotOAuthResponse>().await {
-                    Ok(data) => {
-                        data.guild.map(|g| g.id).unwrap_or_else(|| "unknown".to_string())
-                    }
+                    Ok(data) => data
+                        .guild
+                        .map(|g| g.id)
+                        .unwrap_or_else(|| "unknown".to_string()),
                     Err(e) => {
                         error!("Failed to parse Discord response: {}", e);
-                        return redirect_to("/auth/index.html?discord_bot=error&reason=parse_error");
+                        return redirect_to(
+                            "/auth/index.html?discord_bot=error&reason=parse_error",
+                        );
                     }
                 }
             }
             Ok(res) => {
                 error!("Discord token exchange failed: {}", res.status());
-                return redirect_to("/auth/index.html?discord_bot=error&reason=token_exchange_failed");
+                return redirect_to(
+                    "/auth/index.html?discord_bot=error&reason=token_exchange_failed",
+                );
             }
             Err(e) => {
                 error!("Discord token request failed: {}", e);
@@ -2713,7 +2724,11 @@ pub async fn discord_bot_callback(
 
     // Include the token in fragment so frontend can restore the session
     let encoded_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
-    Redirect::to(&format!("{}/auth/index.html?discord_bot=success#access_token={}", frontend_url, encoded_token)).into_response()
+    Redirect::to(&format!(
+        "{}/auth/index.html?discord_bot=success#access_token={}",
+        frontend_url, encoded_token
+    ))
+    .into_response()
 }
 
 // ============================================================================
@@ -2740,6 +2755,8 @@ struct SlackBotOAuthResponse {
     ok: bool,
     error: Option<String>,
     team: Option<SlackTeam>,
+    access_token: Option<String>,
+    bot_user_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2760,6 +2777,53 @@ struct SlackTokenResponse {
 struct SlackAuthedUser {
     id: String,
     access_token: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct VerifiedSlackBotIdentity {
+    pub team_id: Option<String>,
+    pub user_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SlackAuthTestResponse {
+    ok: bool,
+    error: Option<String>,
+    team_id: Option<String>,
+    user_id: Option<String>,
+}
+
+pub(crate) async fn verify_slack_bot_access(
+    bot_token: &str,
+) -> Result<VerifiedSlackBotIdentity, String> {
+    let response = reqwest::Client::new()
+        .get("https://slack.com/api/auth.test")
+        .header("Authorization", format!("Bearer {}", bot_token))
+        .send()
+        .await
+        .map_err(|err| format!("request failed: {err}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("status {} body {}", status, body));
+    }
+
+    let payload = response
+        .json::<SlackAuthTestResponse>()
+        .await
+        .map_err(|err| format!("invalid response: {err}"))?;
+
+    if !payload.ok {
+        return Err(payload
+            .error
+            .unwrap_or_else(|| "unknown auth.test error".to_string()));
+    }
+
+    Ok(VerifiedSlackBotIdentity {
+        team_id: payload.team_id,
+        user_id: payload.user_id,
+    })
 }
 
 /// GET /auth/slack
@@ -3102,8 +3166,11 @@ pub async fn slack_bot_callback(
     };
 
     // Exchange code for access token to get team info
-    let redirect_uri = format!("{}/auth/slack/bot-callback",
-        std::env::var("DOWHIZ_API_URL").unwrap_or_else(|_| "https://api.production1.dowhiz.com/service".to_string()));
+    let redirect_uri = format!(
+        "{}/auth/slack/bot-callback",
+        std::env::var("DOWHIZ_API_URL")
+            .unwrap_or_else(|_| "https://api.production1.dowhiz.com/service".to_string())
+    );
 
     let client = reqwest::Client::new();
     let token_res = client
@@ -3117,22 +3184,61 @@ pub async fn slack_bot_callback(
         .send()
         .await;
 
-    let team_id = match token_res {
-        Ok(res) if res.status().is_success() => {
-            match res.json::<SlackBotOAuthResponse>().await {
-                Ok(data) if data.ok => {
-                    data.team.map(|t| t.id).unwrap_or_else(|| "unknown".to_string())
+    let installation = match token_res {
+        Ok(res) if res.status().is_success() => match res.json::<SlackBotOAuthResponse>().await {
+            Ok(data) if data.ok => {
+                let team = data.team.unwrap_or(SlackTeam {
+                    id: "unknown".to_string(),
+                    name: None,
+                });
+                let bot_token = data.access_token.unwrap_or_default();
+                if team.id.trim().is_empty() || bot_token.trim().is_empty() {
+                    error!("Slack OAuth response missing team_id or access_token");
+                    return redirect_to(
+                        "/auth/index.html?slack_bot=error&reason=missing_installation_data",
+                    );
                 }
-                Ok(data) => {
-                    error!("Slack OAuth failed: {:?}", data.error);
-                    return redirect_to("/auth/index.html?slack_bot=error&reason=oauth_failed");
+
+                let verified_identity = match verify_slack_bot_access(&bot_token).await {
+                    Ok(identity) => identity,
+                    Err(err) => {
+                        error!("Slack auth.test failed after bot install: {}", err);
+                        return redirect_to(
+                            "/auth/index.html?slack_bot=error&reason=verification_failed",
+                        );
+                    }
+                };
+
+                if let Some(verified_team_id) = verified_identity.team_id.as_deref() {
+                    if verified_team_id != team.id {
+                        warn!(
+                            "Slack OAuth team_id {} differed from auth.test team_id {}",
+                            team.id, verified_team_id
+                        );
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to parse Slack response: {}", e);
-                    return redirect_to("/auth/index.html?slack_bot=error&reason=parse_error");
+
+                SlackInstallation {
+                    team_id: team.id,
+                    team_name: team.name,
+                    bot_token,
+                    bot_user_id: data
+                        .bot_user_id
+                        .filter(|value| !value.trim().is_empty())
+                        .or(verified_identity.user_id)
+                        .unwrap_or_default(),
+                    installed_at: Utc::now(),
                 }
             }
-        }
+            Ok(data) => {
+                error!("Slack OAuth failed: {:?}", data.error);
+                return redirect_to("/auth/index.html?slack_bot=error&reason=oauth_failed");
+            }
+            Err(e) => {
+                error!("Failed to parse Slack response: {}", e);
+                return redirect_to("/auth/index.html?slack_bot=error&reason=parse_error");
+            }
+        },
         Ok(res) => {
             error!("Slack token exchange failed: {}", res.status());
             return redirect_to("/auth/index.html?slack_bot=error&reason=token_exchange_failed");
@@ -3143,27 +3249,58 @@ pub async fn slack_bot_callback(
         }
     };
 
+    let slack_store = state.slack_store.clone();
+    let installation_for_save = installation.clone();
+    let save_result =
+        task::spawn_blocking(move || slack_store.upsert_installation(&installation_for_save)).await;
+    match save_result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            error!(
+                "Failed to save Slack installation from auth callback: {}",
+                err
+            );
+            return redirect_to("/auth/index.html?slack_bot=error&reason=save_failed");
+        }
+        Err(err) => {
+            error!(
+                "spawn_blocking panicked while saving Slack installation: {}",
+                err
+            );
+            return redirect_to("/auth/index.html?slack_bot=error&reason=internal_error");
+        }
+    }
+
     // Record the bot installation event
     track_auth_event(
         &state.account_store,
         "slack_bot_installed",
         Some(account.id),
         Some(account.auth_user_id),
-        Some(format!("slack_bot_installed:{}:{}", account.id, team_id)),
+        Some(format!(
+            "slack_bot_installed:{}:{}",
+            account.id, installation.team_id
+        )),
         Some("/auth/slack/bot-callback"),
         serde_json::json!({
-            "team_id": team_id,
+            "team_id": installation.team_id.clone(),
+            "team_name": installation.team_name.clone(),
+            "bot_user_id": installation.bot_user_id.clone(),
         }),
     );
 
     info!(
         "Slack bot installed for account {} in team {}",
-        account.id, team_id
+        account.id, installation.team_id
     );
 
     // Include the token in fragment so frontend can restore the session
     let encoded_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
-    Redirect::to(&format!("{}/auth/index.html?slack_bot=success#access_token={}", frontend_url, encoded_token)).into_response()
+    Redirect::to(&format!(
+        "{}/auth/index.html?slack_bot=success#access_token={}",
+        frontend_url, encoded_token
+    ))
+    .into_response()
 }
 
 // ============================================================================

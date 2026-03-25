@@ -20,10 +20,10 @@ mod verify;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use std::env;
 use std::sync::Arc;
 use tokio::task;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use scheduler_module::account_store::AccountStore;
@@ -36,6 +36,7 @@ use scheduler_module::ingestion_queue::{
 };
 use scheduler_module::service::agent_market::{agent_market_router, AgentMarketState};
 use scheduler_module::service::auth::{auth_router, AuthState};
+use scheduler_module::slack_store::SlackStore;
 
 use config::{
     load_gateway_config, resolve_employee_config_path, resolve_gateway_config_path,
@@ -160,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let supabase_url = env::var("SUPABASE_PROJECT_URL")
         .unwrap_or_else(|_| "https://resmseutzmwumflevfqw.supabase.co".to_string());
     let blob_store = get_blob_store();
+    let slack_store = Arc::new(SlackStore::new("slack_store")?);
 
     // Discord OAuth config (optional)
     let discord_client_id = env::var("DISCORD_CLIENT_ID").ok();
@@ -188,6 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth_state = AuthState {
         account_store,
         blob_store,
+        slack_store,
         supabase_url,
         discord_client_id,
         discord_client_secret,
@@ -225,7 +228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             post(handle_google_drive_webhook),
         )
         .route("/api/workspace/create-brief", post(create_workspace_brief))
-        .route("/api/workspace/create-90-day-plan", post(create_90_day_plan))
+        .route(
+            "/api/workspace/create-90-day-plan",
+            post(create_90_day_plan),
+        )
         .with_state(state)
         .merge(auth_router(auth_state))
         .merge(agent_market_router(agent_market_state))

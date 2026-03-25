@@ -83,14 +83,20 @@ pub(crate) fn process_notion_message(
                             None
                         }
                         Err(e) => {
-                            warn!("Failed to look up account {}: {} (will still use OAuth token)", cred.account_id, e);
+                            warn!(
+                                "Failed to look up account {}: {} (will still use OAuth token)",
+                                cred.account_id, e
+                            );
                             None
                         }
                     };
                     (Some(cred), linked_account)
                 }
                 Err(crate::notion_store::NotionStoreError::NotFound(_)) => {
-                    info!("No OAuth credential found for Notion workspace_id={}", workspace_id);
+                    info!(
+                        "No OAuth credential found for Notion workspace_id={}",
+                        workspace_id
+                    );
                     (None, None)
                 }
                 Err(e) => {
@@ -127,10 +133,7 @@ pub(crate) fn process_notion_message(
     user_store.ensure_user_dirs(&user_paths)?;
 
     // Create thread key from workspace:page:notification
-    let thread_key = format!(
-        "notion:{}:{}:{}",
-        workspace_id, page_id, mention.id
-    );
+    let thread_key = format!("notion:{}:{}:{}", workspace_id, page_id, mention.id);
 
     // Ensure workspace directory exists
     let workspace = ensure_thread_workspace(
@@ -143,11 +146,8 @@ pub(crate) fn process_notion_message(
 
     // Bump thread state for sequencing
     let thread_state_path = default_thread_state_path(&workspace);
-    let thread_state = bump_thread_state(
-        &thread_state_path,
-        &thread_key,
-        message.message_id.clone(),
-    )?;
+    let thread_state =
+        bump_thread_state(&thread_state_path, &thread_key, message.message_id.clone())?;
 
     // Save incoming comment to workspace
     append_workspace_notion_comment(
@@ -165,10 +165,16 @@ pub(crate) fn process_notion_message(
     // Write OAuth token to .notion_env if we have a credential (even if account not found)
     if let Some(ref cred) = notion_credential {
         let env_path = workspace.join(".notion_env");
-        if let Err(e) = std::fs::write(&env_path, format!("NOTION_API_TOKEN={}\n", cred.access_token)) {
+        if let Err(e) = std::fs::write(
+            &env_path,
+            format!("NOTION_API_TOKEN={}\n", cred.access_token),
+        ) {
             warn!("Failed to write .notion_env: {}", e);
         } else {
-            info!("Wrote Notion OAuth token to workspace for workspace_id={}", workspace_id);
+            info!(
+                "Wrote Notion OAuth token to workspace for workspace_id={}",
+                workspace_id
+            );
         }
     }
 
@@ -215,6 +221,7 @@ pub(crate) fn process_notion_message(
         requester_identifier_type: Some("notion_user".to_string()),
         requester_identifier: Some(user_email.clone()),
         account_id: resolved_account_id,
+        channel_metadata: Default::default(),
     };
 
     let run_task_for_account = run_task.clone();
@@ -251,7 +258,10 @@ pub(crate) fn process_notion_message(
     };
 
     if let Some(account) = linked_account {
-        info!("Found account {} for Notion user {}", account.id, user_email);
+        info!(
+            "Found account {} for Notion user {}",
+            account.id, user_email
+        );
         let account_tasks_dir = config.users_root.join(account.id.to_string()).join("state");
         if let Err(err) = std::fs::create_dir_all(&account_tasks_dir) {
             warn!(

@@ -65,6 +65,7 @@ fn base_send_task(channel: Channel, html_path: PathBuf, attachments_dir: PathBuf
         thread_epoch: None,
         thread_state_path: None,
         employee_id: None,
+        channel_metadata: Default::default(),
     }
 }
 
