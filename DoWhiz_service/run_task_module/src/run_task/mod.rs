@@ -1,3 +1,4 @@
+mod browserbase;
 mod claude;
 mod codex;
 mod constants;

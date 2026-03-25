@@ -11,6 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use super::browserbase::{
+    collect_browserbase_env_overrides, BrowserbaseSessionCleanupGuard,
+    BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY, BROWSERBASE_STATE_DIR_ENV_KEY,
+    BROWSER_HANDOFF_BASE_URL_ENV_KEY, BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY,
+};
 use super::constants::{
     CODEX_CONFIG_BASE_URL_PLACEHOLDER, CODEX_CONFIG_BLOCK_TEMPLATE, CODEX_CONFIG_MARKER,
     CODEX_MODEL_NAME, CODEX_SANDBOX_MODE, DOCKER_CODEX_HOME_DIR, DOCKER_WORKSPACE_DIR,
@@ -57,6 +62,10 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
     "HUMAN_APPROVAL_FROM",
     "HUMAN_APPROVAL_REPLY_TO",
     "POSTMARK_API_BASE_URL",
+    BROWSERBASE_STATE_DIR_ENV_KEY,
+    BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY,
+    BROWSER_HANDOFF_BASE_URL_ENV_KEY,
+    BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY,
 ];
 const HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY: &str = "HUMAN_APPROVAL_GATE_REQUIRE_MCP";
 const HUMAN_APPROVAL_GATE_MCP_SERVER_NAME: &str = "human-approval-gate";
@@ -230,9 +239,8 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
         "email" | "googledocs" | "googlesheets" | "googleslides" => {
             workspace_dir.join("reply_email_draft.html")
         }
-        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark" | "wechat" => {
-            workspace_dir.join("reply_message.txt")
-        }
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" => workspace_dir.join("reply_message.txt"),
         "notion" => {
             // Notion agent posts directly via API and creates .notion_api_replied marker
             workspace_dir.join(".notion_api_replied")
@@ -248,6 +256,7 @@ pub(super) fn run_codex_task(
     reply_attachments_dir: PathBuf,
 ) -> Result<RunTaskOutput, RunTaskError> {
     super::env::load_env_sources(request.workspace_dir)?;
+    let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let backend = resolve_execution_backend();
     match backend {
         ExecutionBackend::AzureAci => {
@@ -344,6 +353,7 @@ pub(super) fn run_codex_task(
             .as_deref()
             .unwrap_or(request.workspace_dir),
     )?;
+    let browserbase_env_overrides = collect_browserbase_env_overrides();
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -382,6 +392,9 @@ pub(super) fn run_codex_task(
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &google_workspace_cli_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &browserbase_env_overrides {
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &human_approval_gate_env_overrides {
@@ -501,6 +514,9 @@ pub(super) fn run_codex_task(
             } else {
                 cmd.arg("-e").arg(format!("{}={}", key, value));
             }
+        }
+        for (key, value) in &browserbase_env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         for (key, value) in &human_approval_gate_env_overrides {
             cmd.arg("-e").arg(format!("{}={}", key, value));
@@ -630,6 +646,9 @@ pub(super) fn run_codex_task(
             cmd.env(key, value);
         }
         for (key, value) in &google_workspace_cli_env_overrides {
+            cmd.env(key, value);
+        }
+        for (key, value) in &browserbase_env_overrides {
             cmd.env(key, value);
         }
         for (key, value) in &human_approval_gate_env_overrides {
@@ -800,6 +819,7 @@ fn run_codex_task_azure_aci(
     reply_html_path: PathBuf,
     reply_attachments_dir: PathBuf,
 ) -> Result<RunTaskOutput, RunTaskError> {
+    let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let config = load_azure_aci_config()?;
 
     let host_workspace_dir = canonicalize_dir(request.workspace_dir)?;
@@ -843,6 +863,7 @@ fn run_codex_task_azure_aci(
     let bright_data_env_overrides = collect_bright_data_env_overrides();
     let google_workspace_cli_env_overrides =
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
+    let browserbase_env_overrides = collect_browserbase_env_overrides();
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -933,6 +954,9 @@ fn run_codex_task_azure_aci(
         } else {
             env_overrides.push((key, value));
         }
+    }
+    for (key, value) in browserbase_env_overrides {
+        env_overrides.push((key, value));
     }
     for (key, value) in human_approval_gate_env_overrides {
         env_overrides.push((key, value));

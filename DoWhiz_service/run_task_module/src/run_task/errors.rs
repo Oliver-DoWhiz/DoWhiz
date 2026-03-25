@@ -48,6 +48,10 @@ pub enum RunTaskError {
         status: Option<i32>,
         output: String,
     },
+    BrowserbaseFailed {
+        action: &'static str,
+        output: String,
+    },
     OutputMissing {
         path: PathBuf,
         output: String,
@@ -117,6 +121,11 @@ impl fmt::Display for RunTaskError {
                 f,
                 "GitHub auth command failed ({} status: {:?}). Output tail:\n{}",
                 command, status, output
+            ),
+            RunTaskError::BrowserbaseFailed { action, output } => write!(
+                f,
+                "Browserbase {} failed. Output tail:\n{}",
+                action, output
             ),
             RunTaskError::OutputMissing { path, output } => {
                 write!(

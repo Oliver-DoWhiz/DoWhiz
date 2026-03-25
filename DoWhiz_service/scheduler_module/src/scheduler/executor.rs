@@ -23,7 +23,9 @@ use crate::memory_store::{
     sync_user_memory_to_workspace,
 };
 use crate::secrets_store::{
-    resolve_user_secrets_path, sync_user_secrets_to_workspace, sync_workspace_secrets_to_user,
+    resolve_user_browserbase_state_dir, resolve_user_secrets_path,
+    sync_user_browserbase_state_to_workspace, sync_user_secrets_to_workspace,
+    sync_workspace_browserbase_state_to_user, sync_workspace_secrets_to_user,
 };
 use crate::slack_store::resolve_slack_bot_token_for_runtime;
 use crate::thread_state::{current_thread_epoch, find_thread_state_path};
@@ -1152,6 +1154,7 @@ impl TaskExecutor for ModuleExecutor {
                 let workspace_memory_dir = task.workspace_dir.join(&task.memory_dir);
                 let user_memory_dir = resolve_user_memory_dir(task);
                 let user_secrets_path = resolve_user_secrets_path(task);
+                let user_browserbase_state_dir = resolve_user_browserbase_state_dir(task);
                 let _typing_heartbeat = DiscordTypingHeartbeat::start(task);
                 post_slack_working_placeholder(task);
 
@@ -1246,6 +1249,39 @@ impl TaskExecutor for ModuleExecutor {
                 } else {
                     warn!(
                         "unable to resolve user secrets for workspace {}",
+                        task.workspace_dir.display()
+                    );
+                }
+                if let Some(user_browserbase_state_dir) = user_browserbase_state_dir.as_ref() {
+                    sync_user_browserbase_state_to_workspace(
+                        user_browserbase_state_dir,
+                        &task.workspace_dir,
+                    )
+                    .map_err(|err| {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!(
+                                    "task_failed:{}:browserbase_sync_to_workspace",
+                                    task_dedupe_key
+                                )),
+                                task,
+                                json!({
+                                    "error_reason": "browserbase_sync_to_workspace_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        SchedulerError::TaskFailed(format!(
+                            "browserbase state sync failed: {}",
+                            err
+                        ))
+                    })?;
+                } else {
+                    warn!(
+                        "unable to resolve user browserbase state for workspace {}",
                         task.workspace_dir.display()
                     );
                 }
@@ -1379,6 +1415,34 @@ impl TaskExecutor for ModuleExecutor {
                             }
                             SchedulerError::TaskFailed(format!("secrets sync failed: {}", err))
                         })?;
+                }
+                if let Some(user_browserbase_state_dir) = user_browserbase_state_dir.as_ref() {
+                    sync_workspace_browserbase_state_to_user(
+                        &task.workspace_dir,
+                        user_browserbase_state_dir,
+                    )
+                    .map_err(|err| {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!(
+                                    "task_failed:{}:browserbase_sync_to_user",
+                                    task_dedupe_key
+                                )),
+                                task,
+                                json!({
+                                    "error_reason": "browserbase_sync_to_user_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        SchedulerError::TaskFailed(format!(
+                            "browserbase state sync failed: {}",
+                            err
+                        ))
+                    })?;
                 }
                 if let Some(account_id) = account_id {
                     track_task_success_markers(account_id, task, &task_dedupe_key);
