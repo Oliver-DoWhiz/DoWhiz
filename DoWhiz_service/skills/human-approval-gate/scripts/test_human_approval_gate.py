@@ -394,7 +394,7 @@ class HumanApprovalGateTests(unittest.TestCase):
             if path == "/messages/inbound/msg-1/details":
                 return {
                     "From": "deep-tutor+bb-handoff-123@deep-tutor.com",
-                    "Subject": "Re: [HAG:abc-123] 2FA approval needed for Browserbase handoff demo",
+                    "Subject": "Re: [HAG:abc-123] 2FA help needed for Browserbase handoff demo",
                     "TextBody": "424242",
                     "Date": "2026-03-25T17:50:00Z",
                     "OriginalRecipient": "alias@inbound.postmarkapp.com",
