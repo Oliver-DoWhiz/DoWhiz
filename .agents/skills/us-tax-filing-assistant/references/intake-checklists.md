@@ -2,6 +2,13 @@
 
 Ask only for missing information. Start with classification, then collect route-specific documents.
 
+## How to ask
+
+- Extract facts already in the thread first. Do not ask again for information or files the user already gave you.
+- If the route is unclear, ask only the minimum classification pack first.
+- If the route is clear, send one concise route-specific checklist that covers only the missing facts and files.
+- Do not ask the account question until the route and missing document list are mostly mapped, unless the user already volunteered account status.
+
 ## Universal intake fields
 
 Collect these for every case before you drill deeper:
@@ -9,8 +16,8 @@ Collect these for every case before you drill deeper:
 - tax year or years
 - individual or business entity
 - state of residence, work, or registration
-- whether the user already has a Sprintax or TurboTax account
 - whether the user wants intake only, account creation, filing help, or all three
+- any account status the user already volunteered
 
 ## Classification questions for an unclear individual case
 
@@ -24,6 +31,8 @@ Ask only enough to classify the filer:
 6. Which states did you live in or work in?
 
 If classification is still unclear after those questions, stop and consult [escalation-cases.md](escalation-cases.md).
+
+If the user already clearly said they are a U.S. citizen or green card holder and the rest of the facts are consistent, do not repeat the whole classification pack. Move straight to the route-specific checklist.
 
 ## NRA route checklist
 
@@ -113,7 +122,8 @@ Do not move to TurboTax until you know:
 - the filing status,
 - the state footprint,
 - the main income document set,
-- whether the user is an employee-only case or a more complex return.
+- whether the user is an employee-only case or a more complex return,
+- the account decision.
 
 ## Business checklist
 
@@ -122,10 +132,11 @@ Use this checklist for any company, partnership, corporation, multi-member LLC, 
 ### First questions
 
 1. What is the entity type?
-2. Is it domestic or foreign?
-3. Which return do you think applies: Schedule C, 1065, 1120-S, 1120, 1041, or something else?
-4. Do you have an EIN?
-5. Which states is the entity registered or operating in?
+2. Is this actually a personal return with Schedule C, or a separate entity return?
+3. Is it domestic or foreign?
+4. Which return do you think applies: Schedule C, 1065, 1120-S, 1120, 1041, or something else?
+5. Do you have an EIN?
+6. Which states is the entity registered or operating in?
 
 ### Required facts
 
@@ -153,4 +164,4 @@ Use this checklist for any company, partnership, corporation, multi-member LLC, 
 - Form 5472, 1120-F, 5471, 8858, or other international information returns
 - uncertainty about whether the case is a business return or a Schedule C on an individual return
 
-Only proceed to TurboTax business flows if the case stays within routine U.S. product scope.
+Only proceed to TurboTax business flows if the case stays within routine U.S. product scope and you have the account decision.

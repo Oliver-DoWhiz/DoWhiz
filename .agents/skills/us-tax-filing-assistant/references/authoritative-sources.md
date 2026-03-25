@@ -2,13 +2,32 @@
 
 Use this file to decide what sources control the answer and where to research next.
 
+## Research workflow
+
+1. Identify the question type: classification, filing obligation, document meaning, treaty, resident return, business return, state issue, or product support.
+2. Check the highest-priority official source for that topic first.
+3. Verify the current filing year when forms or thresholds matter.
+4. Use Sprintax and TurboTax sources only after the legal or filing rule is clear.
+5. Record which official source controlled the answer before replying or clicking through a filing screen.
+
+## Non-authoritative sources
+
+Do not use these as legal authority:
+
+- model memory
+- blogs, newsletters, unofficial calculators, Reddit, and forums
+- vendor community posts unless they simply point you to an official Sprintax, TurboTax, or Intuit support page
+
+These may help you find search terms, but they do not decide the tax answer.
+
 ## Source hierarchy
 
 1. Primary law and official federal guidance.
-2. IRS form instructions, publications, tax topics, and official tools.
-3. Official supporting agencies for presence, identity, wage records, and foreign-account reporting.
-4. Official state tax agencies.
-5. Product docs from Sprintax and TurboTax for platform capability and signup only.
+2. Current-year IRS form instructions and form pages.
+3. IRS publications, tax topics, and official tools.
+4. Official supporting agencies for presence, identity, wage records, and foreign-account reporting.
+5. Official state tax agencies.
+6. Product docs from Sprintax and TurboTax for platform capability, signup, and product scope only.
 
 If a lower-priority source conflicts with a higher-priority source, follow the higher-priority source.
 
@@ -23,22 +42,33 @@ Use these first when the answer affects tax classification, filing obligation, t
 | IRS tax code, regulations and official guidance page | Starting point for regulations, revenue rulings, revenue procedures, notices, and announcements | https://www.irs.gov/privacy-disclosure/tax-code-regulations-and-official-guidance |
 | Internal Revenue Bulletins | Official rulings, procedures, and published guidance | https://www.irs.gov/internal-revenue-bulletins |
 
-## Core IRS sources for alien classification and filing
+## Core IRS sources for classification and NRA filing
 
 Use these for routine NRA vs resident alien classification and filing preparation.
 
 | Source | What to use it for | URL |
 | --- | --- | --- |
+| Introduction to residency under U.S. tax law | Starting point for residency rules, dual-status concepts, and navigation to detailed IRS pages | https://www.irs.gov/individuals/international-taxpayers/introduction-to-residency-under-us-tax-law |
 | Determining an individual's tax residency status | Green card test and substantial presence overview | https://www.irs.gov/individuals/international-taxpayers/determining-an-individuals-tax-residency-status |
+| Tax residency status examples | Worked examples for students, scholars, and other temporary visitors | https://www.irs.gov/individuals/international-taxpayers/tax-residency-status-examples |
 | Substantial presence test | Counting rules, excluded days, and links to Form 8843 | https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test |
 | Publication 519, U.S. Tax Guide for Aliens | The main federal reference for resident vs nonresident rules and alien filing | https://www.irs.gov/forms-pubs/about-publication-519 |
 | Instructions for Form 1040-NR | Current-year NRA filing instructions | https://www.irs.gov/instructions/i1040nr |
 | About Form 8843 | Excluded days and exempt-individual reporting | https://www.irs.gov/forms-pubs/about-form-8843 |
 | Topic no. 851, Resident and nonresident aliens | Quick classification summary | https://www.irs.gov/taxtopics/tc851 |
+
+## Tax treaty and international research sources
+
+Use these when a treaty, dual-status, or international benefit may control the answer.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
 | Publication 901, U.S. Tax Treaties | Treaty availability by country and income type | https://www.irs.gov/forms-pubs/about-publication-901 |
 | Researching tax treaties | IRS entry point for treaty research | https://www.irs.gov/individuals/international-taxpayers/researching-tax-treaties |
+| Tax treaties | IRS overview page for treaty concepts and requirements | https://www.irs.gov/individuals/international-taxpayers/tax-treaties |
+| United States income tax treaties A to Z | Country-by-country treaty lookup | https://www.irs.gov/businesses/international-businesses/united-states-income-tax-treaties-a-to-z |
 
-## Core IRS sources for forms and taxpayer IDs
+## Core IRS sources for forms, IDs, and missing records
 
 Use these to confirm the meaning of documents the user uploaded or still needs.
 
@@ -54,30 +84,66 @@ Use these to confirm the meaning of documents the user uploaded or still needs.
 | Get your tax records and transcripts | Wage and income transcript retrieval | https://www.irs.gov/individuals/get-transcript |
 | Online account for individuals | IRS account for records, payments, and notices | https://www.irs.gov/payments/online-account-for-individuals |
 
-## Core IRS sources for residents, citizens, and routine business returns
-
-Use these when the case is clearly not 1040-NR.
-
-| Source | What to use it for | URL |
-| --- | --- | --- |
-| About Form 1040 | Citizens and residents file Form 1040 | https://www.irs.gov/forms-pubs/about-form-1040 |
-| U.S. citizens and resident aliens abroad | Worldwide-income reminder and related rules | https://www.irs.gov/individuals/international-taxpayers/us-citizens-and-resident-aliens-abroad |
-| About Form 1120 | Domestic corporation returns | https://www.irs.gov/forms-pubs/about-form-1120 |
-| About Form 1065 | Partnership returns | https://www.irs.gov/forms-pubs/about-form-1065 |
-| About Form 5472 | Foreign-owned or related-party reporting trigger | https://www.irs.gov/forms-pubs/about-form-5472 |
-
-## Supporting agency sources
+## Supporting agency sources for travel, immigration documents, and wage records
 
 Use these to verify non-tax facts that still control tax treatment.
 
 | Source | What to use it for | URL |
 | --- | --- | --- |
 | CBP I-94 page | Arrival and departure record access and proof of legal visitor status | https://www.cbp.gov/travel/international-visitors/i-94 |
-| CBP international visitors page | I-94 retrieval and travel-history entry point | https://www.cbp.gov/travel/international-visitors |
+| CBP arrival and departure history page | Official explanation that travelers can retrieve travel history from the I-94 page | https://www.cbp.gov/newsroom/spotlights/arrivaldeparture-history-now-available-i-94-webpage |
+| USCIS immigration documents page | How to correct, update, or replace immigration documents | https://www.uscis.gov/tools/uscis-tools-and-resources/immigration-documents-and-how-to-correct-update-or-replace-them |
+| USCIS all forms page | Official source for immigration forms and instructions when document type is unclear | https://www.uscis.gov/forms/all-forms |
+| SSA W-2 copy FAQ | Official path to obtain historical W-2 copies | https://www.ssa.gov/faqs/en/questions/KA-02501.html |
+| SSA employer W-2 information | Official W-2 filing and correction guidance | https://www.ssa.gov/employer/ |
 | FinCEN BSA E-Filing FBAR page | Foreign account reporting when FBAR is implicated | https://bsaefiling.fincen.gov/file/fbar |
 
-Use official USCIS pages when immigration-document meaning matters and the IRS source does not answer it directly. Use official SSA or IRS transcript pages when the user is missing wage forms.
 CBP pages may block some non-browser requests. If that happens, use a browser instead of treating the page as unavailable.
+
+## Core IRS sources for residents and citizens
+
+Use these when the case is clearly not 1040-NR.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| About Form 1040 | Citizens and residents file Form 1040 | https://www.irs.gov/forms-pubs/about-form-1040 |
+| About Publication 17, Your Federal Income Tax | General federal individual-return rules for resident and citizen cases | https://www.irs.gov/forms-pubs/about-publication-17 |
+| U.S. residents | IRS hub for resident-alien rules after classification is settled | https://www.irs.gov/individuals/international-taxpayers/us-residents |
+| U.S. citizens and resident aliens abroad | Worldwide-income reminder and related rules | https://www.irs.gov/individuals/international-taxpayers/us-citizens-and-resident-aliens-abroad |
+
+## Sole proprietor and self-employment sources
+
+Use these when the case is on Form 1040 with business or contractor income.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| About Schedule C (Form 1040) | Sole-proprietor income and expense reporting | https://www.irs.gov/forms-pubs/about-schedule-c-form-1040 |
+| About Schedule SE (Form 1040) | Self-employment tax | https://www.irs.gov/forms-pubs/about-schedule-se-form-1040 |
+| About Publication 334, Tax Guide for Small Business | Small-business rules for Schedule C filers | https://www.irs.gov/forms-pubs/about-publication-334 |
+
+## Routine business-return sources
+
+Use these when the case is a domestic business return and not a 1040-NR issue.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| About Form 1065 | Partnership and multi-member LLC returns | https://www.irs.gov/forms-pubs/about-form-1065 |
+| About Form 1120-S | S corporation returns | https://www.irs.gov/forms-pubs/about-form-1120-s |
+| About Form 1120 | C corporation returns | https://www.irs.gov/forms-pubs/about-form-1120 |
+| About Form 1041 | Estate and trust returns | https://www.irs.gov/forms-pubs/about-form-1041 |
+| About Form 5472 | Foreign-owned or related-party reporting trigger | https://www.irs.gov/forms-pubs/about-form-5472 |
+
+## State tax sources
+
+Use only official state tax agencies for state filing rules, residency, sourcing, and entity-registration tax issues.
+
+- Prefer the state's department of revenue, franchise tax board, taxation and finance department, comptroller, or similar official agency.
+- Confirm the official domain before relying on a state source.
+- Search patterns:
+  - `site:<official-state-domain> resident nonresident income tax`
+  - `site:<official-state-domain> part-year resident tax`
+  - `site:<official-state-domain> partnership filing requirements`
+  - `site:<official-state-domain> corporation income tax`
 
 ## Product capability sources
 
@@ -90,6 +156,7 @@ Use these only for what the product supports and how signup or filing works in t
 - Account signup pages:
   - https://taxprep.sprintax.com/create-account.html
   - https://www.sprintax.com/dashboard/signup/
+  - https://calculus.sprintax.com/account/register
 - Official site search patterns:
   - `site:sprintax.com 1040-NR 8843 Sprintax`
   - `site:sprintax.com W-2 1042-S 1099 Sprintax`
@@ -104,6 +171,9 @@ Use these only for what the product supports and how signup or filing works in t
   - https://turbotax.intuit.com/small-business-taxes/cd-download/
 - Intuit account entry point:
   - https://accounts.intuit.com/
+- Official support pages to check product scope:
+  - https://ttlc.intuit.com/turbotax-support/en-us/help-article/tax-forms/turbotax-handle-form-1040-nr-nonresident-aliens/L6XqFCkC3_US_en_US
+  - https://ttlc.intuit.com/turbotax-support/en-us/help-article/tax-forms/irs-forms-included-turbotax/L5KYwBrRH_US_en_US
 - Official site search patterns:
   - `site:ttlc.intuit.com 1040-NR TurboTax`
   - `site:turbotax.intuit.com TurboTax Business S corp partnership C corp`
@@ -121,6 +191,8 @@ When browsing, start with these search patterns instead of general web searches:
 - `site:uscode.house.gov 26 USC <section>`
 - `site:ecfr.gov "<reg section>"`
 - `site:cbp.gov I-94 <topic>`
+- `site:uscis.gov I-20 DS-2019 I-94`
+- `site:ssa.gov W-2 copy`
 - `site:<official-state-domain> resident nonresident income tax`
 - `site:ttlc.intuit.com 1040-NR TurboTax`
 - `site:sprintax.com 1042-S W-2 1099 Sprintax`
@@ -128,6 +200,8 @@ When browsing, start with these search patterns instead of general web searches:
 ## Confidence rules
 
 - Do not answer from memory when the question depends on the current filing year.
+- Do not answer a classification question until you checked the residency sources above when the facts are incomplete or ambiguous.
 - Do not promise a vendor supports a form unless you verified that support on the vendor's official site.
+- Do not rely on unofficial state summaries when state residency or sourcing matters.
 - If the answer depends on a treaty article, read the treaty source or Publication 901 before responding.
 - If you cannot verify a needed point from an authoritative source, tell the user exactly what remains unverified and suggest CPA or EA review for that point.
