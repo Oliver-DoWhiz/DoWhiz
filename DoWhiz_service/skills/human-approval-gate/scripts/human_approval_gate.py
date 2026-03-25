@@ -175,6 +175,54 @@ def fetch_browserbase_debug_payload(session_id: str) -> Optional[Dict[str, Any]]
     return parsed
 
 
+def page_debug_url(page: Dict[str, Any]) -> str:
+    for key in ("debuggerFullscreenUrl", "debuggerUrl"):
+        value = str(page.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def page_text_is_blank(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return (
+        normalized == ""
+        or normalized == "about:blank"
+        or normalized == "new tab"
+        or normalized.startswith("chrome://newtab")
+        or normalized.startswith("edge://newtab")
+        or normalized.startswith("chrome-search://local-ntp")
+    )
+
+
+def page_looks_live(page: Dict[str, Any]) -> bool:
+    return not page_text_is_blank(page.get("url")) or not page_text_is_blank(page.get("title"))
+
+
+def resolve_browserbase_debug_page_id(payload: Dict[str, Any]) -> str:
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        return ""
+
+    def iter_candidates():
+        for raw_page in reversed(pages):
+            if not isinstance(raw_page, dict):
+                continue
+            page_id = str(raw_page.get("id", "")).strip()
+            if not page_id or not page_debug_url(raw_page):
+                continue
+            yield raw_page, page_id
+
+    for page, page_id in iter_candidates():
+        if page_looks_live(page):
+            return page_id
+
+    for _page, page_id in iter_candidates():
+        return page_id
+
+    return ""
+
+
 def resolve_browser_handoff_page_id(active_session: Dict[str, Any]) -> str:
     page_id = str(active_session.get("page_id", "")).strip()
     if page_id:
@@ -187,15 +235,7 @@ def resolve_browser_handoff_page_id(active_session: Dict[str, Any]) -> str:
     payload = fetch_browserbase_debug_payload(session_id)
     if not payload:
         return ""
-
-    pages = payload.get("pages")
-    if not isinstance(pages, list) or len(pages) != 1:
-        return ""
-
-    page = pages[0]
-    if not isinstance(page, dict):
-        return ""
-    return str(page.get("id", "")).strip()
+    return resolve_browserbase_debug_page_id(payload)
 
 
 def encode_browser_handoff_token(claims: Dict[str, Any], secret: str) -> str:

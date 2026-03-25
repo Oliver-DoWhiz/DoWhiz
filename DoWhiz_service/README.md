@@ -287,7 +287,10 @@ Azure ACI execution path (required vars):
   signed browser handoff link under the configured public service base (for example
   `/service/auth/browser-handoff`) so the human can open the same live Browserbase
   session, finish the blocker in-browser, and then reply in the email thread to
-  resume the agent. HAG-thread replies (`[HAG:...]`) are ignored by normal inbound
+  resume the agent. When Browserbase keeps auxiliary blank tabs around, the
+  handoff flow now prefers the most recent non-blank debuggable page instead of
+  dropping the user into a session-level `about:blank` inspector. HAG-thread
+  replies (`[HAG:...]`) are ignored by normal inbound
   task routing to prevent recursive Email->task loops.
 - ACI run_task sets Playwright/NPM runtime defaults for mounted workspaces:
   `PLAYWRIGHT_MCP_EXECUTABLE_PATH` auto-discovery (`chrome-linux` / `chrome-linux64`),
