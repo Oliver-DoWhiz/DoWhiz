@@ -1013,6 +1013,15 @@ def build_reply_payload(details: Dict[str, Any], message_id: str, received_at: O
     }
 
 
+def extract_inbound_messages(search_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    messages = search_response.get("InboundMessages")
+    if not isinstance(messages, list):
+        messages = search_response.get("Messages")
+    if not isinstance(messages, list):
+        return []
+    return [message for message in messages if isinstance(message, dict)]
+
+
 def poll_for_reply_once(
     *,
     api_base: str,
@@ -1039,11 +1048,20 @@ def poll_for_reply_once(
         query["recipient"] = recipient_filter
 
     search_response = http_json_request("GET", api_base, token, "/messages/inbound", query=query)
-    messages = search_response.get("InboundMessages")
-    if not isinstance(messages, list):
-        messages = search_response.get("Messages")
-    if not isinstance(messages, list):
-        messages = []
+    messages = extract_inbound_messages(search_response)
+    if recipient_filter and not messages:
+        # Postmark inbound replies often land on the server alias address rather than the
+        # human-facing Reply-To mailbox, so retry without recipient narrowing before giving up.
+        query_without_recipient = dict(query)
+        query_without_recipient.pop("recipient", None)
+        search_response = http_json_request(
+            "GET",
+            api_base,
+            token,
+            "/messages/inbound",
+            query=query_without_recipient,
+        )
+        messages = extract_inbound_messages(search_response)
 
     seen = set(challenge.get("seen_inbound_message_ids", []))
     new_seen: List[str] = []
