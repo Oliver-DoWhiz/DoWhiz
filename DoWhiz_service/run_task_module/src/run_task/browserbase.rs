@@ -174,9 +174,9 @@ fn release_active_browserbase_session(state_dir: &Path) -> Result<(), RunTaskErr
     }
 
     let mut cmd = Command::new(resolve_session_manager_command());
-    cmd.arg("release-active")
-        .arg("--state-dir")
+    cmd.arg("--state-dir")
         .arg(state_dir)
+        .arg("release-active")
         .env(
             BROWSERBASE_STATE_DIR_ENV_KEY,
             state_dir.to_string_lossy().into_owned(),
@@ -401,5 +401,52 @@ mod tests {
         let found =
             find_existing_session_manager_candidate(&[nested]).expect("wrapper should be found");
         assert_eq!(found, wrapper);
+    }
+
+    #[test]
+    fn release_active_browserbase_session_passes_state_dir_before_subcommand() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let temp = tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        let state_dir = temp.path().join("state");
+        let args_path = temp.path().join("args.txt");
+        let wrapper = bin_dir.join("browserbase_session_manager");
+
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+                args_path.display()
+            ),
+        )
+        .expect("write wrapper");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut perms = std::fs::metadata(&wrapper)
+                .expect("wrapper metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&wrapper, perms).expect("set wrapper permissions");
+        }
+
+        let _bin_dir = EnvGuard::set("DOWHIZ_BIN_DIR", &bin_dir.to_string_lossy());
+
+        release_active_browserbase_session(&state_dir).expect("release active");
+
+        let args = std::fs::read_to_string(&args_path).expect("read args");
+        let args: Vec<_> = args.lines().collect();
+        assert_eq!(
+            args,
+            vec![
+                "--state-dir",
+                state_dir.to_string_lossy().as_ref(),
+                "release-active",
+            ]
+        );
     }
 }
