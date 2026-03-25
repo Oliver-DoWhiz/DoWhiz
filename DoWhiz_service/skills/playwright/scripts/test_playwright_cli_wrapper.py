@@ -83,6 +83,52 @@ class PlaywrightCliWrapperTests(unittest.TestCase):
             )
             self.assertIn("playwright-cli open https://example.com", result.stderr)
 
+    def test_browserbase_json_error_is_rendered_as_plain_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            bin_dir = temp / "bin"
+            bin_dir.mkdir()
+
+            write_executable(
+                bin_dir / "browserbase_session_manager",
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s' '{"status":"error","error":"Browserbase API error 402 for /v1/sessions: Free plan browser minutes limit reached."}'
+                    exit 1
+                    """
+                ),
+            )
+
+            write_executable(
+                bin_dir / "npx",
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    echo "npx should not be called" >&2
+                    exit 99
+                    """
+                ),
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+            env["BROWSERBASE_API_KEY"] = "bb_test"
+
+            result = subprocess.run(
+                [str(SCRIPT_PATH), "open", "https://example.com"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Free plan browser minutes limit reached", result.stderr)
+            self.assertNotIn('"status":"error"', result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
