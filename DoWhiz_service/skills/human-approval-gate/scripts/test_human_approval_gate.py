@@ -221,6 +221,54 @@ class HumanApprovalGateTests(unittest.TestCase):
             self.assertIn("Live browser handoff:", state["_rendered_email"]["text_body"])
             self.assertIn("Open live browser handoff", state["_rendered_email"]["html_body"])
 
+    def test_browser_handoff_refreshes_single_live_page_id_when_missing_from_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot = self.create_screenshot(temp_dir)
+            active_session_path = Path(temp_dir) / "active_session.json"
+            active_session_path.write_text(
+                json.dumps({"session_id": "sess_live_123"}),
+                encoding="utf-8",
+            )
+
+            previous = {
+                MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY),
+                MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY: os.environ.get(MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY),
+                MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY: os.environ.get(MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY),
+            }
+            os.environ[MODULE.BROWSER_HANDOFF_BASE_URL_ENV_KEY] = "https://api.example.com/service"
+            os.environ[MODULE.BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY] = "secret-key"
+            os.environ[MODULE.BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY] = str(active_session_path)
+
+            original_fetch = MODULE.fetch_browserbase_debug_payload
+            MODULE.fetch_browserbase_debug_payload = lambda session_id: {
+                "pages": [{"id": "page_from_debug"}]
+            }
+            try:
+                args = self.parse_request(
+                    "--challenge-type",
+                    "captcha",
+                    "--scope",
+                    "admin",
+                    "--account-label",
+                    "Oliver Google account",
+                    "--screenshot",
+                    screenshot,
+                )
+                state = MODULE.build_request_state(args)
+            finally:
+                MODULE.fetch_browserbase_debug_payload = original_fetch
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertEqual(state["browser_session_id"], "sess_live_123")
+            self.assertEqual(state["browser_page_id"], "page_from_debug")
+            token = state["browser_handoff_url"].split("token=", 1)[1]
+            claims = self.decode_token_claims(token)
+            self.assertEqual(claims["page_id"], "page_from_debug")
+
     def test_cli_rejects_shell_usage_when_mcp_required(self):
         previous = os.environ.get(MODULE.HAG_REQUIRE_MCP_ENV_KEY)
         os.environ[MODULE.HAG_REQUIRE_MCP_ENV_KEY] = "1"

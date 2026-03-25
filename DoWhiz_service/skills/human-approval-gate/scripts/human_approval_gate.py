@@ -54,6 +54,10 @@ BROWSERBASE_STATE_DIR_DEFAULT = ".secrets/browserbase"
 BROWSERBASE_ACTIVE_SESSION_FILENAME = "active_session.json"
 BROWSERBASE_STATE_DIR_ENV_KEY = "BROWSERBASE_STATE_DIR"
 BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY = "BROWSERBASE_ACTIVE_SESSION_PATH"
+BROWSERBASE_API_KEY_ENV_KEY = "BROWSERBASE_API_KEY"
+BROWSERBASE_API_KEY_ALIAS_ENV_KEY = "BROWSER_BASE_API_KEY"
+BROWSERBASE_API_BASE_URL_ENV_KEY = "BROWSERBASE_API_BASE_URL"
+DEFAULT_BROWSERBASE_API_BASE_URL = "https://api.browserbase.com"
 BROWSER_HANDOFF_BASE_URL_ENV_KEY = "BROWSER_HANDOFF_BASE_URL"
 BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY = "BROWSER_HANDOFF_SIGNING_SECRET"
 PAGE_STATES_BY_TYPE = {
@@ -144,6 +148,56 @@ def load_active_browserbase_session() -> Optional[Dict[str, Any]]:
     return payload
 
 
+def fetch_browserbase_debug_payload(session_id: str) -> Optional[Dict[str, Any]]:
+    api_key = get_env_first(BROWSERBASE_API_KEY_ENV_KEY, BROWSERBASE_API_KEY_ALIAS_ENV_KEY)
+    if not api_key:
+        return None
+    api_base = (get_env_first(BROWSERBASE_API_BASE_URL_ENV_KEY) or DEFAULT_BROWSERBASE_API_BASE_URL).rstrip(
+        "/"
+    )
+    encoded_session_id = urllib.parse.quote(session_id, safe="")
+    request = urllib.request.Request(
+        f"{api_base}/v1/sessions/{encoded_session_id}/debug",
+        headers={"Accept": "application/json", "X-BB-API-Key": api_key},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read().decode("utf-8")
+    except Exception:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def resolve_browser_handoff_page_id(active_session: Dict[str, Any]) -> str:
+    page_id = str(active_session.get("page_id", "")).strip()
+    if page_id:
+        return page_id
+
+    session_id = str(active_session.get("session_id", "")).strip()
+    if not session_id:
+        return ""
+
+    payload = fetch_browserbase_debug_payload(session_id)
+    if not payload:
+        return ""
+
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or len(pages) != 1:
+        return ""
+
+    page = pages[0]
+    if not isinstance(page, dict):
+        return ""
+    return str(page.get("id", "")).strip()
+
+
 def encode_browser_handoff_token(claims: Dict[str, Any], secret: str) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     encoded_header = base64.urlsafe_b64encode(
@@ -168,7 +222,7 @@ def build_browser_handoff_details(challenge_id: str, expires_at: str) -> Optiona
     session_id = str(active_session.get("session_id", "")).strip()
     if not session_id:
         return None
-    page_id = str(active_session.get("page_id", "")).strip()
+    page_id = resolve_browser_handoff_page_id(active_session)
 
     now = utc_now()
     expires = parse_iso8601(expires_at)

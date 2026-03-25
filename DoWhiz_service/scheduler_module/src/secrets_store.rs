@@ -9,6 +9,7 @@ const USER_ENV_FILENAME: &str = ".env";
 const USER_BROWSERBASE_DIR: &str = "browserbase";
 const WORKSPACE_SECRETS_DIR: &str = ".secrets";
 const WORKSPACE_BROWSERBASE_DIR: &str = "browserbase";
+const BROWSERBASE_ACTIVE_SESSION_FILENAME: &str = "active_session.json";
 
 pub(crate) fn resolve_user_secrets_path(task: &RunTaskTask) -> Option<PathBuf> {
     if let Some(archive_root) = task.archive_root.as_ref() {
@@ -65,7 +66,11 @@ pub(crate) fn sync_user_browserbase_state_to_workspace(
     workspace_dir: &Path,
 ) -> Result<(), io::Error> {
     let workspace_browserbase_dir = workspace_browserbase_dir(workspace_dir);
-    mirror_optional_dir(user_browserbase_dir, &workspace_browserbase_dir)
+    mirror_optional_dir_filtered(
+        user_browserbase_dir,
+        &workspace_browserbase_dir,
+        &browserbase_path_should_sync,
+    )
 }
 
 pub(crate) fn sync_workspace_browserbase_state_to_user(
@@ -73,7 +78,11 @@ pub(crate) fn sync_workspace_browserbase_state_to_user(
     user_browserbase_dir: &Path,
 ) -> Result<(), io::Error> {
     let workspace_browserbase_dir = workspace_browserbase_dir(workspace_dir);
-    mirror_optional_dir(&workspace_browserbase_dir, user_browserbase_dir)
+    mirror_optional_dir_filtered(
+        &workspace_browserbase_dir,
+        user_browserbase_dir,
+        &browserbase_path_should_sync,
+    )
 }
 
 fn copy_file_with_fallback(src: &Path, dest: &Path) -> Result<(), io::Error> {
@@ -103,7 +112,24 @@ fn workspace_browserbase_dir(workspace_dir: &Path) -> PathBuf {
         .join(WORKSPACE_BROWSERBASE_DIR)
 }
 
-fn mirror_optional_dir(src: &Path, dest: &Path) -> Result<(), io::Error> {
+fn browserbase_path_should_sync(relative_path: &Path) -> bool {
+    let file_name = relative_path.file_name().and_then(|value| value.to_str());
+    if let Some(file_name) = file_name {
+        if file_name == BROWSERBASE_ACTIVE_SESSION_FILENAME {
+            return false;
+        }
+        if file_name.ends_with(".tmp") {
+            return false;
+        }
+    }
+    true
+}
+
+fn mirror_optional_dir_filtered(
+    src: &Path,
+    dest: &Path,
+    should_copy: &dyn Fn(&Path) -> bool,
+) -> Result<(), io::Error> {
     if !src.exists() {
         if dest.exists() {
             fs::remove_dir_all(dest)?;
@@ -121,15 +147,21 @@ fn mirror_optional_dir(src: &Path, dest: &Path) -> Result<(), io::Error> {
         fs::remove_file(dest)?;
     }
     fs::create_dir_all(dest)?;
-    mirror_dir_recursive(src, dest)
+    mirror_dir_recursive_filtered(src, dest, Path::new(""), should_copy)
 }
 
-fn mirror_dir_recursive(src: &Path, dest: &Path) -> Result<(), io::Error> {
+fn mirror_dir_recursive_filtered(
+    src: &Path,
+    dest: &Path,
+    relative_root: &Path,
+    should_copy: &dyn Fn(&Path) -> bool,
+) -> Result<(), io::Error> {
     for entry in fs::read_dir(dest)? {
         let entry = entry?;
         let dest_path = entry.path();
         let src_path = src.join(entry.file_name());
-        if !src_path.exists() {
+        let relative_path = relative_root.join(entry.file_name());
+        if !src_path.exists() || !should_copy(&relative_path) {
             remove_path(&dest_path)?;
             continue;
         }
@@ -141,13 +173,17 @@ fn mirror_dir_recursive(src: &Path, dest: &Path) -> Result<(), io::Error> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
+        let relative_path = relative_root.join(entry.file_name());
+        if !should_copy(&relative_path) {
+            continue;
+        }
         let dest_path = dest.join(entry.file_name());
         if src_path.is_dir() {
             if dest_path.exists() && !dest_path.is_dir() {
                 remove_path(&dest_path)?;
             }
             fs::create_dir_all(&dest_path)?;
-            mirror_dir_recursive(&src_path, &dest_path)?;
+            mirror_dir_recursive_filtered(&src_path, &dest_path, &relative_path, should_copy)?;
         } else if src_path.is_file() {
             if let Some(parent) = dest_path.parent() {
                 fs::create_dir_all(parent)?;
@@ -265,6 +301,11 @@ mod tests {
             "{\"context\":\"ctx_1\"}",
         )
         .expect("registry");
+        fs::write(
+            user_browserbase.join(BROWSERBASE_ACTIVE_SESSION_FILENAME),
+            "{\"session_id\":\"sess_stale\"}",
+        )
+        .expect("active_session");
         fs::write(user_browserbase.join("nested").join("note.txt"), "hello").expect("nested file");
 
         sync_user_browserbase_state_to_workspace(&user_browserbase, &workspace_dir).expect("sync");
@@ -279,6 +320,9 @@ mod tests {
                 .expect("nested"),
             "hello"
         );
+        assert!(!workspace_browserbase
+            .join(BROWSERBASE_ACTIVE_SESSION_FILENAME)
+            .exists());
     }
 
     #[test]
@@ -292,10 +336,20 @@ mod tests {
             "{\"context\":\"ctx_2\"}",
         )
         .expect("registry");
+        fs::write(
+            workspace_browserbase.join(BROWSERBASE_ACTIVE_SESSION_FILENAME),
+            "{\"session_id\":\"sess_workspace\"}",
+        )
+        .expect("active_session");
         let user_browserbase = temp.path().join("user-secrets").join("browserbase");
         fs::create_dir_all(user_browserbase.join("nested")).expect("user browserbase");
         fs::write(user_browserbase.join("stale.json"), "stale").expect("stale file");
         fs::write(user_browserbase.join("nested").join("old.txt"), "old").expect("old file");
+        fs::write(
+            user_browserbase.join(BROWSERBASE_ACTIVE_SESSION_FILENAME),
+            "{\"session_id\":\"sess_old\"}",
+        )
+        .expect("old active session");
 
         sync_workspace_browserbase_state_to_user(&workspace_dir, &user_browserbase).expect("sync");
 
@@ -305,5 +359,8 @@ mod tests {
             fs::read_to_string(user_browserbase.join("registry.json")).expect("registry"),
             "{\"context\":\"ctx_2\"}"
         );
+        assert!(!user_browserbase
+            .join(BROWSERBASE_ACTIVE_SESSION_FILENAME)
+            .exists());
     }
 }
