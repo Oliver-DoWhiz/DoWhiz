@@ -290,6 +290,33 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
         self.assertTrue(page_id_known)
         self.assertEqual(page_id, "page_live")
 
+    def test_resolve_page_id_for_session_omits_blank_page_when_no_live_tab_exists(self):
+        config = MODULE.BrowserbaseConfig(
+            api_key="bb_test",
+            project_id="proj_test",
+            api_base=MODULE.API_BASE_DEFAULT,
+            timeout_seconds=3600,
+        )
+
+        original_debug = MODULE.get_debug_urls
+        MODULE.get_debug_urls = lambda *_args, **_kwargs: {
+            "pages": [
+                {
+                    "id": "page_blank",
+                    "url": "about:blank",
+                    "title": "about:blank",
+                    "debuggerFullscreenUrl": "https://blank.example.com",
+                }
+            ]
+        }
+        try:
+            page_id, page_id_known = MODULE.resolve_page_id_for_session(config, "sess_blank")
+        finally:
+            MODULE.get_debug_urls = original_debug
+
+        self.assertTrue(page_id_known)
+        self.assertIsNone(page_id)
+
 
 if __name__ == "__main__":
     unittest.main()
