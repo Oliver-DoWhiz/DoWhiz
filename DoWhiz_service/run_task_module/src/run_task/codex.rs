@@ -366,7 +366,12 @@ pub(super) fn run_codex_task(
             .as_deref()
             .unwrap_or(request.workspace_dir),
     )?;
-    let browserbase_env_overrides = collect_browserbase_env_overrides();
+    let browserbase_workspace_dir = if use_docker {
+        PathBuf::from(DOCKER_WORKSPACE_DIR)
+    } else {
+        canonicalize_dir(request.workspace_dir)?
+    };
+    let browserbase_env_overrides = collect_browserbase_env_overrides(&browserbase_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -882,7 +887,7 @@ fn run_codex_task_azure_aci(
     let bright_data_env_overrides = collect_bright_data_env_overrides();
     let google_workspace_cli_env_overrides =
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
-    let browserbase_env_overrides = collect_browserbase_env_overrides();
+    let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;

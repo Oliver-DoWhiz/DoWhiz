@@ -34,19 +34,22 @@ const POSTMARK_INBOUND_HOOK_URL_ENV_KEY: &str = "POSTMARK_INBOUND_HOOK_URL";
 const FRONTEND_URL_ENV_KEY: &str = "FRONTEND_URL";
 const SESSION_MANAGER_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub(super) fn collect_browserbase_env_overrides() -> Vec<(String, String)> {
+pub(super) fn collect_browserbase_env_overrides(workspace_dir: &Path) -> Vec<(String, String)> {
+    let state_dir = workspace_browserbase_state_dir(workspace_dir);
+    let registry_path = workspace_browserbase_registry_path(workspace_dir);
+    let active_session_path = workspace_browserbase_active_session_path(workspace_dir);
     let mut overrides = vec![
         (
             BROWSERBASE_STATE_DIR_ENV_KEY.to_string(),
-            DEFAULT_BROWSERBASE_STATE_DIR.to_string(),
+            state_dir.to_string_lossy().into_owned(),
         ),
         (
             BROWSERBASE_REGISTRY_PATH_ENV_KEY.to_string(),
-            DEFAULT_BROWSERBASE_REGISTRY_PATH.to_string(),
+            registry_path.to_string_lossy().into_owned(),
         ),
         (
             BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY.to_string(),
-            DEFAULT_BROWSERBASE_ACTIVE_SESSION_PATH.to_string(),
+            active_session_path.to_string_lossy().into_owned(),
         ),
         (
             BROWSERBASE_API_BASE_URL_ENV_KEY.to_string(),
@@ -90,7 +93,15 @@ pub(super) fn browserbase_enabled() -> bool {
 }
 
 pub(super) fn workspace_browserbase_state_dir(workspace_dir: &Path) -> PathBuf {
-    workspace_dir.join(DEFAULT_BROWSERBASE_STATE_DIR)
+    browserbase_workspace_root(workspace_dir).join(DEFAULT_BROWSERBASE_STATE_DIR)
+}
+
+pub(super) fn workspace_browserbase_registry_path(workspace_dir: &Path) -> PathBuf {
+    browserbase_workspace_root(workspace_dir).join(DEFAULT_BROWSERBASE_REGISTRY_PATH)
+}
+
+pub(super) fn workspace_browserbase_active_session_path(workspace_dir: &Path) -> PathBuf {
+    browserbase_workspace_root(workspace_dir).join(DEFAULT_BROWSERBASE_ACTIVE_SESSION_PATH)
 }
 
 pub(super) struct BrowserbaseSessionCleanupGuard {
@@ -105,6 +116,16 @@ impl BrowserbaseSessionCleanupGuard {
             state_dir: workspace_browserbase_state_dir(workspace_dir),
         }
     }
+}
+
+fn browserbase_workspace_root(workspace_dir: &Path) -> PathBuf {
+    if workspace_dir.is_absolute() {
+        return workspace_dir.to_path_buf();
+    }
+
+    env::current_dir()
+        .map(|cwd| cwd.join(workspace_dir))
+        .unwrap_or_else(|_| workspace_dir.to_path_buf())
 }
 
 impl Drop for BrowserbaseSessionCleanupGuard {
@@ -295,6 +316,7 @@ mod tests {
     #[test]
     fn collect_browserbase_env_overrides_canonicalizes_aliases() {
         let _lock = ENV_LOCK.lock().expect("env lock");
+        let temp = tempdir().expect("tempdir");
         let _api_key = EnvGuard::set(BROWSERBASE_API_KEY_ALIAS_ENV_KEY, "bb_test");
         let _project_id = EnvGuard::set(BROWSERBASE_PROJECT_ID_ALIAS_ENV_KEY, "proj_test");
         let _unset_api = EnvGuard::unset(BROWSERBASE_API_KEY_ENV_KEY);
@@ -302,7 +324,7 @@ mod tests {
         let _unset_direct_secret = EnvGuard::unset(BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY);
         let _unset_chat_secret = EnvGuard::unset(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV_KEY);
         let _unset_slack_secret = EnvGuard::unset(SLACK_SIGNING_SECRET_ENV_KEY);
-        let overrides = collect_browserbase_env_overrides();
+        let overrides = collect_browserbase_env_overrides(temp.path());
 
         assert!(overrides
             .iter()
@@ -311,21 +333,67 @@ mod tests {
             .iter()
             .any(|(key, value)| { key == BROWSERBASE_PROJECT_ID_ENV_KEY && value == "proj_test" }));
         assert!(overrides.iter().any(|(key, value)| {
-            key == BROWSERBASE_STATE_DIR_ENV_KEY && value == DEFAULT_BROWSERBASE_STATE_DIR
+            key == BROWSERBASE_STATE_DIR_ENV_KEY
+                && value
+                    == &temp
+                        .path()
+                        .join(DEFAULT_BROWSERBASE_STATE_DIR)
+                        .to_string_lossy()
+        }));
+        assert!(overrides.iter().any(|(key, value)| {
+            key == BROWSERBASE_REGISTRY_PATH_ENV_KEY
+                && value
+                    == &temp
+                        .path()
+                        .join(DEFAULT_BROWSERBASE_REGISTRY_PATH)
+                        .to_string_lossy()
+        }));
+        assert!(overrides.iter().any(|(key, value)| {
+            key == BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY
+                && value
+                    == &temp
+                        .path()
+                        .join(DEFAULT_BROWSERBASE_ACTIVE_SESSION_PATH)
+                        .to_string_lossy()
         }));
     }
 
     #[test]
     fn collect_browserbase_env_overrides_uses_handoff_secret_fallbacks() {
         let _lock = ENV_LOCK.lock().expect("env lock");
+        let temp = tempdir().expect("tempdir");
         let _unset_direct = EnvGuard::unset(BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY);
         let _chat_secret = EnvGuard::set(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV_KEY, "scope-secret");
         let _unset_slack = EnvGuard::unset(SLACK_SIGNING_SECRET_ENV_KEY);
 
-        let overrides = collect_browserbase_env_overrides();
+        let overrides = collect_browserbase_env_overrides(temp.path());
 
         assert!(overrides.iter().any(|(key, value)| {
             key == BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY && value == "scope-secret"
+        }));
+    }
+
+    #[test]
+    fn collect_browserbase_env_overrides_resolves_relative_workspace_paths_against_cwd() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let cwd = env::current_dir().expect("current dir");
+        let overrides = collect_browserbase_env_overrides(Path::new("workspace"));
+
+        assert!(overrides.iter().any(|(key, value)| {
+            key == BROWSERBASE_STATE_DIR_ENV_KEY
+                && value
+                    == &cwd
+                        .join("workspace")
+                        .join(DEFAULT_BROWSERBASE_STATE_DIR)
+                        .to_string_lossy()
+        }));
+        assert!(overrides.iter().any(|(key, value)| {
+            key == BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY
+                && value
+                    == &cwd
+                        .join("workspace")
+                        .join(DEFAULT_BROWSERBASE_ACTIVE_SESSION_PATH)
+                        .to_string_lossy()
         }));
     }
 

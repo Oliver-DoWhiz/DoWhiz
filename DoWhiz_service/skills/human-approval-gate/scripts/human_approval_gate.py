@@ -629,7 +629,7 @@ def build_subject(challenge_id: str, account_label: str, challenge_type: str) ->
     subject_prefix = {
         "captcha": "CAPTCHA help needed",
         "password": "Password needed",
-        "two_factor": "2FA approval needed",
+        "two_factor": "2FA help needed",
     }[challenge_type]
     if account_label.strip():
         return f"{token} {subject_prefix} for {account_label.strip()}"
@@ -733,8 +733,8 @@ def summarize_required_help(
 
     if page_state == "waiting_for_device_approval":
         if live_browser_available:
-            return f"Open the real browser page, complete the {method_description} approval, then reply \"done\"."
-        return f"Complete the {method_description} approval, then reply \"done\"."
+            return 'Open the real browser page, approve the sign-in, then reply "done".'
+        return 'Approve the sign-in, then reply "done".'
 
     if live_browser_available:
         return f"Open the real browser page and enter the required {method_description}."
@@ -769,7 +769,7 @@ def build_text_body(state: Dict[str, Any]) -> str:
         browser_handoff_url,
     )
 
-    lines = ["DoWhiz needs help with a sign-in step.", ""]
+    lines = ["DoWhiz is blocked on sign-in.", ""]
     if browser_handoff_url:
         lines.extend(
             [
@@ -887,7 +887,7 @@ def build_html_body(state: Dict[str, Any], text_body: str) -> str:
         "<div style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:16px;"
         "padding:24px;border:1px solid #e5e7eb;\">"
         f"{button_html}"
-        "<p style=\"margin:0 0 16px 0;font-size:18px;font-weight:600;\">DoWhiz needs help with a sign-in step.</p>"
+        "<p style=\"margin:0 0 16px 0;font-size:18px;font-weight:600;\">DoWhiz is blocked on sign-in.</p>"
         '<div style="margin:0 0 16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">'
         f'<p style="margin:0 0 8px 0;"><strong>Blocked on:</strong> {escape(blocked_on)}</p>'
         f'<p style="margin:0;"><strong>Help needed:</strong> {escape(required_help)}</p>'
