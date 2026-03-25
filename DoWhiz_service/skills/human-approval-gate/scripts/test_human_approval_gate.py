@@ -100,7 +100,7 @@ class HumanApprovalGateTests(unittest.TestCase):
                 rendered["text_body"],
             )
             self.assertIn(
-                "Please do: Reply with the required SMS code to phone ending in 9315.",
+                "Help needed: Reply with the required SMS code to phone ending in 9315.",
                 rendered["text_body"],
             )
             self.assertIn(
@@ -133,12 +133,12 @@ class HumanApprovalGateTests(unittest.TestCase):
 
             self.assertIn("Blocked on: Password entry for Oliver Google account", rendered["text_body"])
             self.assertIn(
-                "Please do: Reply with the password for Oliver Google account.",
+                "Help needed: Reply with the password for Oliver Google account.",
                 rendered["text_body"],
             )
             self.assertNotIn("Password env key checked", rendered["text_body"])
             self.assertNotIn("Checked workspace .env", rendered["text_body"])
-            self.assertIn("Provide password", state["subject"])
+            self.assertIn("Password needed", state["subject"])
 
     def test_record_send_event_writes_attachment_details(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -238,6 +238,10 @@ class HumanApprovalGateTests(unittest.TestCase):
             self.assertEqual(claims["page_id"], "page_live_456")
             self.assertIn("Open the real browser page:", state["_rendered_email"]["text_body"])
             self.assertIn("This opens the exact page where the agent is stuck.", state["_rendered_email"]["text_body"])
+            self.assertIn(
+                "Help needed: Open the real browser page and solve the CAPTCHA.",
+                state["_rendered_email"]["text_body"],
+            )
             self.assertIn("Open the real browser page", state["_rendered_email"]["html_body"])
             self.assertLess(
                 state["_rendered_email"]["html_body"].index("Open the real browser page"),
