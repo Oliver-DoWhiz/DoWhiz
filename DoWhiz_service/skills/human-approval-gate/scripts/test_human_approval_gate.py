@@ -366,6 +366,59 @@ class HumanApprovalGateTests(unittest.TestCase):
             claims = self.decode_token_claims(token)
             self.assertEqual(claims["page_id"], "page_from_debug")
 
+    def test_poll_for_reply_once_retries_without_recipient_filter_for_alias_deliveries(self):
+        challenge = {
+            "challenge_id": "abc-123",
+            "created_at": "2026-03-25T17:48:42Z",
+            "expected_reply_from": "deep-tutor+bb-handoff-123@deep-tutor.com",
+            "reply_to": "dowhiz@deep-tutor.com",
+            "seen_inbound_message_ids": [],
+        }
+        recorded_queries = []
+
+        original_http = MODULE.http_json_request
+
+        def fake_http(method, api_base, token, path, query=None, body=None):
+            recorded_queries.append((path, dict(query or {})))
+            if path == "/messages/inbound":
+                if query and query.get("recipient") == "dowhiz@deep-tutor.com":
+                    return {"TotalCount": 0, "InboundMessages": []}
+                return {
+                    "TotalCount": 1,
+                    "InboundMessages": [{"MessageID": "msg-1"}],
+                }
+            if path == "/messages/inbound/msg-1/details":
+                return {
+                    "From": "deep-tutor+bb-handoff-123@deep-tutor.com",
+                    "Subject": "Re: [HAG:abc-123] 2FA approval needed for Browserbase handoff demo",
+                    "TextBody": "424242",
+                    "Date": "2026-03-25T17:50:00Z",
+                    "OriginalRecipient": "alias@inbound.postmarkapp.com",
+                    "To": "alias@inbound.postmarkapp.com",
+                }
+            raise AssertionError(f"unexpected request path: {path}")
+
+        MODULE.http_json_request = fake_http
+        try:
+            reply, new_seen = MODULE.poll_for_reply_once(
+                api_base="https://api.postmarkapp.com",
+                token="token",
+                challenge=challenge,
+            )
+        finally:
+            MODULE.http_json_request = original_http
+
+        self.assertIsNotNone(reply)
+        assert reply is not None
+        self.assertEqual(reply["from_email"], "deep-tutor+bb-handoff-123@deep-tutor.com")
+        self.assertEqual(reply["text_body"], "424242")
+        self.assertEqual(new_seen, ["msg-1"])
+
+        inbound_queries = [query for path, query in recorded_queries if path == "/messages/inbound"]
+        self.assertEqual(len(inbound_queries), 2)
+        self.assertEqual(inbound_queries[0]["recipient"], "dowhiz@deep-tutor.com")
+        self.assertNotIn("recipient", inbound_queries[1])
+
     def test_cli_rejects_shell_usage_when_mcp_required(self):
         previous = os.environ.get(MODULE.HAG_REQUIRE_MCP_ENV_KEY)
         os.environ[MODULE.HAG_REQUIRE_MCP_ENV_KEY] = "1"
