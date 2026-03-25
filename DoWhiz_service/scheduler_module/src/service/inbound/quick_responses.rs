@@ -1094,6 +1094,99 @@ fn send_quick_wechat_response(user_id: &str, response: &str) -> Result<(), BoxEr
     Ok(())
 }
 
+/// Try to handle a Lark message with the upstream classifier.
+/// Returns Ok(true) if the message was handled, Ok(false) if it should go to the full pipeline.
+pub(crate) fn try_quick_response_lark(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message_router: &MessageRouter,
+    runtime: &tokio::runtime::Handle,
+    message: &crate::channel::InboundMessage,
+) -> Result<bool, BoxError> {
+    let Some(text) = message.text_body.as_deref() else {
+        return Ok(false);
+    };
+
+    // Lark user ID is the sender (open_id)
+    let open_id = &message.sender;
+
+    // Look up unified account first, fall back to legacy user_store
+    let account_id = lookup_account_by_channel(&Channel::Lark, open_id);
+    let user = user_store.get_or_create_user("lark", open_id)?;
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
+
+    let employee_name = config.employee_profile.display_name.as_deref();
+    let decision = runtime.block_on(message_router.classify(
+        text,
+        memory.as_deref(),
+        employee_name,
+        None,
+    ));
+
+    match decision {
+        RouterDecision::Simple {
+            response,
+            memory_update,
+        } => {
+            // Write memory update if present
+            if let Some(update) = memory_update {
+                if let Err(e) =
+                    write_memory_update(account_id, &user.user_id, &user_paths.memory_dir, &update)
+                {
+                    warn!("Failed to write memory update: {}", e);
+                } else if let Some(aid) = account_id {
+                    info!("Updated memory for unified account {}", aid);
+                } else {
+                    info!("Updated memory for legacy user {}", user.user_id);
+                }
+            }
+
+            // Send quick response via Lark API
+            if send_quick_lark_response(open_id, &response).is_ok() {
+                info!("lark quick response sent: open_id={}", open_id);
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        RouterDecision::Complex | RouterDecision::Passthrough => Ok(false),
+    }
+}
+
+/// Send a quick response to a Lark user.
+fn send_quick_lark_response(open_id: &str, response: &str) -> Result<(), BoxError> {
+    use crate::adapters::lark::LarkOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter};
+
+    let adapter = LarkOutboundAdapter::from_env()
+        .map_err(|e| format!("Failed to create Lark adapter: {}", e))?;
+
+    let message = OutboundMessage {
+        channel: Channel::Lark,
+        from: None,
+        to: vec![open_id.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: String::new(),
+        text_body: response.to_string(),
+        html_body: String::new(),
+        html_path: None,
+        attachments_dir: None,
+        thread_id: None,
+        metadata: ChannelMetadata::default(),
+    };
+
+    let result = adapter
+        .send(&message)
+        .map_err(|e| format!("Failed to send Lark message: {}", e))?;
+
+    if !result.success {
+        return Err(format!("Lark send failed: {:?}", result.error).into());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
