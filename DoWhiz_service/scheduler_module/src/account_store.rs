@@ -154,6 +154,34 @@ pub struct RecommendationFeedbackRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// User contact directory entry for TPM cross-channel messaging.
+///
+/// Maps a Notion user to their Slack/Discord handles for proactive outreach.
+#[derive(Debug, Clone)]
+pub struct UserContact {
+    pub id: Uuid,
+    pub account_id: Uuid,
+    /// Notion person ID (e.g., from task assignee)
+    pub notion_user_id: Option<String>,
+    /// Notion workspace this mapping applies to
+    pub notion_workspace_id: Option<String>,
+    /// Slack member ID (e.g., U12345ABC)
+    pub slack_user_id: Option<String>,
+    /// Slack workspace/team ID
+    pub slack_workspace_id: Option<String>,
+    /// Discord user ID (snowflake)
+    pub discord_user_id: Option<String>,
+    /// Discord guild/server ID
+    pub discord_guild_id: Option<String>,
+    /// Preferred contact channel: "slack", "discord", or "email"
+    pub preferred_channel: Option<String>,
+    /// How often to check in (days), e.g., 3 means every 3 days
+    pub contact_frequency_days: Option<i32>,
+    /// Last time this user was contacted for TPM follow-up
+    pub last_contacted_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AccountStoreError {
     #[error("postgres error: {0}")]
@@ -1076,6 +1104,191 @@ impl AccountStore {
                 }
             })
             .collect())
+    }
+
+    // =========================================================================
+    // User Contact Directory (TPM Cross-Channel Messaging)
+    // =========================================================================
+
+    /// Create or update a user contact entry.
+    ///
+    /// Used by TPM to map Notion task assignees to their Slack/Discord handles.
+    pub fn upsert_user_contact(
+        &self,
+        account_id: Uuid,
+        notion_user_id: Option<&str>,
+        notion_workspace_id: Option<&str>,
+        slack_user_id: Option<&str>,
+        slack_workspace_id: Option<&str>,
+        discord_user_id: Option<&str>,
+        discord_guild_id: Option<&str>,
+        preferred_channel: Option<&str>,
+        contact_frequency_days: Option<i32>,
+    ) -> Result<UserContact, AccountStoreError> {
+        let mut conn = self.conn()?;
+        let id = Uuid::new_v4();
+
+        let row = conn.query_one(
+            "INSERT INTO user_contact_directory (
+                id, account_id, notion_user_id, notion_workspace_id,
+                slack_user_id, slack_workspace_id, discord_user_id, discord_guild_id,
+                preferred_channel, contact_frequency_days, created_at
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+             ON CONFLICT (account_id, notion_user_id, notion_workspace_id)
+             DO UPDATE SET
+                slack_user_id = COALESCE(EXCLUDED.slack_user_id, user_contact_directory.slack_user_id),
+                slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, user_contact_directory.slack_workspace_id),
+                discord_user_id = COALESCE(EXCLUDED.discord_user_id, user_contact_directory.discord_user_id),
+                discord_guild_id = COALESCE(EXCLUDED.discord_guild_id, user_contact_directory.discord_guild_id),
+                preferred_channel = COALESCE(EXCLUDED.preferred_channel, user_contact_directory.preferred_channel),
+                contact_frequency_days = COALESCE(EXCLUDED.contact_frequency_days, user_contact_directory.contact_frequency_days)
+             RETURNING id, account_id, notion_user_id, notion_workspace_id,
+                       slack_user_id, slack_workspace_id, discord_user_id, discord_guild_id,
+                       preferred_channel, contact_frequency_days, last_contacted_at, created_at",
+            &[
+                &id,
+                &account_id,
+                &notion_user_id,
+                &notion_workspace_id,
+                &slack_user_id,
+                &slack_workspace_id,
+                &discord_user_id,
+                &discord_guild_id,
+                &preferred_channel,
+                &contact_frequency_days,
+            ],
+        )?;
+
+        Ok(UserContact {
+            id: row.get(0),
+            account_id: row.get(1),
+            notion_user_id: row.get(2),
+            notion_workspace_id: row.get(3),
+            slack_user_id: row.get(4),
+            slack_workspace_id: row.get(5),
+            discord_user_id: row.get(6),
+            discord_guild_id: row.get(7),
+            preferred_channel: row.get(8),
+            contact_frequency_days: row.get(9),
+            last_contacted_at: row.get(10),
+            created_at: row.get(11),
+        })
+    }
+
+    /// Get user contact by Notion user ID within a workspace.
+    ///
+    /// This is the primary lookup for TPM: given a task assignee (Notion user),
+    /// find their Slack/Discord handles for follow-up.
+    pub fn get_user_contact_by_notion_user(
+        &self,
+        account_id: Uuid,
+        notion_workspace_id: &str,
+        notion_user_id: &str,
+    ) -> Result<Option<UserContact>, AccountStoreError> {
+        let mut conn = self.conn()?;
+        let rows = conn.query(
+            "SELECT id, account_id, notion_user_id, notion_workspace_id,
+                    slack_user_id, slack_workspace_id, discord_user_id, discord_guild_id,
+                    preferred_channel, contact_frequency_days, last_contacted_at, created_at
+             FROM user_contact_directory
+             WHERE account_id = $1 AND notion_workspace_id = $2 AND notion_user_id = $3",
+            &[&account_id, &notion_workspace_id, &notion_user_id],
+        )?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let row = &rows[0];
+        Ok(Some(UserContact {
+            id: row.get(0),
+            account_id: row.get(1),
+            notion_user_id: row.get(2),
+            notion_workspace_id: row.get(3),
+            slack_user_id: row.get(4),
+            slack_workspace_id: row.get(5),
+            discord_user_id: row.get(6),
+            discord_guild_id: row.get(7),
+            preferred_channel: row.get(8),
+            contact_frequency_days: row.get(9),
+            last_contacted_at: row.get(10),
+            created_at: row.get(11),
+        }))
+    }
+
+    /// List all user contacts for an account within a Notion workspace.
+    pub fn list_user_contacts(
+        &self,
+        account_id: Uuid,
+        notion_workspace_id: Option<&str>,
+    ) -> Result<Vec<UserContact>, AccountStoreError> {
+        let mut conn = self.conn()?;
+
+        let rows = if let Some(ws_id) = notion_workspace_id {
+            conn.query(
+                "SELECT id, account_id, notion_user_id, notion_workspace_id,
+                        slack_user_id, slack_workspace_id, discord_user_id, discord_guild_id,
+                        preferred_channel, contact_frequency_days, last_contacted_at, created_at
+                 FROM user_contact_directory
+                 WHERE account_id = $1 AND notion_workspace_id = $2
+                 ORDER BY created_at DESC",
+                &[&account_id, &ws_id],
+            )?
+        } else {
+            conn.query(
+                "SELECT id, account_id, notion_user_id, notion_workspace_id,
+                        slack_user_id, slack_workspace_id, discord_user_id, discord_guild_id,
+                        preferred_channel, contact_frequency_days, last_contacted_at, created_at
+                 FROM user_contact_directory
+                 WHERE account_id = $1
+                 ORDER BY created_at DESC",
+                &[&account_id],
+            )?
+        };
+
+        Ok(rows
+            .iter()
+            .map(|row| UserContact {
+                id: row.get(0),
+                account_id: row.get(1),
+                notion_user_id: row.get(2),
+                notion_workspace_id: row.get(3),
+                slack_user_id: row.get(4),
+                slack_workspace_id: row.get(5),
+                discord_user_id: row.get(6),
+                discord_guild_id: row.get(7),
+                preferred_channel: row.get(8),
+                contact_frequency_days: row.get(9),
+                last_contacted_at: row.get(10),
+                created_at: row.get(11),
+            })
+            .collect())
+    }
+
+    /// Update the last_contacted_at timestamp for a user contact.
+    ///
+    /// Called by TPM after sending a follow-up message.
+    pub fn update_user_contact_last_contacted(
+        &self,
+        contact_id: Uuid,
+    ) -> Result<(), AccountStoreError> {
+        let mut conn = self.conn()?;
+        conn.execute(
+            "UPDATE user_contact_directory SET last_contacted_at = NOW() WHERE id = $1",
+            &[&contact_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a user contact entry.
+    pub fn delete_user_contact(&self, contact_id: Uuid) -> Result<(), AccountStoreError> {
+        let mut conn = self.conn()?;
+        conn.execute(
+            "DELETE FROM user_contact_directory WHERE id = $1",
+            &[&contact_id],
+        )?;
+        Ok(())
     }
 
     /// Create an email verification token (expires in 24 hours)

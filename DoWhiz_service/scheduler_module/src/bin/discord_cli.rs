@@ -1,0 +1,422 @@
+//! Discord CLI for agent use.
+//!
+//! Provides commands for sending messages to Discord channels and users.
+//! Used by TPM agents for proactive follow-ups.
+//!
+//! Usage:
+//!   discord_cli send-dm --user-id <id> --message <text>
+//!   discord_cli send-channel --channel-id <id> --message <text>
+//!   discord_cli send --to <id> --message <text> [--reply-to <msg_id>]
+
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::env;
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    dotenvy::dotenv().ok();
+
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        print_usage();
+        return ExitCode::FAILURE;
+    }
+
+    let command = &args[1];
+    match command.as_str() {
+        "send" => cmd_send(&args[2..]),
+        "send-dm" => cmd_send_dm(&args[2..]),
+        "send-channel" => cmd_send_channel(&args[2..]),
+        "help" | "--help" | "-h" => {
+            print_usage();
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("Unknown command: {}", command);
+            print_usage();
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        r#"Discord CLI - Send messages to Discord
+
+Usage:
+  discord_cli <command> [options]
+
+Commands:
+  send           Send message (auto-detects channel vs DM)
+    --to <id>           Channel ID or User ID (snowflake)
+    --message <text>    Message content
+    --reply-to <id>     Reply to message ID (optional)
+
+  send-dm        Send direct message to user
+    --user-id <id>      Discord user ID (snowflake)
+    --message <text>    Message content
+
+  send-channel   Send message to channel
+    --channel-id <id>   Discord channel ID (snowflake)
+    --message <text>    Message content
+    --reply-to <id>     Reply to message ID (optional)
+
+Environment:
+  DISCORD_BOT_TOKEN     Required. Bot token
+  DISCORD_API_BASE_URL  Optional. Override API base (default: https://discord.com/api/v10)
+
+Context Files:
+  .discord_context.json   Auto-loaded for bot token lookup
+
+Output:
+  JSON to stdout on success, error message to stderr on failure.
+
+Notes:
+  - Discord message content limit is 2000 characters
+  - DM requires the bot and user to share a server
+"#
+    );
+}
+
+/// Get Discord bot token from environment or context file.
+fn get_bot_token() -> Option<String> {
+    // Try environment variable first
+    if let Ok(token) = env::var("DISCORD_BOT_TOKEN") {
+        if !token.trim().is_empty() {
+            return Some(token);
+        }
+    }
+
+    // Try employee-specific token
+    if let Ok(employee_id) = env::var("EMPLOYEE_ID") {
+        let key = format!(
+            "{}_DISCORD_BOT_TOKEN",
+            employee_id.to_uppercase().replace('-', "_")
+        );
+        if let Ok(token) = env::var(&key) {
+            if !token.trim().is_empty() {
+                return Some(token);
+            }
+        }
+    }
+
+    // Try .discord_context.json
+    let context_path = std::path::Path::new(".discord_context.json");
+    if context_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(context_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(token) = json["bot_token"].as_str() {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn get_api_base() -> String {
+    env::var("DISCORD_API_BASE_URL").unwrap_or_else(|_| "https://discord.com/api/v10".to_string())
+}
+
+#[derive(Debug, Serialize)]
+struct CreateDmRequest {
+    recipient_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DmChannelResponse {
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateMessageRequest {
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_reference: Option<MessageReference>,
+}
+
+#[derive(Debug, Serialize)]
+struct MessageReference {
+    message_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageResponse {
+    id: String,
+    channel_id: String,
+}
+
+fn create_dm_channel(token: &str, user_id: &str) -> Result<String, String> {
+    let client = Client::new();
+    let url = format!("{}/users/@me/channels", get_api_base().trim_end_matches('/'));
+
+    let request = CreateDmRequest {
+        recipient_id: user_id.to_string(),
+    };
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bot {}", token))
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if response.status().is_success() {
+        let dm_response: DmChannelResponse = response
+            .json()
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(dm_response.id)
+    } else {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .unwrap_or_else(|_| "unknown error".to_string());
+        Err(format!("DM channel creation failed ({}): {}", status, error_text))
+    }
+}
+
+fn send_message(
+    token: &str,
+    channel_id: &str,
+    content: &str,
+    reply_to: Option<&str>,
+) -> Result<MessageResponse, String> {
+    let client = Client::new();
+    let url = format!(
+        "{}/channels/{}/messages",
+        get_api_base().trim_end_matches('/'),
+        channel_id
+    );
+
+    // Discord has a 2000 character limit
+    let content = if content.len() > 2000 {
+        format!("{}...", &content[..1997])
+    } else {
+        content.to_string()
+    };
+
+    let request = CreateMessageRequest {
+        content,
+        message_reference: reply_to.map(|id| MessageReference {
+            message_id: id.to_string(),
+        }),
+    };
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bot {}", token))
+        .header("Content-Type", "application/json")
+        .json(&request)
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .unwrap_or_else(|_| "unknown error".to_string());
+        Err(format!("Message send failed ({}): {}", status, error_text))
+    }
+}
+
+fn cmd_send(args: &[String]) -> ExitCode {
+    let mut to: Option<String> = None;
+    let mut message: Option<String> = None;
+    let mut reply_to: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--to" => {
+                i += 1;
+                to = args.get(i).cloned();
+            }
+            "--message" => {
+                i += 1;
+                message = args.get(i).cloned();
+            }
+            "--reply-to" => {
+                i += 1;
+                reply_to = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(to) = to else {
+        eprintln!("Error: --to is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(message) = message else {
+        eprintln!("Error: --message is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(token) = get_bot_token() else {
+        eprintln!("Error: DISCORD_BOT_TOKEN not configured");
+        return ExitCode::FAILURE;
+    };
+
+    // Heuristic: if ID is less than 18 digits, treat as user ID and create DM
+    // Channel IDs and User IDs are both snowflakes, but this is a reasonable guess
+    // In practice, use send-dm or send-channel explicitly
+    let channel_id = if to.len() < 18 || to.starts_with("dm:") {
+        let user_id = to.strip_prefix("dm:").unwrap_or(&to);
+        match create_dm_channel(&token, user_id) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Error creating DM channel: {}", e);
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        to
+    };
+
+    match send_message(&token, &channel_id, &message, reply_to.as_deref()) {
+        Ok(response) => {
+            let output = json!({
+                "success": true,
+                "channel_id": response.channel_id,
+                "message_id": response.id,
+                "message": "Message sent successfully"
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_send_dm(args: &[String]) -> ExitCode {
+    let mut user_id: Option<String> = None;
+    let mut message: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--user-id" => {
+                i += 1;
+                user_id = args.get(i).cloned();
+            }
+            "--message" => {
+                i += 1;
+                message = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(user_id) = user_id else {
+        eprintln!("Error: --user-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(message) = message else {
+        eprintln!("Error: --message is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(token) = get_bot_token() else {
+        eprintln!("Error: DISCORD_BOT_TOKEN not configured");
+        return ExitCode::FAILURE;
+    };
+
+    // Create DM channel first
+    let channel_id = match create_dm_channel(&token, &user_id) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("Error creating DM channel: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match send_message(&token, &channel_id, &message, None) {
+        Ok(response) => {
+            let output = json!({
+                "success": true,
+                "user_id": user_id,
+                "channel_id": channel_id,
+                "message_id": response.id,
+                "message": "DM sent successfully"
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_send_channel(args: &[String]) -> ExitCode {
+    let mut channel_id: Option<String> = None;
+    let mut message: Option<String> = None;
+    let mut reply_to: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--channel-id" => {
+                i += 1;
+                channel_id = args.get(i).cloned();
+            }
+            "--message" => {
+                i += 1;
+                message = args.get(i).cloned();
+            }
+            "--reply-to" => {
+                i += 1;
+                reply_to = args.get(i).cloned();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(channel_id) = channel_id else {
+        eprintln!("Error: --channel-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(message) = message else {
+        eprintln!("Error: --message is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(token) = get_bot_token() else {
+        eprintln!("Error: DISCORD_BOT_TOKEN not configured");
+        return ExitCode::FAILURE;
+    };
+
+    match send_message(&token, &channel_id, &message, reply_to.as_deref()) {
+        Ok(response) => {
+            let output = json!({
+                "success": true,
+                "channel_id": channel_id,
+                "message_id": response.id,
+                "message": "Message sent to channel"
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
