@@ -133,19 +133,38 @@ fn resolve_browser_handoff_base_url() -> Option<String> {
         .or_else(|| read_env_trimmed(SERVICE_URL_ENV_KEY))
         .or_else(|| {
             read_env_trimmed(POSTMARK_INBOUND_HOOK_URL_ENV_KEY)
-                .and_then(|value| derive_service_base_from_postmark_hook(&value))
+                .and_then(|value| derive_public_service_base_url(&value))
         })
         .or_else(|| {
             read_env_trimmed(FRONTEND_URL_ENV_KEY)
-                .map(|value| format!("{}/service", value.trim_end_matches('/')))
+                .and_then(|value| derive_public_service_base_url(&value))
         })
         .map(|value| value.trim_end_matches('/').to_string())
 }
 
-fn derive_service_base_from_postmark_hook(candidate: &str) -> Option<String> {
-    let trimmed = candidate.trim().trim_end_matches('/');
-    let prefix = trimmed.strip_suffix("/postmark/inbound")?;
-    Some(prefix.trim_end_matches('/').to_string())
+fn derive_public_service_base_url(candidate: &str) -> Option<String> {
+    let without_fragment = candidate.trim().split('#').next()?.trim();
+    let without_query = without_fragment.split('?').next()?.trim_end_matches('/');
+    if without_query.is_empty() {
+        return None;
+    }
+
+    let normalized = if let Some(prefix) = without_query.strip_suffix("/postmark/inbound") {
+        let prefix = prefix.trim_end_matches('/');
+        if prefix.ends_with("/service") {
+            prefix.to_string()
+        } else if prefix.is_empty() {
+            "/service".to_string()
+        } else {
+            format!("{prefix}/service")
+        }
+    } else if without_query.ends_with("/service") {
+        without_query.to_string()
+    } else {
+        format!("{without_query}/service")
+    };
+
+    Some(normalized.trim_end_matches('/').to_string())
 }
 
 fn release_active_browserbase_session(state_dir: &Path) -> Result<(), RunTaskError> {
@@ -289,12 +308,22 @@ mod tests {
     }
 
     #[test]
-    fn derive_service_base_from_postmark_hook_strips_inbound_suffix() {
+    fn derive_public_service_base_url_strips_inbound_suffix_and_appends_service() {
         assert_eq!(
-            derive_service_base_from_postmark_hook(
-                "https://api.example.com/service/postmark/inbound"
-            )
-            .as_deref(),
+            derive_public_service_base_url("https://api.example.com/service/postmark/inbound")
+                .as_deref(),
+            Some("https://api.example.com/service")
+        );
+        assert_eq!(
+            derive_public_service_base_url("https://api.example.com/postmark/inbound").as_deref(),
+            Some("https://api.example.com/service")
+        );
+    }
+
+    #[test]
+    fn derive_public_service_base_url_appends_service_for_frontend_root() {
+        assert_eq!(
+            derive_public_service_base_url("https://api.example.com/").as_deref(),
             Some("https://api.example.com/service")
         );
     }
