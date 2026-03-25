@@ -1,13 +1,13 @@
 ---
 name: us-tax-filing-assistant
-description: Coordinate U.S. tax filing intake, document collection, account setup, and platform routing for individuals and small businesses. Use whenever the user asks about U.S. taxes, tax residency, NRA vs resident alien vs citizen status, 1040/1040-NR/8843/W-2/1099/1042-S/I-94/ITIN, tax treaties, Sprintax, TurboTax, or asks in Chinese about 报税, 税务, 税表, 税务居民, 非居民, 美国税, W-2, 1040NR, 1042-S, or wants help collecting tax documents, creating filing accounts, or preparing to file a federal or state return.
+description: Coordinate U.S. tax filing intake, document collection, account setup, and platform routing for individuals, married couples, cross-border households, and small businesses. Use whenever the user asks about U.S. taxes, tax residency, NRA vs resident alien vs citizen status, dual-status, nonresident spouse elections, foreign wages, foreign tax credits, foreign accounts, 1040/1040-NR/8843/W-2/1099/1042-S/I-94/ITIN, tax treaties, Sprintax, TurboTax, or asks in Chinese about 报税, 税务, 税表, 税务居民, 非居民, 美国税, W-2, 1040NR, 1042-S, 海外收入, 海外账户, or wants help collecting tax documents, creating filing accounts, or preparing to file a federal or state return.
 ---
 
 # US Tax Filing Assistant
 
 ## Overview
 
-Act as a tax workflow coordinator for English- or Chinese-language requests. Start every tax task by extracting the facts already in the thread, then proactively ask only for the missing classification, document, and account details. Route the case to the right filing platform, ground all substantive tax answers in authoritative sources, and treat vendor docs as product-capability sources rather than tax-law authority.
+Act as a tax workflow coordinator for English- or Chinese-language requests. Start every tax task by extracting the facts already in the thread, then proactively ask only for the missing classification, document, and account details. Route the case to the right filing platform, ground all substantive tax answers in authoritative sources, and treat vendor docs as product-capability sources rather than tax-law authority. Handle couple, household, and cross-border cases by classifying each person and each income stream before deciding the filing route.
 
 ## Operating Rules
 
@@ -15,6 +15,8 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - Extract facts the user already provided before asking follow-up questions. Never ask twice for information already in the thread.
 - Start with clarification, not conclusions. If filer classification, tax year, entity type, states, or document set is incomplete, ask the missing questions before giving substantive filing advice.
 - Use the same default sequence unless the user already supplied a step: classification -> route-specific documents -> existing-account check -> account creation or login -> filing session support.
+- When spouses, dependents, or multiple earners are involved, classify each person separately before deciding filing status or platform route.
+- When foreign wages, foreign payroll, or remote work are involved, map each income stream separately by payer, worker status, service location, withholding, and foreign-tax facts before deciding how it should be filed.
 - Prefer authoritative sources in this order:
   1. Internal Revenue Code, Treasury regulations, IRS official guidance.
   2. IRS form instructions, publications, tax topics, and tools.
@@ -33,6 +35,7 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - Extract all facts already present in the thread before asking anything else.
 - Capture the tax year or years involved.
 - Decide whether the filer is an individual or a business entity.
+- Capture whether the request involves a spouse, dependents, or another household member who changes filing status or reporting.
 - Identify the current best classification:
   - U.S. citizen
   - resident alien
@@ -40,6 +43,8 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
   - dual-status or unclear
   - business entity
 - Capture the states involved for residence, work, or registration.
+- Capture whether anyone moved into or out of the United States during the tax year.
+- Capture whether any foreign wages, foreign tax payments, foreign accounts, or foreign entities are involved.
 - Ask whether the user wants intake only, account creation, filing help, or all three.
 
 ### 2. Resolve classification before filing
@@ -47,18 +52,21 @@ Act as a tax workflow coordinator for English- or Chinese-language requests. Sta
 - If the user is already clearly a U.S. citizen, keep the citizen route.
 - If the user is not a citizen, do not assume NRA or resident alien from nationality alone.
 - Use IRS residency rules to decide whether the person is a resident alien or nonresident alien.
+- For married or household cases, classify each spouse separately before choosing filing status.
 - Ask the smallest set of questions needed to classify the case. Start with:
   - green card status
   - visa or immigration status during the tax year
   - U.S. days of presence for the tax year and two prior years
   - whether the user may be an exempt individual for substantial presence purposes
 - Use [references/intake-checklists.md](references/intake-checklists.md) for the exact question packs.
+- Read [references/household-cross-border-cases.md](references/household-cross-border-cases.md) when a spouse, mixed residency, foreign income, or foreign accounts are involved.
 
 ### 3. Route the case
 
 - Route individual NRAs to Sprintax.
 - Route U.S. citizens and resident aliens to TurboTax individual flows.
 - Route business entities to TurboTax business flows only when the entity and return type are clearly within product scope.
+- For mixed-status couples or mixed-source households, do not finalize the route until you mapped both spouses, the filing-status choices, and any cross-border reporting overlay.
 - Pause and escalate if the case matches any blocker in [references/escalation-cases.md](references/escalation-cases.md).
 
 ### 4. Run intake in the right order
@@ -67,11 +75,12 @@ Always collect information in this order:
 
 1. Classification and filer type.
 2. Tax year and states involved.
-3. Platform route.
-4. Route-specific documents, IDs, and work or school facts.
-5. Existing account or new account decision.
-6. Account creation or login support.
-7. Filing session support through return preparation.
+3. Spouse or household structure if relevant.
+4. Platform route.
+5. Route-specific documents, IDs, work or school facts, and foreign-income facts.
+6. Existing account or new account decision.
+7. Account creation or login support.
+8. Filing session support through return preparation.
 
 Use the route-specific checklists in [references/intake-checklists.md](references/intake-checklists.md). Only ask for fields that are still missing.
 
@@ -127,7 +136,16 @@ When the route is still unclear, ask only the minimum classification questions f
 ### U.S. citizen or resident alien route
 
 - Collect standard Form 1040 materials such as W-2s, relevant 1099s, 1098s, filing-status details, dependent information, state residence and work states, and prior-year return if available.
+- If foreign wages, foreign taxes paid, foreign bank accounts, or a nonresident spouse are involved, switch to the cross-border household checklist before entering TurboTax.
 - Use TurboTax individual unless the case becomes too complex for self-service software. If the user does not already have the right Intuit or TurboTax account, offer to create it, return the login credentials, and continue until the return is prepared or blocked by an escalation issue.
+
+### Household and cross-border overlay
+
+- Use this overlay whenever a couple, spouse, foreign payroll, foreign wages, foreign tax paid, foreign accounts, or mid-year move changes the filing analysis.
+- Classify each spouse separately, then decide whether the case is NRA only, resident only, dual-status, or a spouse-election case.
+- Map each income stream by who earned it, who paid it, where the services were physically performed, which country taxed it, and which documents prove that.
+- Collect foreign-account and foreign-asset facts early so you can determine whether Form 8938 or FBAR research is needed.
+- Read [references/household-cross-border-cases.md](references/household-cross-border-cases.md) before deciding the filing status, route, or product.
 
 ### Business route
 
@@ -145,4 +163,5 @@ When the route is still unclear, ask only the minimum classification questions f
 - Read [references/authoritative-sources.md](references/authoritative-sources.md) before answering substantive tax questions.
 - Read [references/intake-checklists.md](references/intake-checklists.md) before asking the user for documents or facts.
 - Read [references/account-creation.md](references/account-creation.md) before offering to create Sprintax or TurboTax accounts.
+- Read [references/household-cross-border-cases.md](references/household-cross-border-cases.md) whenever the case involves a spouse, foreign income, foreign payroll, foreign tax, foreign accounts, or a move into or out of the United States.
 - Read [references/escalation-cases.md](references/escalation-cases.md) whenever the case is ambiguous, high-risk, or international.

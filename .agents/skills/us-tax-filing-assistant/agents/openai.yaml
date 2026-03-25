@@ -1,4 +1,4 @@
 interface:
   display_name: "US Tax Filing Assistant"
   short_description: "Route and prep U.S. tax filing tasks"
-  default_prompt: "Use $us-tax-filing-assistant to classify me as NRA, resident alien, citizen, or business, collect only my missing tax documents, create or use the right Sprintax or TurboTax account, and rely on official tax sources instead of guessing."
+  default_prompt: "Use $us-tax-filing-assistant to classify each spouse or filer, collect only the missing tax documents for U.S. and foreign income, evaluate cross-border filing issues, create or use the right Sprintax or TurboTax account, and rely on official tax sources instead of guessing."

@@ -4,11 +4,13 @@ Use this file to decide what sources control the answer and where to research ne
 
 ## Research workflow
 
-1. Identify the question type: classification, filing obligation, document meaning, treaty, resident return, business return, state issue, or product support.
+1. Identify the question type: classification, filing obligation, document meaning, treaty, resident return, business return, state issue, product support, spouse-election issue, mixed-source compensation, or foreign-account reporting.
 2. Check the highest-priority official source for that topic first.
 3. Verify the current filing year when forms or thresholds matter.
-4. Use Sprintax and TurboTax sources only after the legal or filing rule is clear.
-5. Record which official source controlled the answer before replying or clicking through a filing screen.
+4. In household or couple cases, classify each spouse separately before deciding the filing route.
+5. In foreign-income cases, map each income stream by service location before deciding sourcing or foreign-tax-credit treatment.
+6. Use Sprintax and TurboTax sources only after the legal or filing rule is clear.
+7. Record which official source controlled the answer before replying or clicking through a filing screen.
 
 ## Non-authoritative sources
 
@@ -53,9 +55,21 @@ Use these for routine NRA vs resident alien classification and filing preparatio
 | Tax residency status examples | Worked examples for students, scholars, and other temporary visitors | https://www.irs.gov/individuals/international-taxpayers/tax-residency-status-examples |
 | Substantial presence test | Counting rules, excluded days, and links to Form 8843 | https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test |
 | Publication 519, U.S. Tax Guide for Aliens | The main federal reference for resident vs nonresident rules and alien filing | https://www.irs.gov/forms-pubs/about-publication-519 |
+| Tax residency status – first-year choice | Official first-year-choice requirements and examples | https://www.irs.gov/individuals/international-taxpayers/tax-residency-status-first-year-choice |
+| Dual-status individuals | Official dual-status overview and links to joint-return election issues | https://www.irs.gov/individuals/international-taxpayers/dual-status-individuals |
 | Instructions for Form 1040-NR | Current-year NRA filing instructions | https://www.irs.gov/instructions/i1040nr |
 | About Form 8843 | Excluded days and exempt-individual reporting | https://www.irs.gov/forms-pubs/about-form-8843 |
 | Topic no. 851, Resident and nonresident aliens | Quick classification summary | https://www.irs.gov/taxtopics/tc851 |
+
+## Household, spouse-election, and community-property sources
+
+Use these when a spouse's status or household structure changes the filing route.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| Nonresident spouse | Joint-return election when one spouse is nonresident and the other is a U.S. citizen or resident | https://www.irs.gov/individuals/international-taxpayers/nonresident-spouse |
+| Determining an individual's tax residency status | IRS overview that links directly to first-year choice, nonresident spouse, closer connection, and dual-status rules | https://www.irs.gov/individuals/international-taxpayers/determining-an-individuals-tax-residency-status |
+| Publication 555, Community Property | Community-property rules for married taxpayers filing separate returns | https://www.irs.gov/publications/p555 |
 
 ## Tax treaty and international research sources
 
@@ -111,6 +125,20 @@ Use these when the case is clearly not 1040-NR.
 | U.S. residents | IRS hub for resident-alien rules after classification is settled | https://www.irs.gov/individuals/international-taxpayers/us-residents |
 | U.S. citizens and resident aliens abroad | Worldwide-income reminder and related rules | https://www.irs.gov/individuals/international-taxpayers/us-citizens-and-resident-aliens-abroad |
 
+## Mixed-source compensation and foreign tax sources
+
+Use these when a foreign employer, foreign payroll, or foreign tax paid may affect compensation reporting.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| Source of income – Personal service income | Core source rule for wages and service compensation | https://www.irs.gov/individuals/international-taxpayers/source-of-income-personal-service-income |
+| Sourcing of Salary and Compensation | IRS practice unit for compensation performed partly inside and partly outside the United States | https://www.irs.gov/pub/fatca/int_practice_units/sourcing-salary-compensation.pdf |
+| Foreign Tax Credit | IRS overview for when Form 1116 may be relevant | https://www.irs.gov/individuals/international-taxpayers/foreign-tax-credit |
+| Instructions for Form 1116 | Current foreign tax credit instructions | https://www.irs.gov/instructions/i1116 |
+| Foreign Tax Credit – Special issues | Treaty re-sourcing and special FTC issues | https://www.irs.gov/individuals/international-taxpayers/foreign-tax-credit-special-issues |
+| Aliens employed in the U.S. – Social Security taxes | Payroll tax rules for resident and nonresident aliens employed in the United States | https://www.irs.gov/individuals/international-taxpayers/aliens-employed-in-the-us-social-security-taxes |
+| Aliens employed in the U.S. | Withholding overview for aliens working inside the United States | https://www.irs.gov/individuals/international-taxpayers/aliens-employed-in-the-us |
+
 ## Sole proprietor and self-employment sources
 
 Use these when the case is on Form 1040 with business or contractor income.
@@ -132,6 +160,17 @@ Use these when the case is a domestic business return and not a 1040-NR issue.
 | About Form 1120 | C corporation returns | https://www.irs.gov/forms-pubs/about-form-1120 |
 | About Form 1041 | Estate and trust returns | https://www.irs.gov/forms-pubs/about-form-1041 |
 | About Form 5472 | Foreign-owned or related-party reporting trigger | https://www.irs.gov/forms-pubs/about-form-5472 |
+
+## Foreign-account reporting sources
+
+Use these when foreign bank, brokerage, retirement, payroll, or signature-authority accounts may matter.
+
+| Source | What to use it for | URL |
+| --- | --- | --- |
+| About Form 8938 | IRS entry point for specified foreign financial asset reporting | https://www.irs.gov/forms-pubs/about-form-8938 |
+| Do I need to file Form 8938? | Threshold overview and reminder that joint-return thresholds differ | https://www.irs.gov/businesses/corporations/do-i-need-to-file-form-8938-statement-of-specified-foreign-financial-assets |
+| Comparison of Form 8938 and FBAR requirements | IRS comparison of the two reporting regimes | https://www.irs.gov/businesses/comparison-of-form-8938-and-fbar-requirements |
+| BSA E-Filing System - File FBAR | Official FinCEN filing entry point for FBAR | https://bsaefiling.fincen.gov/file/fbar |
 
 ## State tax sources
 
@@ -193,6 +232,10 @@ When browsing, start with these search patterns instead of general web searches:
 - `site:cbp.gov I-94 <topic>`
 - `site:uscis.gov I-20 DS-2019 I-94`
 - `site:ssa.gov W-2 copy`
+- `site:irs.gov nonresident spouse first-year choice dual-status`
+- `site:irs.gov source of income personal service income`
+- `site:irs.gov form 1116 foreign tax credit`
+- `site:irs.gov form 8938 FBAR comparison`
 - `site:<official-state-domain> resident nonresident income tax`
 - `site:ttlc.intuit.com 1040-NR TurboTax`
 - `site:sprintax.com 1042-S W-2 1099 Sprintax`
@@ -201,6 +244,8 @@ When browsing, start with these search patterns instead of general web searches:
 
 - Do not answer from memory when the question depends on the current filing year.
 - Do not answer a classification question until you checked the residency sources above when the facts are incomplete or ambiguous.
+- Do not decide a couple's filing route until you classified each spouse and checked whether first-year choice, dual-status, or a nonresident-spouse election may apply.
+- Do not decide compensation sourcing from payer country alone; verify where the services were physically performed.
 - Do not promise a vendor supports a form unless you verified that support on the vendor's official site.
 - Do not rely on unofficial state summaries when state residency or sourcing matters.
 - If the answer depends on a treaty article, read the treaty source or Publication 901 before responding.
