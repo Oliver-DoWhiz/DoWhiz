@@ -230,6 +230,7 @@ fn run_task_failure_retries_and_notifies() -> Result<(), Box<dyn std::error::Err
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     let db_path = temp.path().join("tasks.db");
@@ -398,6 +399,7 @@ fn transient_codex_failures_send_retry_alerts_and_terminal_notice(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     let db_path = temp.path().join("tasks.db");

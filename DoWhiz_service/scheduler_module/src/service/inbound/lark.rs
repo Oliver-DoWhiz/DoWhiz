@@ -105,6 +105,7 @@ pub(crate) fn process_lark_event(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: message.metadata.clone(),
     };
 
     let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ModuleExecutor::default())?;

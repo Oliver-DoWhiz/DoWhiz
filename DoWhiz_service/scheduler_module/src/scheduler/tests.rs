@@ -63,6 +63,7 @@ fn base_run_task(workspace: &Path, mail_root: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
 }
 
@@ -559,6 +560,7 @@ fn discord_run_task(workspace: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
 }
 
@@ -586,6 +588,7 @@ fn slack_run_task(workspace: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
 }
 

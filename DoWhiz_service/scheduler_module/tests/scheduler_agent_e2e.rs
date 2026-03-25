@@ -185,6 +185,7 @@ fn scheduler_actions_end_to_end() {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     scheduler

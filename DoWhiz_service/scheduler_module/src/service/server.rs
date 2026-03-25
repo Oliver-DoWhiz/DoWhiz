@@ -10,7 +10,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use chrono::Utc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::account_store::AccountStore;
 use crate::blob_store::get_blob_store;
@@ -28,7 +28,7 @@ use tokio::task;
 
 use super::agent_market::{agent_market_router, AgentMarketState};
 use super::analytics::{analytics_router, AnalyticsState};
-use super::auth::{auth_router, AuthState};
+use super::auth::{auth_router, verify_slack_bot_access, AuthState};
 use super::billing::{billing_router, BillingState};
 use super::chat_history::search_chat_history;
 
@@ -151,7 +151,7 @@ pub async fn run_server(
 
     let state = AppState {
         config: config.clone(),
-        slack_store,
+        slack_store: slack_store.clone(),
     };
     let supabase_url = std::env::var("SUPABASE_PROJECT_URL")
         .unwrap_or_else(|_| "https://resmseutzmwumflevfqw.supabase.co".to_string());
@@ -190,6 +190,7 @@ pub async fn run_server(
     let auth_state = AuthState {
         account_store,
         blob_store,
+        slack_store: slack_store.clone(),
         supabase_url,
         discord_client_id,
         discord_client_secret,
@@ -419,12 +420,39 @@ async fn slack_oauth_callback(
             .into_response();
     }
 
+    let verified_identity = match verify_slack_bot_access(bot_token).await {
+        Ok(identity) => identity,
+        Err(err) => {
+            error!("Slack auth.test failed after install: {}", err);
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Failed to verify Slack installation",
+            )
+                .into_response();
+        }
+    };
+
+    if let Some(verified_team_id) = verified_identity.team_id.as_deref() {
+        if verified_team_id != team_id {
+            warn!(
+                "Slack OAuth team_id {} differed from auth.test team_id {}",
+                team_id, verified_team_id
+            );
+        }
+    }
+
+    let bot_user_id = if bot_user_id.trim().is_empty() {
+        verified_identity.user_id.unwrap_or_default()
+    } else {
+        bot_user_id.to_string()
+    };
+
     // Save installation
     let installation = SlackInstallation {
         team_id: team_id.to_string(),
         team_name: team_name.map(|s| s.to_string()),
         bot_token: bot_token.to_string(),
-        bot_user_id: bot_user_id.to_string(),
+        bot_user_id,
         installed_at: Utc::now(),
     };
 

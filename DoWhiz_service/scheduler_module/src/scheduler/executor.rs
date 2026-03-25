@@ -12,7 +12,7 @@ use crate::account_store::{
     AccountIdentifier, AnalyticsEventInsert,
 };
 use crate::blob_store::get_blob_store;
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelMetadata};
 use crate::github_inbound::{
     extract_github_sender_login_from_postmark_payload, is_github_notifications_postmark_payload,
 };
@@ -25,6 +25,7 @@ use crate::memory_store::{
 use crate::secrets_store::{
     resolve_user_secrets_path, sync_user_secrets_to_workspace, sync_workspace_secrets_to_user,
 };
+use crate::slack_store::resolve_slack_bot_token_for_runtime;
 use crate::thread_state::{current_thread_epoch, find_thread_state_path};
 use crate::user_store::lookup_user_id_by_identifier;
 use run_task_module::UserIdentities;
@@ -595,6 +596,7 @@ fn send_insufficient_balance_notice(
         thread_epoch: task.thread_epoch,
         thread_state_path: task.thread_state_path.clone(),
         employee_id: task.employee_id.clone(),
+        channel_metadata: channel_metadata_for_task(task),
     };
 
     dispatch_send_reply_task(&send_task)?;
@@ -626,21 +628,15 @@ fn resolve_discord_bot_token_for_employee(employee_id: Option<&str>) -> Option<S
         .filter(|value| !value.is_empty())
 }
 
-fn resolve_slack_bot_token_for_employee(employee_id: Option<&str>) -> Option<String> {
-    if let Some(emp_id) = employee_id {
-        let emp_upper = emp_id.to_uppercase().replace('-', "_");
-        let emp_token_key = format!("{}_SLACK_BOT_TOKEN", emp_upper);
-        if let Ok(token) = std::env::var(&emp_token_key) {
-            if !token.trim().is_empty() {
-                return Some(token);
-            }
-        }
+fn channel_metadata_for_task(task: &super::types::RunTaskTask) -> ChannelMetadata {
+    let mut metadata = task.channel_metadata.clone();
+    if metadata.slack_team_id.is_none() {
+        metadata.slack_team_id = task.slack_team_id.clone();
     }
-
-    std::env::var("SLACK_BOT_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    if metadata.slack_channel_id.is_none() && matches!(task.channel, Channel::Slack) {
+        metadata.slack_channel_id = task.reply_to.get(1).cloned();
+    }
+    metadata
 }
 
 fn slack_channel_and_thread_from_thread_key(thread_key: Option<&str>) -> Option<(String, String)> {
@@ -713,7 +709,11 @@ fn post_slack_working_placeholder(task: &super::types::RunTaskTask) {
     let Some((channel_id, thread_ts)) = slack_channel_and_thread(task) else {
         return;
     };
-    let Some(bot_token) = resolve_slack_bot_token_for_employee(task.employee_id.as_deref()) else {
+    let task_metadata = channel_metadata_for_task(task);
+    let Some(bot_token) = resolve_slack_bot_token_for_runtime(
+        task_metadata.slack_team_id.as_deref(),
+        task.employee_id.as_deref(),
+    ) else {
         return;
     };
 
@@ -879,7 +879,10 @@ fn delete_slack_working_placeholder_before_send(task: &SendReplyTask) {
         clear_slack_placeholder_marker(&marker_path);
         return;
     };
-    let Some(bot_token) = resolve_slack_bot_token_for_employee(task.employee_id.as_deref()) else {
+    let Some(bot_token) = resolve_slack_bot_token_for_runtime(
+        task.channel_metadata.slack_team_id.as_deref(),
+        task.employee_id.as_deref(),
+    ) else {
         return;
     };
 
@@ -1424,6 +1427,7 @@ mod tests {
             requester_identifier_type: None,
             requester_identifier: None,
             account_id: None,
+            channel_metadata: Default::default(),
         }
     }
 
@@ -1449,6 +1453,7 @@ mod tests {
             requester_identifier_type: None,
             requester_identifier: None,
             account_id: None,
+            channel_metadata: Default::default(),
         }
     }
 
@@ -1606,6 +1611,7 @@ mod tests {
             thread_epoch: None,
             thread_state_path: Some(workspace.join("thread_state.json")),
             employee_id: Some("little_bear".to_string()),
+            channel_metadata: Default::default(),
         };
 
         let found = find_slack_placeholder_marker(&send_task).expect("marker found");

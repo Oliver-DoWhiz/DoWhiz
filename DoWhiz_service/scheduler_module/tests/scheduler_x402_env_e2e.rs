@@ -242,6 +242,7 @@ fn run_scheduler_x402_env_test(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     scheduler

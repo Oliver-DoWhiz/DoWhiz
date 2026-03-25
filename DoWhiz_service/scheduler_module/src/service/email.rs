@@ -159,7 +159,10 @@ pub fn process_inbound_payload(
                             ))
                         })?
                 } else {
-                    info!("account_id={} has no email identifier, using requester", acct_id);
+                    info!(
+                        "account_id={} has no email identifier, using requester",
+                        acct_id
+                    );
                     user_store
                         .get_or_create_user(requester.identifier_type, &requester.identifier)
                         .map_err(|err| {
@@ -171,7 +174,10 @@ pub fn process_inbound_payload(
                 }
             }
             Err(err) => {
-                warn!("failed to list identifiers for account_id={}: {}, using requester", acct_id, err);
+                warn!(
+                    "failed to list identifiers for account_id={}: {}, using requester",
+                    acct_id, err
+                );
                 user_store
                     .get_or_create_user(requester.identifier_type, &requester.identifier)
                     .map_err(|err| {
@@ -380,6 +386,7 @@ pub fn process_inbound_payload(
         requester_identifier_type: Some(requester.identifier_type.to_string()),
         requester_identifier: Some(requester.identifier.clone()),
         account_id: resolved_account_id,
+        channel_metadata: Default::default(),
     };
 
     // Clone run_task before consuming it, in case we need to write to account-level storage
@@ -1037,8 +1044,10 @@ mod tests {
     fn account_for_tasks_prefers_resolved_account_id() {
         use uuid::Uuid;
 
-        let resolved_account_id = Some(Uuid::parse_str("26a8b960-bef3-4329-a4b1-6ccfbfd49bbf").unwrap());
-        let fallback_account_id = Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
+        let resolved_account_id =
+            Some(Uuid::parse_str("26a8b960-bef3-4329-a4b1-6ccfbfd49bbf").unwrap());
+        let fallback_account_id =
+            Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
 
         // When resolved_account_id is Some, use it (ignore fallback)
         let account_for_tasks = if resolved_account_id.is_some() {
@@ -1067,7 +1076,8 @@ mod tests {
         use uuid::Uuid;
 
         let resolved_account_id: Option<Uuid> = None;
-        let fallback_account_id = Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
+        let fallback_account_id =
+            Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
 
         // When resolved_account_id is None, use fallback
         let account_for_tasks = if resolved_account_id.is_some() {

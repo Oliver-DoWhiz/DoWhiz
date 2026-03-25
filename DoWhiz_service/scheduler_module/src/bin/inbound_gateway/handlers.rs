@@ -15,18 +15,19 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use scheduler_module::adapters::bluebubbles::BlueBubblesInboundAdapter;
+use scheduler_module::adapters::lark::LarkInboundAdapter;
 use scheduler_module::adapters::postmark::PostmarkInboundPayload;
 use scheduler_module::adapters::slack::{
     is_url_verification, SlackChallengeResponse, SlackEventWrapper, SlackInboundAdapter,
 };
 use scheduler_module::adapters::telegram::TelegramInboundAdapter;
-use scheduler_module::adapters::lark::LarkInboundAdapter;
 use scheduler_module::adapters::wechat::WeChatInboundAdapter;
 use scheduler_module::adapters::whatsapp::WhatsAppInboundAdapter;
 use scheduler_module::channel::{Channel, ChannelMetadata, InboundAdapter, InboundMessage};
 use scheduler_module::ingestion::{IngestionEnvelope, IngestionPayload};
 use scheduler_module::ingestion_queue::IngestionQueue;
 use scheduler_module::raw_payload_store::{self, RawPayloadStoreError};
+use scheduler_module::slack_store::resolve_slack_bot_user_id_for_runtime;
 use scheduler_module::user_store::extract_emails;
 
 use super::routes::{build_dedupe_key, normalize_email, normalize_phone_number, resolve_route};
@@ -80,7 +81,10 @@ pub(super) async fn ingest_postmark(
         Ok(payload) => payload,
         Err(e) => {
             let body_preview = String::from_utf8_lossy(&body[..body.len().min(500)]);
-            warn!("gateway failed to parse postmark payload: {} - body preview: {}", e, body_preview);
+            warn!(
+                "gateway failed to parse postmark payload: {} - body preview: {}",
+                e, body_preview
+            );
             return (StatusCode::BAD_REQUEST, Json(json!({"status": "bad_json"})));
         }
     };
@@ -189,7 +193,8 @@ pub(super) async fn ingest_slack(
         api_app_id, route.employee_id
     );
 
-    let bot_user_id = resolve_slack_bot_user_id_for_employee(&route.employee_id);
+    let bot_user_id =
+        resolve_slack_bot_user_id_for_employee(&route.employee_id, wrapper.team_id.as_deref());
     if !should_enqueue_slack_message(&wrapper, bot_user_id.as_deref()) {
         info!(
             "gateway ignoring slack event for employee={} api_app_id={} (not dm/app_mention/mention)",
@@ -224,20 +229,11 @@ pub(super) async fn ingest_slack(
     enqueue_envelope(state.queue.clone(), envelope).await
 }
 
-fn resolve_slack_bot_user_id_for_employee(employee_id: &str) -> Option<String> {
-    let employee_env = employee_id.to_uppercase().replace('-', "_");
-    let employee_key = format!("{}_SLACK_BOT_USER_ID", employee_env);
-
-    std::env::var(&employee_key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("SLACK_BOT_USER_ID")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+fn resolve_slack_bot_user_id_for_employee(
+    employee_id: &str,
+    team_id: Option<&str>,
+) -> Option<String> {
+    resolve_slack_bot_user_id_for_runtime(team_id, Some(employee_id))
 }
 
 fn route_decision_from_target(target: RouteTarget, state: &GatewayState) -> RouteDecision {
@@ -617,7 +613,10 @@ pub(super) async fn verify_wechat_webhook(
         params.echostr.as_deref(),
     ) {
         Ok(echostr) => {
-            info!("wechat verification succeeded, returning echostr len={}", echostr.len());
+            info!(
+                "wechat verification succeeded, returning echostr len={}",
+                echostr.len()
+            );
             (StatusCode::OK, echostr)
         }
         Err(reason) => {
@@ -704,7 +703,13 @@ pub(super) async fn ingest_lark(
         chat_id,
         message.sender,
         message.message_id,
-        message.text_body.as_deref().unwrap_or("").chars().take(50).collect::<String>()
+        message
+            .text_body
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .take(50)
+            .collect::<String>()
     );
 
     let Some(route) = resolve_route(Channel::Lark, &chat_id, &state) else {
@@ -1079,19 +1084,32 @@ pub(super) async fn create_workspace_brief(
 
     // Build the prompt for Codex
     let venture_name = request.venture_name.as_deref().unwrap_or("Startup");
-    let thesis = request.thesis.as_deref().unwrap_or("Building something great");
+    let thesis = request
+        .thesis
+        .as_deref()
+        .unwrap_or("Building something great");
     let stage = request.stage.as_deref().unwrap_or("idea");
     let horizon = request.plan_horizon_days.unwrap_or(30);
     let goals_text = if request.goals.is_empty() {
         "- Define initial goals".to_string()
     } else {
-        request.goals.iter().map(|g| format!("- {}", g)).collect::<Vec<_>>().join("\n")
+        request
+            .goals
+            .iter()
+            .map(|g| format!("- {}", g))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let assets_text = request
         .current_assets
         .as_ref()
         .filter(|a| !a.is_empty())
-        .map(|a| a.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|a| {
+            a.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- None listed yet".to_string());
 
     let prompt = format!(
@@ -1239,19 +1257,32 @@ pub(super) async fn create_90_day_plan(
         .unwrap_or_else(|| "default".to_string());
 
     let venture_name = request.venture_name.as_deref().unwrap_or("Startup");
-    let thesis = request.thesis.as_deref().unwrap_or("Building something great");
+    let thesis = request
+        .thesis
+        .as_deref()
+        .unwrap_or("Building something great");
     let stage = request.stage.as_deref().unwrap_or("idea");
     let horizon = request.plan_horizon_days.unwrap_or(90);
     let goals_text = if request.goals.is_empty() {
         "- Define initial goals".to_string()
     } else {
-        request.goals.iter().map(|g| format!("- {}", g)).collect::<Vec<_>>().join("\n")
+        request
+            .goals
+            .iter()
+            .map(|g| format!("- {}", g))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let assets_text = request
         .current_assets
         .as_ref()
         .filter(|a| !a.is_empty())
-        .map(|a| a.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|a| {
+            a.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- None listed yet".to_string());
 
     let prompt = format!(
@@ -1569,7 +1600,10 @@ mod tests {
         assert_eq!(request.founder_name, "Dylan Tang");
         assert_eq!(request.founder_email, "dylan@example.com");
         assert_eq!(request.venture_name.as_deref(), Some("Acme Labs"));
-        assert_eq!(request.thesis.as_deref(), Some("Building AI tools for productivity"));
+        assert_eq!(
+            request.thesis.as_deref(),
+            Some("Building AI tools for productivity")
+        );
         assert_eq!(request.stage.as_deref(), Some("mvp"));
         assert_eq!(request.goals.len(), 3);
         assert_eq!(request.goals[0], "Launch MVP");
@@ -1629,13 +1663,15 @@ mod tests {
             "plan_horizon_days": 90
         }"#;
 
-        let request: Create90DayPlanRequest =
-            serde_json::from_str(json).expect("should parse");
+        let request: Create90DayPlanRequest = serde_json::from_str(json).expect("should parse");
 
         assert_eq!(request.founder_name, "Dylan Tang");
         assert_eq!(request.founder_email, "dylan@example.com");
         assert_eq!(request.venture_name.as_deref(), Some("Acme Labs"));
-        assert_eq!(request.thesis.as_deref(), Some("Building AI tools for productivity"));
+        assert_eq!(
+            request.thesis.as_deref(),
+            Some("Building AI tools for productivity")
+        );
         assert_eq!(request.stage.as_deref(), Some("mvp"));
         assert_eq!(request.goals.len(), 3);
         assert_eq!(request.goals[0], "Launch MVP");
@@ -1651,8 +1687,7 @@ mod tests {
             "goals": []
         }"#;
 
-        let request: Create90DayPlanRequest =
-            serde_json::from_str(json).expect("should parse");
+        let request: Create90DayPlanRequest = serde_json::from_str(json).expect("should parse");
 
         assert_eq!(request.founder_name, "Jane Doe");
         assert_eq!(request.founder_email, "jane@example.com");

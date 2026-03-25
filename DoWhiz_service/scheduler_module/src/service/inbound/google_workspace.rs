@@ -232,6 +232,7 @@ pub(crate) fn process_google_workspace_message(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     // Clone run_task before consuming it, in case we need to write to account-level storage

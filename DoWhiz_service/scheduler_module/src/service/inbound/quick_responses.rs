@@ -10,9 +10,9 @@ use crate::adapters::google_common::GoogleCommentsClient;
 use crate::adapters::telegram::send_quick_telegram_response;
 use crate::adapters::wechat::WeChatOutboundAdapter;
 use crate::adapters::whatsapp::send_quick_whatsapp_response;
-use crate::channel::OutboundMessage;
 use crate::blob_store::get_blob_store;
 use crate::channel::Channel;
+use crate::channel::OutboundMessage;
 use crate::google_auth::{GoogleAuth, GoogleAuthConfig};
 use crate::memory_diff::{MemoryDiff, SectionChange};
 use crate::memory_queue::{global_memory_queue, MemoryWriteRequest};
@@ -457,30 +457,29 @@ fn resolve_slack_bot_token(
     slack_store: &SlackStore,
     team_id: Option<&str>,
 ) -> Option<String> {
-    // First, try per-employee token (e.g., LITTLE_BEAR_SLACK_BOT_TOKEN)
-    let emp_upper = config.employee_profile.id.to_uppercase().replace('-', "_");
-    let emp_token_key = format!("{}_SLACK_BOT_TOKEN", emp_upper);
-    if let Ok(token) = std::env::var(&emp_token_key) {
-        if !token.trim().is_empty() {
-            info!(
-                "quick response using {} for employee {}",
-                emp_token_key, config.employee_profile.id
-            );
-            return Some(token);
-        }
-    }
-
-    // Then try slack_store by team_id
-    if let Some(team_id) = team_id {
-        if let Ok(installation) = slack_store.get_installation_or_env(team_id) {
-            if !installation.bot_token.trim().is_empty() {
-                return Some(installation.bot_token);
+    if let Some(installation) =
+        slack_store.resolve_installation_for_runtime(team_id, Some(&config.employee_profile.id))
+    {
+        if !installation.bot_token.trim().is_empty() {
+            if installation.team_id.trim().is_empty() {
+                info!(
+                    "quick response using env Slack credentials for employee {}",
+                    config.employee_profile.id
+                );
+            } else {
+                info!(
+                    "quick response using Slack installation for employee {} team {}",
+                    config.employee_profile.id, installation.team_id
+                );
             }
+            return Some(installation.bot_token);
         }
     }
 
-    // Fall back to global SLACK_BOT_TOKEN
-    config.slack_bot_token.clone()
+    config
+        .slack_bot_token
+        .clone()
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn resolve_discord_bot_token(config: &ServiceConfig) -> Option<String> {
@@ -948,12 +947,8 @@ pub(crate) fn try_quick_response_google_workspace(
     let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
 
     let employee_name = config.employee_profile.display_name.as_deref();
-    let decision = runtime.block_on(message_router.classify(
-        text,
-        memory.as_deref(),
-        employee_name,
-        None,
-    ));
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
 
     match decision {
         RouterDecision::Simple {
@@ -1029,12 +1024,8 @@ pub(crate) fn try_quick_response_wechat(
     let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
 
     let employee_name = config.employee_profile.display_name.as_deref();
-    let decision = runtime.block_on(message_router.classify(
-        text,
-        memory.as_deref(),
-        employee_name,
-        None,
-    ));
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
 
     match decision {
         RouterDecision::Simple {
@@ -1117,12 +1108,8 @@ pub(crate) fn try_quick_response_lark(
     let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
 
     let employee_name = config.employee_profile.display_name.as_deref();
-    let decision = runtime.block_on(message_router.classify(
-        text,
-        memory.as_deref(),
-        employee_name,
-        None,
-    ));
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
 
     match decision {
         RouterDecision::Simple {
@@ -1431,11 +1418,8 @@ mod tests {
 
     #[test]
     fn google_docs_message_has_correct_metadata() {
-        let message = build_google_docs_message(
-            Some("doc-123"),
-            Some("comment-456"),
-            Some("Hello!"),
-        );
+        let message =
+            build_google_docs_message(Some("doc-123"), Some("comment-456"), Some("Hello!"));
 
         assert_eq!(message.channel, Channel::GoogleDocs);
         assert_eq!(
@@ -1552,10 +1536,7 @@ mod tests {
         assert_eq!(message.channel, Channel::WeChat);
         assert_eq!(message.sender, "user123");
         assert_eq!(message.text_body, Some("Hello!".to_string()));
-        assert_eq!(
-            message.metadata.wechat_corp_id,
-            Some("corp456".to_string())
-        );
+        assert_eq!(message.metadata.wechat_corp_id, Some("corp456".to_string()));
     }
 
     #[test]

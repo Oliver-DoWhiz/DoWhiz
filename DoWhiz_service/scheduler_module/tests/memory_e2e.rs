@@ -145,6 +145,7 @@ fn memory_sync_roundtrip_via_run_task() -> Result<(), Box<dyn std::error::Error>
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     let executor = ModuleExecutor::default();
