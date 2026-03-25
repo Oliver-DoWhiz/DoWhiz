@@ -75,6 +75,7 @@ Key binaries (from `scheduler_module/src/bin`):
 | `set_postmark_inbound_hook` | Utility to update Postmark inbound webhook |
 | `inbound_fanout` | Legacy fanout ingress helper |
 | `google-docs` / `google-sheets` / `google-slides` | Workspace integration CLI tools |
+| `browserbase_session_manager` | Helper CLI that creates/reuses Browserbase contexts and active sessions for browser tasks |
 | `human_approval_gate` / `human_approval_gate_mcp` | Human approval gate for CAPTCHA/password/2FA blockers; CLI for manual use and MCP server for blocking Codex runs |
 
 Key scripts:
@@ -248,6 +249,16 @@ Azure ACI execution path (required vars):
 - Google Drive push: `GOOGLE_DRIVE_PUSH_ENABLED`, `GOOGLE_DRIVE_WEBHOOK_URL`
 - Browser-based web auth for private Notion/Google pages is agent-driven at task runtime
   (no service-side bootstrap step).
+- Browserbase-backed browser persistence (optional):
+  `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, optional
+  `BROWSERBASE_API_BASE_URL`, optional `BROWSERBASE_SESSION_TIMEOUT_SECONDS`.
+  When configured, run_task forwards these env vars into local, docker, and Azure ACI
+  task environments. The bundled `playwright-cli` wrapper then calls
+  `browserbase_session_manager` to create or reuse a persistent Browserbase Context,
+  storing durable state in `.secrets/browserbase/registry.json` and the currently live
+  session in `.secrets/browserbase/active_session.json`. `scheduler_module` mirrors that
+  directory between durable per-user secrets and each task workspace so auth survives ACI
+  container deletion and later recreation.
 - `human_approval_gate` (via skill `human-approval-gate`) provides a blocking
   approval flow for login CAPTCHA/password/OTP/device-approval steps. In
   run_task/Codex environments, the preferred path is the injected MCP tool
@@ -267,8 +278,11 @@ Azure ACI execution path (required vars):
   containing challenge type plus attachment filenames and sizes, so
   prod/staging task logs can prove exactly what was sent. Sender resolution
   priority is `--from` > `HUMAN_APPROVAL_FROM` > employee mailbox from employee
-  config. HAG-thread replies (`[HAG:...]`) are ignored by normal inbound task
-  routing to prevent recursive Email->task loops.
+  config. When an active Browserbase session exists, the HAG email also includes a
+  signed `/auth/browser-handoff` link that opens the same live Browserbase session so
+  the human can finish the blocker in-browser and then reply in the email thread to
+  resume the agent. HAG-thread replies (`[HAG:...]`) are ignored by normal inbound
+  task routing to prevent recursive Email->task loops.
 - ACI run_task sets Playwright/NPM runtime defaults for mounted workspaces:
   `PLAYWRIGHT_MCP_EXECUTABLE_PATH` auto-discovery (`chrome-linux` / `chrome-linux64`),
   `PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright`,
