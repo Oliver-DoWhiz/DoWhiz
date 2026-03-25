@@ -32,7 +32,7 @@ def print_status(scope: dict) -> None:
     print(f"Platform: {scope.get('platform')}")
     print(f"Scope mode: {scope.get('scope_mode')}")
     print(f"Description: {scope.get('description')}")
-    print(f"Channel ID: {scope.get('channel_id')}")
+    print(f"Origin channel ID: {scope.get('channel_id')}")
     if scope.get("team_id"):
         print(f"Team ID: {scope.get('team_id')}")
     if scope.get("thread_id"):
@@ -45,6 +45,7 @@ def run_search(
     scope: dict,
     query: str,
     limit: int,
+    channel_id: Optional[str],
     output: Optional[str],
     emit_json: bool,
 ) -> int:
@@ -54,6 +55,8 @@ def run_search(
         raise RuntimeError("scope file is missing search_endpoint or token")
 
     request_body = {"query": query, "limit": limit}
+    if channel_id:
+        request_body["channel_id"] = channel_id
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(request_body).encode("utf-8"),
@@ -89,8 +92,9 @@ def run_search(
         print(f"Warning: {warning}")
     for item in payload.get("results", []):
         author = item.get("author_name") or item.get("author_id") or "unknown"
+        channel = item.get("channel_name") or item.get("channel_id")
         print(
-            f"- [{item.get('timestamp')}] {author}: {item.get('text')}"
+            f"- [{item.get('timestamp')}] #{channel} {author}: {item.get('text')}"
         )
     if output:
         print(f"Saved full JSON to {output}")
@@ -108,9 +112,13 @@ def main() -> int:
 
     subparsers.add_parser("status", help="Show the current scoped Slack history grant")
 
-    search = subparsers.add_parser("search", help="Search the current Slack conversation history")
+    search = subparsers.add_parser("search", help="Search the current Slack workspace history scope")
     search.add_argument("--query", required=True, help="Keyword or phrase to search for")
     search.add_argument("--limit", type=int, default=10, help="Max results to return")
+    search.add_argument(
+        "--channel-id",
+        help="Optional Slack conversation ID inside the current allowed workspace scope",
+    )
     search.add_argument("--output", help="Optional JSON output file path")
     search.add_argument("--json", action="store_true", help="Print raw JSON instead of a summary")
 
@@ -126,7 +134,14 @@ def main() -> int:
         print_status(scope)
         return 0
     if args.command == "search":
-        return run_search(scope, args.query, args.limit, args.output, args.json)
+        return run_search(
+            scope,
+            args.query,
+            args.limit,
+            args.channel_id,
+            args.output,
+            args.json,
+        )
     raise AssertionError(f"unexpected command: {args.command}")
 
 

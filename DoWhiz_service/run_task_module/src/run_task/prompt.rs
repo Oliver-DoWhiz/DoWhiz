@@ -238,8 +238,8 @@ fn build_chat_history_capabilities_section(workspace_dir: &Path, channel: &str) 
         "slack" => {
             r#"Scoped chat history search:
 - When the user asks about earlier Slack discussion that is not already in the prompt or workspace files, use `.agents/skills/slack-history-search/SKILL.md`.
-- The helper is backend-enforced and can search only the current Slack conversation (channel / DM / MPIM) and its threads.
-- It cannot cross into other Slack channels or workspaces, even if asked.
+- The helper is backend-enforced and can search readable Slack conversations inside the current Slack workspace/team, including the current conversation.
+- It cannot cross into other Slack workspaces, even if asked.
 
 "#
             .to_string()
@@ -900,8 +900,8 @@ mod tests {
 
         assert!(prompt.contains("Scoped chat history search"));
         assert!(prompt.contains(".agents/skills/slack-history-search/SKILL.md"));
-        assert!(prompt.contains("current Slack conversation"));
-        assert!(prompt.contains("cannot cross into other Slack channels or workspaces"));
+        assert!(prompt.contains("current Slack workspace/team"));
+        assert!(prompt.contains("cannot cross into other Slack workspaces"));
     }
 
     #[test]
