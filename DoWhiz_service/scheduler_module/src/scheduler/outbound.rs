@@ -6,6 +6,7 @@ use tracing::{info, warn};
 use crate::channel::Channel;
 use crate::employee_config;
 use crate::service;
+use crate::slack_store::{emit_slack_channel_not_found_alert, resolve_slack_bot_token_for_runtime};
 
 use super::types::{SchedulerError, SendReplyTask};
 
@@ -54,25 +55,17 @@ pub(crate) fn execute_email_send(task: &SendReplyTask) -> Result<(), SchedulerEr
     Ok(())
 }
 
-/// Resolve the Slack bot token for a specific employee.
-///
-/// Looks for `{EMPLOYEE}_SLACK_BOT_TOKEN` env var first (e.g., `OLIVER_SLACK_BOT_TOKEN`),
-/// then falls back to the global `SLACK_BOT_TOKEN`.
-fn resolve_slack_bot_token_for_employee(
-    employee_id: Option<&str>,
-) -> Result<String, SchedulerError> {
-    if let Some(emp_id) = employee_id {
-        let emp_upper = emp_id.to_uppercase().replace('-', "_");
-        let emp_token_key = format!("{}_SLACK_BOT_TOKEN", emp_upper);
-        if let Ok(token) = std::env::var(&emp_token_key) {
-            if !token.trim().is_empty() {
-                info!("using {} for employee {}", emp_token_key, emp_id);
-                return Ok(token);
-            }
-        }
-    }
-    std::env::var("SLACK_BOT_TOKEN")
-        .map_err(|_| SchedulerError::TaskFailed("SLACK_BOT_TOKEN not set".to_string()))
+fn resolve_slack_bot_token_for_send(task: &SendReplyTask) -> Result<String, SchedulerError> {
+    let metadata = task.normalized_channel_metadata();
+    resolve_slack_bot_token_for_runtime(
+        metadata.slack_team_id.as_deref(),
+        task.employee_id.as_deref(),
+    )
+    .ok_or_else(|| {
+        SchedulerError::TaskFailed(
+            "Slack credentials not configured for this workspace".to_string(),
+        )
+    })
 }
 
 /// Execute a SendReplyTask via Slack.
@@ -81,7 +74,8 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
     use crate::channel::{ChannelMetadata, OutboundAdapter, OutboundMessage};
 
     dotenvy::dotenv().ok();
-    let bot_token = resolve_slack_bot_token_for_employee(task.employee_id.as_deref())?;
+    let bot_token = resolve_slack_bot_token_for_send(task)?;
+    let metadata = task.normalized_channel_metadata();
 
     let adapter = SlackOutboundAdapter::new(bot_token);
 
@@ -106,7 +100,12 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
         thread_id: task.in_reply_to.clone(), // Use in_reply_to as thread_ts for Slack
         metadata: ChannelMetadata {
             // For Slack, reply_to[0] = user_id, reply_to[1] = channel_id
-            slack_channel_id: task.to.get(1).cloned(),
+            slack_channel_id: metadata
+                .slack_channel_id
+                .clone()
+                .or_else(|| task.to.get(1).cloned())
+                .or_else(|| task.to.first().cloned()),
+            slack_team_id: metadata.slack_team_id.clone(),
             ..Default::default()
         },
     };
@@ -116,6 +115,14 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
         .map_err(|err| SchedulerError::TaskFailed(format!("Slack send failed: {}", err)))?;
 
     if !result.success {
+        if result.error.as_deref() == Some("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "send_reply",
+                task.employee_id.as_deref(),
+                metadata.slack_team_id.as_deref(),
+                message.metadata.slack_channel_id.as_deref(),
+            );
+        }
         return Err(SchedulerError::TaskFailed(format!(
             "Slack API error: {}",
             result.error.unwrap_or_default()
@@ -656,6 +663,58 @@ pub(crate) fn execute_wechat_send(task: &SendReplyTask) -> Result<(), SchedulerE
     Ok(())
 }
 
+/// Execute a SendReplyTask via Lark (飞书).
+pub(crate) fn execute_lark_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
+    use crate::adapters::lark::LarkOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter, OutboundMessage};
+
+    dotenvy::dotenv().ok();
+    let adapter = LarkOutboundAdapter::from_env()
+        .map_err(|err| SchedulerError::TaskFailed(format!("Lark config error: {}", err)))?;
+
+    // Read plain text content from reply_message.txt
+    let text_body = if task.html_path.exists() {
+        fs::read_to_string(&task.html_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let message = OutboundMessage {
+        channel: Channel::Lark,
+        from: task.from.clone(),
+        to: task.to.clone(),
+        cc: vec![],
+        bcc: vec![],
+        subject: task.subject.clone(),
+        text_body,
+        html_body: String::new(),
+        html_path: Some(task.html_path.clone()),
+        attachments_dir: Some(task.attachments_dir.clone()),
+        thread_id: task.in_reply_to.clone(),
+        metadata: ChannelMetadata {
+            lark_open_id: task.to.first().cloned(),
+            ..Default::default()
+        },
+    };
+
+    let result = adapter
+        .send(&message)
+        .map_err(|err| SchedulerError::TaskFailed(format!("Lark send failed: {}", err)))?;
+
+    if !result.success {
+        return Err(SchedulerError::TaskFailed(format!(
+            "Lark API error: {}",
+            result.error.unwrap_or_default()
+        )));
+    }
+
+    info!(
+        "sent Lark message to {:?}, message_id={}",
+        task.to, result.message_id
+    );
+    Ok(())
+}
+
 /// Execute a SendReplyTask via SMS (Twilio).
 pub(crate) fn execute_sms_send(task: &SendReplyTask) -> Result<(), SchedulerError> {
     dotenvy::dotenv().ok();
@@ -903,7 +962,10 @@ pub(crate) fn execute_notion_send(task: &SendReplyTask) -> Result<(), SchedulerE
 
     // Also write to workspace for reference
     let workspace_request_path = workspace_dir.join(".notion_reply_request.json");
-    let _ = fs::write(&workspace_request_path, serde_json::to_string_pretty(&reply_request).unwrap_or_default());
+    let _ = fs::write(
+        &workspace_request_path,
+        serde_json::to_string_pretty(&reply_request).unwrap_or_default(),
+    );
 
     info!(
         "queued Notion reply request id={} to {:?}, page_id={:?}, queue={}",
@@ -994,6 +1056,7 @@ mod tests {
             thread_epoch: None,
             thread_state_path: None,
             employee_id: None,
+            channel_metadata: Default::default(),
         };
 
         // execute_notion_send should return Ok(()) without doing anything

@@ -19,6 +19,8 @@ pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
         google_access_token: params.google_access_token.as_deref(),
         has_unified_account: params.has_unified_account,
         user_identities: &params.user_identities,
+        thread_epoch: params.thread_epoch,
+        thread_state_path: params.thread_state_path.as_deref(),
     };
 
     let (reply_html_path, reply_attachments_dir) = prepare_workspace(&request)?;

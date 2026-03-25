@@ -75,6 +75,7 @@ Key binaries (from `scheduler_module/src/bin`):
 | `set_postmark_inbound_hook` | Utility to update Postmark inbound webhook |
 | `inbound_fanout` | Legacy fanout ingress helper |
 | `google-docs` / `google-sheets` / `google-slides` | Workspace integration CLI tools |
+| `browserbase_session_manager` | Helper CLI that creates/reuses Browserbase contexts and active sessions for browser tasks |
 | `human_approval_gate` / `human_approval_gate_mcp` | Human approval gate for CAPTCHA/password/2FA blockers; CLI for manual use and MCP server for blocking Codex runs |
 
 Key scripts:
@@ -248,6 +249,21 @@ Azure ACI execution path (required vars):
 - Google Drive push: `GOOGLE_DRIVE_PUSH_ENABLED`, `GOOGLE_DRIVE_WEBHOOK_URL`
 - Browser-based web auth for private Notion/Google pages is agent-driven at task runtime
   (no service-side bootstrap step).
+- Browserbase-backed browser persistence (optional):
+  `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, optional
+  `BROWSERBASE_API_BASE_URL`, optional `BROWSERBASE_SESSION_TIMEOUT_SECONDS`.
+  When configured, run_task forwards these env vars into local, docker, and Azure ACI
+  task environments. The bundled `playwright-cli` wrapper then calls
+  `browserbase_session_manager` to create or reuse a persistent Browserbase Context,
+  storing durable per-user auth state in `.secrets/browserbase/registry.json` and the
+  currently live task session in `.secrets/browserbase/active_session.json`. `scheduler_module`
+  only mirrors the durable Browserbase context state between per-user secrets and each
+  task workspace; it does not persist `active_session.json` across tasks, so every new
+  task restores the user's auth context into a fresh live Browserbase session instead of
+  inheriting a stale expiring session from an older container. If Browserbase rejects
+  session creation with HTTP 402, `browserbase_session_manager` now surfaces an
+  explicit quota/billing message so operators know why no live browser or handoff
+  link could be created.
 - `human_approval_gate` (via skill `human-approval-gate`) provides a blocking
   approval flow for login CAPTCHA/password/OTP/device-approval steps. In
   run_task/Codex environments, the preferred path is the injected MCP tool
@@ -267,8 +283,40 @@ Azure ACI execution path (required vars):
   containing challenge type plus attachment filenames and sizes, so
   prod/staging task logs can prove exactly what was sent. Sender resolution
   priority is `--from` > `HUMAN_APPROVAL_FROM` > employee mailbox from employee
-  config. HAG-thread replies (`[HAG:...]`) are ignored by normal inbound task
-  routing to prevent recursive Email->task loops.
+  config. When an active Browserbase session exists, the HAG email also includes a
+  signed browser handoff link under the configured public service base (for example
+  `/service/auth/browser-handoff`) so the human can open the same live Browserbase
+  session, finish the blocker in-browser, and then reply in the email thread to
+  resume the agent. When Browserbase keeps auxiliary blank tabs around, the
+  handoff flow now prefers the most recent non-blank debuggable page instead of
+  dropping the user into a session-level `about:blank` inspector. HAG-thread
+  replies (`[HAG:...]`) are ignored by normal inbound
+  task routing to prevent recursive Email->task loops. The HTML help email keeps
+  the live-browser handoff button at the top when available and summarizes the
+  blocker using short `Blocked on` / `Help needed` copy so humans can scan it
+  quickly.
+- Browserbase handoff validation endpoints:
+  `/service/browserbase-handoff-demo?run=<run_id>` is a DoWhiz-owned same-tab
+  demo page for manual validation. It intentionally starts in a blocked state,
+  stores its state in browser localStorage scoped by `run`, and can be completed
+  in-place by the human so the resumed agent sees the exact same tab change.
+- Recommended staging validation flow for Browserbase/HAG:
+  1. Deterministic same-tab demo:
+     send a task to `dowhiz@deep-tutor.com` instructing the agent to open
+     `/service/browserbase-handoff-demo?run=<unique-id>`, stop at the blocked
+     state, and request HAG help. Open the top button from the HAG email, verify
+     the live page is the blocked demo tab, click the in-page completion button,
+     then reply `done` in the HAG thread and confirm the agent resumes.
+  2. Real Google admin staging flow:
+     send a task to `dowhiz@deep-tutor.com` instructing the agent to sign into
+     Google as `dowhiz@deep-tutor.com` and perform one harmless follow-up action
+     after login. Let the agent use `GOOGLE_PASSWORD` if present, rely on HAG for
+     any remaining 2FA / device approval / CAPTCHA blocker, complete the blocker
+     through the live handoff page, reply `done`, and verify the agent finishes.
+- Evidence to capture during Browserbase handoff validation:
+  the HAG email showing the top live-browser button, the live handoff page in its
+  blocked state, the same page after the human completes the unblock step, and
+  the final DoWhiz reply proving the agent resumed.
 - ACI run_task sets Playwright/NPM runtime defaults for mounted workspaces:
   `PLAYWRIGHT_MCP_EXECUTABLE_PATH` auto-discovery (`chrome-linux` / `chrome-linux64`),
   `PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright`,

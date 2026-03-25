@@ -131,8 +131,7 @@ pub(super) fn verify_notion(headers: &HeaderMap, body: &[u8]) -> Result<(), &'st
         return Err("invalid_signature_format");
     }
 
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| "bad_secret")?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| "bad_secret")?;
     mac.update(body);
     let expected = format!("v0={}", hex::encode(mac.finalize().into_bytes()));
 
@@ -221,7 +220,7 @@ pub(super) fn verify_wechat(
 /// Message format after decryption: random(16B) + msg_len(4B, big endian) + msg + receiveid
 fn decrypt_wechat_echostr(echostr: &str, encoding_aes_key: &str) -> Result<String, &'static str> {
     use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
-    use base64::engine::{GeneralPurpose, GeneralPurposeConfig, DecodePaddingMode};
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
     // Derive AESKey: Base64_Decode(EncodingAESKey + "=")
@@ -235,12 +234,10 @@ fn decrypt_wechat_echostr(echostr: &str, encoding_aes_key: &str) -> Result<Strin
             .with_decode_padding_mode(DecodePaddingMode::Indifferent)
             .with_decode_allow_trailing_bits(true),
     );
-    let aes_key = lenient_engine
-        .decode(&aes_key_b64)
-        .map_err(|e| {
-            tracing::error!("base64 decode error: {:?}", e);
-            "invalid_encoding_aes_key"
-        })?;
+    let aes_key = lenient_engine.decode(&aes_key_b64).map_err(|e| {
+        tracing::error!("base64 decode error: {:?}", e);
+        "invalid_encoding_aes_key"
+    })?;
 
     if aes_key.len() != 32 {
         return Err("invalid_aes_key_length");
@@ -288,6 +285,70 @@ fn decrypt_wechat_echostr(echostr: &str, encoding_aes_key: &str) -> Result<Strin
     let msg = &content[4..4 + msg_len];
 
     String::from_utf8(msg.to_vec()).map_err(|_| "invalid_utf8")
+}
+
+/// Verify Lark webhook signature using SHA256.
+/// Lark sends: X-Lark-Request-Timestamp, X-Lark-Request-Nonce, X-Lark-Signature
+/// Signature = SHA256(timestamp + nonce + encrypt_key + body)
+pub(super) fn verify_lark(headers: &HeaderMap, body: &[u8]) -> Result<(), &'static str> {
+    let encrypt_key = env::var("LARK_ENCRYPT_KEY").ok();
+    let Some(encrypt_key) = encrypt_key.filter(|v| !v.trim().is_empty()) else {
+        // If encrypt_key not configured, skip verification
+        return Ok(());
+    };
+
+    let timestamp = headers
+        .get("X-Lark-Request-Timestamp")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing_timestamp")?;
+
+    let nonce = headers
+        .get("X-Lark-Request-Nonce")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing_nonce")?;
+
+    let signature = headers
+        .get("X-Lark-Signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing_signature")?;
+
+    // Signature = SHA256(timestamp + nonce + encrypt_key + body)
+    use sha2::Digest;
+    let body_str = std::str::from_utf8(body).unwrap_or("");
+    let data = format!("{}{}{}{}", timestamp, nonce, encrypt_key, body_str);
+
+    let mut hasher = Sha256::new();
+    hasher.update(data.as_bytes());
+    let expected = hex::encode(hasher.finalize());
+
+    if expected != signature {
+        return Err("invalid_signature");
+    }
+
+    Ok(())
+}
+
+/// Check if this is a URL verification challenge from Lark.
+/// Returns the challenge string if it is, None otherwise.
+pub(super) fn verify_lark_challenge(body: &[u8]) -> Option<String> {
+    let payload: serde_json::Value = serde_json::from_slice(body).ok()?;
+
+    // Check for URL verification event (type = "url_verification")
+    if payload.get("type").and_then(|v| v.as_str()) == Some("url_verification") {
+        return payload
+            .get("challenge")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+
+    // Also check schema 2.0 format (challenge + token present)
+    if let Some(challenge) = payload.get("challenge").and_then(|v| v.as_str()) {
+        if payload.get("token").is_some() {
+            return Some(challenge.to_string());
+        }
+    }
+
+    None
 }
 
 /// Remove PKCS#7 padding from decrypted data
@@ -479,7 +540,10 @@ mod tests {
         // Sorted: ["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]
         let mut parts = vec![token, timestamp, nonce, echostr];
         parts.sort();
-        assert_eq!(parts, vec!["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]);
+        assert_eq!(
+            parts,
+            vec!["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]
+        );
 
         let data = parts.join("");
         let mut hasher = Sha1::new();
@@ -620,11 +684,8 @@ mod tests {
     fn verify_whatsapp_subscription_validates_token() {
         std::env::set_var("WHATSAPP_VERIFY_TOKEN", "correct_token");
 
-        let result = verify_whatsapp_subscription(
-            Some("subscribe"),
-            Some("wrong_token"),
-            Some("challenge"),
-        );
+        let result =
+            verify_whatsapp_subscription(Some("subscribe"), Some("wrong_token"), Some("challenge"));
 
         std::env::remove_var("WHATSAPP_VERIFY_TOKEN");
 
@@ -646,5 +707,175 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "hub.challenge.12345");
+    }
+
+    // ==================== Lark Verification Tests ====================
+
+    #[test]
+    fn verify_lark_skips_when_no_encrypt_key() {
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        let headers = HeaderMap::new();
+        let body = b"{}";
+
+        let result = verify_lark(&headers, body);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_lark_skips_when_empty_encrypt_key() {
+        std::env::set_var("LARK_ENCRYPT_KEY", "   ");
+
+        let headers = HeaderMap::new();
+        let body = b"{}";
+
+        let result = verify_lark(&headers, body);
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_lark_requires_timestamp_when_key_set() {
+        std::env::set_var("LARK_ENCRYPT_KEY", "test_encrypt_key");
+
+        let headers = HeaderMap::new();
+        let body = b"{}";
+
+        let result = verify_lark(&headers, body);
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "missing_timestamp");
+    }
+
+    #[test]
+    fn verify_lark_requires_nonce_when_key_set() {
+        std::env::set_var("LARK_ENCRYPT_KEY", "test_encrypt_key");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Lark-Request-Timestamp", "1234567890".parse().unwrap());
+
+        let body = b"{}";
+        let result = verify_lark(&headers, body);
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "missing_nonce");
+    }
+
+    #[test]
+    fn verify_lark_requires_signature_when_key_set() {
+        std::env::set_var("LARK_ENCRYPT_KEY", "test_encrypt_key");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Lark-Request-Timestamp", "1234567890".parse().unwrap());
+        headers.insert("X-Lark-Request-Nonce", "nonce123".parse().unwrap());
+
+        let body = b"{}";
+        let result = verify_lark(&headers, body);
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "missing_signature");
+    }
+
+    #[test]
+    fn verify_lark_validates_signature() {
+        use sha2::{Digest, Sha256};
+
+        let encrypt_key = "my_secret_encrypt_key";
+        let timestamp = "1234567890";
+        let nonce = "abc123nonce";
+        let body = r#"{"event": "test"}"#;
+
+        // Compute expected signature: SHA256(timestamp + nonce + encrypt_key + body)
+        let data = format!("{}{}{}{}", timestamp, nonce, encrypt_key, body);
+        let mut hasher = Sha256::new();
+        hasher.update(data.as_bytes());
+        let expected_signature = hex::encode(hasher.finalize());
+
+        std::env::set_var("LARK_ENCRYPT_KEY", encrypt_key);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Lark-Request-Timestamp", timestamp.parse().unwrap());
+        headers.insert("X-Lark-Request-Nonce", nonce.parse().unwrap());
+        headers.insert("X-Lark-Signature", expected_signature.parse().unwrap());
+
+        let result = verify_lark(&headers, body.as_bytes());
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_lark_rejects_invalid_signature() {
+        std::env::set_var("LARK_ENCRYPT_KEY", "secret_key");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Lark-Request-Timestamp", "1234567890".parse().unwrap());
+        headers.insert("X-Lark-Request-Nonce", "nonce".parse().unwrap());
+        headers.insert("X-Lark-Signature", "wrong_signature".parse().unwrap());
+
+        let body = b"{}";
+        let result = verify_lark(&headers, body);
+
+        std::env::remove_var("LARK_ENCRYPT_KEY");
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "invalid_signature");
+    }
+
+    #[test]
+    fn verify_lark_challenge_detects_url_verification() {
+        let body = r#"{"type": "url_verification", "challenge": "test_challenge_string", "token": "verification_token"}"#;
+
+        let result = verify_lark_challenge(body.as_bytes());
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "test_challenge_string");
+    }
+
+    #[test]
+    fn verify_lark_challenge_detects_schema_2_format() {
+        let body = r#"{"challenge": "challenge_value", "token": "some_token"}"#;
+
+        let result = verify_lark_challenge(body.as_bytes());
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "challenge_value");
+    }
+
+    #[test]
+    fn verify_lark_challenge_ignores_regular_events() {
+        let body = r#"{"schema": "2.0", "event": {"message": {}}}"#;
+
+        let result = verify_lark_challenge(body.as_bytes());
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn verify_lark_challenge_ignores_invalid_json() {
+        let body = b"not valid json";
+
+        let result = verify_lark_challenge(body);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn verify_lark_challenge_requires_token_for_schema_2() {
+        // challenge without token should not be treated as URL verification
+        let body = r#"{"challenge": "challenge_value"}"#;
+
+        let result = verify_lark_challenge(body.as_bytes());
+
+        assert!(result.is_none());
     }
 }

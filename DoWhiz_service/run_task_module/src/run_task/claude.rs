@@ -53,7 +53,9 @@ use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest};
-use super::utils::{run_command_with_timeout, run_task_timeout, tail_string};
+use super::utils::{
+    run_command_with_timeout_and_cancel, run_task_timeout, tail_string, ThreadSupersedeMonitor,
+};
 
 pub(super) fn run_claude_task(
     request: RunTaskRequest<'_>,
@@ -63,6 +65,10 @@ pub(super) fn run_claude_task(
 ) -> Result<RunTaskOutput, RunTaskError> {
     load_env_sources(request.workspace_dir)?;
     let github_auth = resolve_github_auth(None)?;
+    let cancel_monitor = request
+        .thread_epoch
+        .zip(request.thread_state_path)
+        .map(|(epoch, path)| ThreadSupersedeMonitor::new(path, epoch));
 
     let api_key =
         env::var("AZURE_OPENAI_API_KEY_BACKUP").map_err(|_| RunTaskError::MissingEnv {
@@ -120,14 +126,19 @@ pub(super) fn run_claude_task(
         }),
         &env_overrides,
     )?;
-    let output =
-        match run_claude_command(request.workspace_dir, &prompt, &model_name, &env_overrides) {
-            Ok(output) => output,
-            Err(err) => {
-                let _ = trace.finish(None, false, Some(&err.to_string()), None);
-                return Err(err);
-            }
-        };
+    let output = match run_claude_command(
+        request.workspace_dir,
+        &prompt,
+        &model_name,
+        &env_overrides,
+        cancel_monitor.as_ref(),
+    ) {
+        Ok(output) => output,
+        Err(err) => {
+            let _ = trace.finish(None, false, Some(&err.to_string()), None);
+            return Err(err);
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -298,12 +309,14 @@ fn run_claude_command(
     prompt: &str,
     model_name: &str,
     env_overrides: &[(String, String)],
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<std::process::Output, RunTaskError> {
     let timeout = run_task_timeout();
-    match run_command_with_timeout(
+    match run_command_with_timeout_and_cancel(
         build_claude_command(workspace_dir, prompt, model_name, env_overrides),
         timeout,
         "claude",
+        cancel_monitor,
     ) {
         Ok(output) => return Ok(output),
         Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
@@ -311,10 +324,11 @@ fn run_claude_command(
     }
 
     ensure_claude_cli_installed(env_overrides)?;
-    match run_command_with_timeout(
+    match run_command_with_timeout_and_cancel(
         build_claude_command(workspace_dir, prompt, model_name, env_overrides),
         timeout,
         "claude",
+        cancel_monitor,
     ) {
         Ok(output) => Ok(output),
         Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {

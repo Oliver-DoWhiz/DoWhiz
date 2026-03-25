@@ -14,6 +14,12 @@ Required input directories (relative to `workspace_dir`):
 - `memory`
 - `references`
 
+Thread follow-up conventions:
+- `incoming_email/postmark_payload.json` / `email.html` remain the latest raw inbound payload.
+- `incoming_email/thread_request.md` is the canonical merged request when follow-up messages supersede an in-flight run.
+- `incoming_email/thread_history.md` maps the full inbound thread and raw source files.
+- `incoming_attachments/` is the merged attachment view for the active thread; per-message originals remain under `incoming_attachments/entries/`.
+
 Output files are channel-aware:
 - email/google workspace channels -> `reply_email_draft.html` + `reply_email_attachments/`
 - chat channels (slack/discord/telegram/sms/whatsapp/bluebubbles) -> `reply_message.txt` + `reply_attachments/`
@@ -79,6 +85,9 @@ let params = RunTaskParams {
     channel: "email".to_string(),
     google_access_token: None,
     has_unified_account: true,
+    user_identities: Default::default(),
+    thread_epoch: None,
+    thread_state_path: None,
 };
 
 let out = run_task(&params)?;

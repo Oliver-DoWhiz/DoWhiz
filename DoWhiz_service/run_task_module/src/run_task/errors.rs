@@ -40,12 +40,20 @@ pub enum RunTaskError {
         timeout_secs: u64,
         output: String,
     },
+    Canceled {
+        reason: String,
+        output: String,
+    },
     GitHubAuthCommandNotFound {
         command: &'static str,
     },
     GitHubAuthFailed {
         command: &'static str,
         status: Option<i32>,
+        output: String,
+    },
+    BrowserbaseFailed {
+        action: &'static str,
         output: String,
     },
     OutputMissing {
@@ -106,6 +114,11 @@ impl fmt::Display for RunTaskError {
                 "Command timed out ({} after {}s). Output tail:\n{}",
                 command, timeout_secs, output
             ),
+            RunTaskError::Canceled { reason, output } => write!(
+                f,
+                "Run task canceled: {}\nOutput tail:\n{}",
+                reason, output
+            ),
             RunTaskError::GitHubAuthCommandNotFound { command } => {
                 write!(f, "GitHub auth command not found on PATH: {}", command)
             }
@@ -117,6 +130,11 @@ impl fmt::Display for RunTaskError {
                 f,
                 "GitHub auth command failed ({} status: {:?}). Output tail:\n{}",
                 command, status, output
+            ),
+            RunTaskError::BrowserbaseFailed { action, output } => write!(
+                f,
+                "Browserbase {} failed. Output tail:\n{}",
+                action, output
             ),
             RunTaskError::OutputMissing { path, output } => {
                 write!(

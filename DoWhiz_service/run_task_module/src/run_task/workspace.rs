@@ -115,7 +115,8 @@ pub(super) fn prepare_workspace(
     // Notion uses .notion_api_replied marker file (agent posts via API directly)
     // Email and GoogleDocs use HTML reply_email_draft.html
     let (reply_path, reply_attachments_dir) = match request.channel.to_lowercase().as_str() {
-        "slack" | "discord" | "telegram" | "sms" | "bluebubbles" => (
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" => (
             request.workspace_dir.join("reply_message.txt"),
             request.workspace_dir.join("reply_attachments"),
         ),

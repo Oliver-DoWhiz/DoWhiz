@@ -938,73 +938,82 @@ impl NotionApiClient {
         Ok(pages)
     }
 
-    /// Delete a comment by ID.
-    ///
-    /// Note: Only comments created by the integration can be deleted.
+    /// Bulk read multiple pages at once.
     ///
     /// # Arguments
     /// * `workspace_id` - The workspace ID for OAuth lookup
-    /// * `comment_id` - The comment ID to delete
-    pub fn delete_comment(
+    /// * `page_ids` - List of page IDs to read
+    ///
+    /// Returns a vector of (page_id, result) tuples. Failed reads are included
+    /// with their error message.
+    pub fn bulk_read(
         &self,
         workspace_id: &str,
-        comment_id: &str,
-    ) -> Result<(), NotionApiError> {
-        self.api_delete(workspace_id, &format!("/comments/{}", comment_id))?;
-        Ok(())
+        page_ids: &[String],
+    ) -> Vec<(String, Result<PageContent, String>)> {
+        page_ids
+            .iter()
+            .map(|page_id| {
+                let result = self
+                    .get_page_content(workspace_id, page_id)
+                    .map_err(|e| e.to_string());
+                (page_id.clone(), result)
+            })
+            .collect()
     }
 
-    /// Perform a DELETE request to the Notion API.
-    fn api_delete(&self, workspace_id: &str, path: &str) -> Result<Value, NotionApiError> {
-        let token = self
-            .oauth_store
-            .get_token(workspace_id, &self.employee_id)
-            .map_err(|e| {
-                warn!(
-                    "Failed to get OAuth token for workspace {}: {}",
-                    workspace_id, e
-                );
-                NotionApiError::NoAuthorization(workspace_id.to_string())
-            })?
-            .ok_or_else(|| NotionApiError::NoAuthorization(workspace_id.to_string()))?;
+    /// Export entire workspace as JSON.
+    ///
+    /// Lists all accessible pages and reads their content.
+    ///
+    /// # Arguments
+    /// * `workspace_id` - The workspace ID for OAuth lookup
+    /// * `max_pages` - Maximum number of pages to export (default 100)
+    pub fn export_workspace(
+        &self,
+        workspace_id: &str,
+        max_pages: Option<usize>,
+    ) -> Result<Value, NotionApiError> {
+        let max_pages = max_pages.unwrap_or(100);
 
-        let url = format!("{}{}", NOTION_API_BASE, path);
-        debug!("Notion API DELETE: {}", url);
+        // List all pages
+        let pages = self.list_pages(workspace_id, Some(max_pages))?;
 
-        let response = self
-            .http_client
-            .delete(&url)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
-            .header("Notion-Version", NOTION_API_VERSION)
-            .send()
-            .map_err(|e| NotionApiError::RequestFailed(e.to_string()))?;
-
-        let status = response.status();
-        let body: Value = response
-            .json()
-            .unwrap_or_else(|_| serde_json::json!({"status": "ok"}));
-
-        if status.is_success() {
-            Ok(body)
-        } else if status.as_u16() == 404 {
-            Err(NotionApiError::NotFound(path.to_string()))
-        } else if status.as_u16() == 429 {
-            let retry_after = body["retry_after"].as_u64().unwrap_or(60);
-            Err(NotionApiError::RateLimited(retry_after))
-        } else if status.as_u16() == 403 {
-            Err(NotionApiError::PermissionDenied(
-                body["message"]
-                    .as_str()
-                    .unwrap_or("Access denied")
-                    .to_string(),
-            ))
-        } else {
-            Err(NotionApiError::RequestFailed(format!(
-                "Status {}: {}",
-                status,
-                body["message"].as_str().unwrap_or("Unknown error")
-            )))
+        // Read content for each page
+        let mut export_data = Vec::new();
+        for page in &pages {
+            let content = self.get_page_content(workspace_id, &page.id);
+            export_data.push(serde_json::json!({
+                "page": {
+                    "id": page.id,
+                    "title": page.title,
+                    "url": page.url,
+                    "created_time": page.created_time,
+                    "last_edited_time": page.last_edited_time,
+                },
+                "content": match content {
+                    Ok(c) => serde_json::json!({
+                        "blocks": c.blocks.iter().map(|b| {
+                            serde_json::json!({
+                                "id": b.id,
+                                "type": b.block_type,
+                                "text": b.text_content,
+                            })
+                        }).collect::<Vec<_>>()
+                    }),
+                    Err(e) => serde_json::json!({
+                        "error": e.to_string()
+                    })
+                }
+            }));
         }
+
+        Ok(serde_json::json!({
+            "workspace_id": workspace_id,
+            "total_pages": pages.len(),
+            "exported_at": chrono::Utc::now().to_rfc3339(),
+            "pages": export_data
+        }))
     }
 }
 

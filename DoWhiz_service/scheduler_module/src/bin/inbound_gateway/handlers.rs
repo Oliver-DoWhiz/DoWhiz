@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use scheduler_module::adapters::bluebubbles::BlueBubblesInboundAdapter;
+use scheduler_module::adapters::lark::LarkInboundAdapter;
 use scheduler_module::adapters::postmark::PostmarkInboundPayload;
 use scheduler_module::adapters::slack::{
     is_url_verification, SlackChallengeResponse, SlackEventWrapper, SlackInboundAdapter,
@@ -26,13 +27,15 @@ use scheduler_module::channel::{Channel, ChannelMetadata, InboundAdapter, Inboun
 use scheduler_module::ingestion::{IngestionEnvelope, IngestionPayload};
 use scheduler_module::ingestion_queue::IngestionQueue;
 use scheduler_module::raw_payload_store::{self, RawPayloadStoreError};
+use scheduler_module::service::derive_inbound_email_text;
+use scheduler_module::slack_store::resolve_slack_bot_user_id_for_runtime;
 use scheduler_module::user_store::extract_emails;
 
 use super::routes::{build_dedupe_key, normalize_email, normalize_phone_number, resolve_route};
 use super::state::{find_service_address, GatewayState, RouteDecision, RouteKey, RouteTarget};
 use super::verify::{
-    verify_bluebubbles, verify_postmark, verify_slack, verify_twilio, verify_wechat,
-    verify_whatsapp_subscription,
+    verify_bluebubbles, verify_lark, verify_lark_challenge, verify_postmark, verify_slack,
+    verify_twilio, verify_wechat, verify_whatsapp_subscription,
 };
 
 /// Request payload for creating a workspace brief document
@@ -79,7 +82,10 @@ pub(super) async fn ingest_postmark(
         Ok(payload) => payload,
         Err(e) => {
             let body_preview = String::from_utf8_lossy(&body[..body.len().min(500)]);
-            warn!("gateway failed to parse postmark payload: {} - body preview: {}", e, body_preview);
+            warn!(
+                "gateway failed to parse postmark payload: {} - body preview: {}",
+                e, body_preview
+            );
             return (StatusCode::BAD_REQUEST, Json(json!({"status": "bad_json"})));
         }
     };
@@ -188,7 +194,8 @@ pub(super) async fn ingest_slack(
         api_app_id, route.employee_id
     );
 
-    let bot_user_id = resolve_slack_bot_user_id_for_employee(&route.employee_id);
+    let bot_user_id =
+        resolve_slack_bot_user_id_for_employee(&route.employee_id, wrapper.team_id.as_deref());
     if !should_enqueue_slack_message(&wrapper, bot_user_id.as_deref()) {
         info!(
             "gateway ignoring slack event for employee={} api_app_id={} (not dm/app_mention/mention)",
@@ -223,20 +230,11 @@ pub(super) async fn ingest_slack(
     enqueue_envelope(state.queue.clone(), envelope).await
 }
 
-fn resolve_slack_bot_user_id_for_employee(employee_id: &str) -> Option<String> {
-    let employee_env = employee_id.to_uppercase().replace('-', "_");
-    let employee_key = format!("{}_SLACK_BOT_USER_ID", employee_env);
-
-    std::env::var(&employee_key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("SLACK_BOT_USER_ID")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+fn resolve_slack_bot_user_id_for_employee(
+    employee_id: &str,
+    team_id: Option<&str>,
+) -> Option<String> {
+    resolve_slack_bot_user_id_for_runtime(team_id, Some(employee_id))
 }
 
 fn route_decision_from_target(target: RouteTarget, state: &GatewayState) -> RouteDecision {
@@ -616,7 +614,10 @@ pub(super) async fn verify_wechat_webhook(
         params.echostr.as_deref(),
     ) {
         Ok(echostr) => {
-            info!("wechat verification succeeded, returning echostr len={}", echostr.len());
+            info!(
+                "wechat verification succeeded, returning echostr len={}",
+                echostr.len()
+            );
             (StatusCode::OK, echostr)
         }
         Err(reason) => {
@@ -666,6 +667,77 @@ pub(super) async fn ingest_wechat(
     enqueue_envelope(state.queue.clone(), envelope).await
 }
 
+/// Handle Lark inbound messages (POST request)
+pub(super) async fn ingest_lark(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    // Handle URL verification challenge
+    if let Some(challenge) = verify_lark_challenge(&body) {
+        info!("lark URL verification, returning challenge");
+        return (StatusCode::OK, Json(json!({"challenge": challenge})));
+    }
+
+    // Verify signature
+    if let Err(reason) = verify_lark(&headers, &body) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"status": reason})));
+    }
+
+    let adapter = LarkInboundAdapter::new();
+    let message = match adapter.parse(&body) {
+        Ok(message) => message,
+        Err(err) => {
+            info!("gateway ignoring lark event: {}", err);
+            return (StatusCode::OK, Json(json!({"status": "ignored"})));
+        }
+    };
+
+    let chat_id = message
+        .metadata
+        .lark_chat_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    info!(
+        "lark message received: chat_id={}, sender={}, message_id={:?}, text_preview={}",
+        chat_id,
+        message.sender,
+        message.message_id,
+        message
+            .text_body
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .take(50)
+            .collect::<String>()
+    );
+
+    let Some(route) = resolve_route(Channel::Lark, &chat_id, &state) else {
+        info!(
+            "gateway no route for lark chat_id={}, channel_defaults_has_lark={}, global_default_employee={:?}",
+            chat_id,
+            state.config.channel_defaults.contains_key(&Channel::Lark),
+            state.config.defaults.employee_id
+        );
+        return (StatusCode::OK, Json(json!({"status": "no_route"})));
+    };
+
+    let external_message_id = message.message_id.clone();
+    let envelope =
+        match build_envelope(route, Channel::Lark, external_message_id, &message, &body).await {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                error!("gateway failed to store raw payload: {}", err);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"status": "payload_store_failed"})),
+                );
+            }
+        };
+    enqueue_envelope(state.queue.clone(), envelope).await
+}
+
 pub(super) async fn enqueue_envelope(
     queue: Arc<dyn IngestionQueue>,
     envelope: IngestionEnvelope,
@@ -703,6 +775,8 @@ const NO_REPLY_MARKERS: [&str; 5] = [
     "mailer-daemon",
     "postmaster",
 ];
+const EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES: usize = 16 * 1024;
+const EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX: &str = "\n\n[truncated for queue delivery]";
 
 fn payload_contains_no_reply_marker(payload: &PostmarkInboundPayload) -> bool {
     let candidates = [payload.from.as_deref(), payload.reply_to.as_deref()];
@@ -728,17 +802,65 @@ fn contains_no_reply_marker(value: &str) -> bool {
 fn build_queue_payload(channel: Channel, message: &InboundMessage) -> IngestionPayload {
     let mut payload = IngestionPayload::from_inbound(message);
     if channel == Channel::Email {
-        // Keep queue envelopes small; email attachment bytes are loaded from raw payload/blob.
+        // Keep queue envelopes small; the worker loads the authoritative email payload from blob.
         payload.attachments.clear();
-        // Strip html_body for Notion emails to avoid PayloadTooLarge errors.
-        // payload.text_body contains the actual comment plaintext needed for processing.
-        // Note: this removes full comment history from payload.
-        let sender_lower = message.sender.to_lowercase();
-        if sender_lower.contains("notion.so") || sender_lower.contains("notion.com") {
-            payload.html_body = None;
-        }
+        payload.text_body = payload
+            .text_body
+            .as_deref()
+            .and_then(compact_email_text_for_queue)
+            .or_else(|| {
+                payload
+                    .html_body
+                    .as_deref()
+                    .and_then(compact_email_html_for_queue)
+            });
+        payload.html_body = None;
     }
     payload
+}
+
+fn compact_email_text_for_queue(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_for_queue(
+        trimmed,
+        EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES,
+        EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX,
+    ))
+}
+
+fn compact_email_html_for_queue(html: &str) -> Option<String> {
+    derive_inbound_email_text(None, None, Some(html))
+        .and_then(|text| compact_email_text_for_queue(&text))
+}
+
+fn truncate_for_queue(input: &str, max_bytes: usize, suffix: &str) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    if suffix.len() >= max_bytes {
+        return truncate_utf8_for_queue(input, max_bytes);
+    }
+
+    let mut end = max_bytes - suffix.len();
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut output = input[..end].to_string();
+    output.push_str(suffix);
+    output
+}
+
+fn truncate_utf8_for_queue(input: &str, max_bytes: usize) -> String {
+    let mut end = input.len().min(max_bytes);
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    input[..end].to_string()
 }
 
 async fn rewrite_email_payload_attachments_to_blob_refs(
@@ -955,6 +1077,17 @@ pub(super) async fn build_envelope(
     };
     let raw_payload_ref = if raw_payload.is_empty() {
         None
+    } else if channel == Channel::Email {
+        // Email queue payloads are intentionally compact, so the archived raw payload
+        // becomes the authoritative source for full body reconstruction and attachments.
+        Some(
+            raw_payload_store::upload_raw_payload_azure(
+                envelope_id,
+                received_at,
+                &stored_payload_bytes,
+            )
+            .await?,
+        )
     } else {
         match raw_payload_store::upload_raw_payload_azure(
             envelope_id,
@@ -1013,19 +1146,32 @@ pub(super) async fn create_workspace_brief(
 
     // Build the prompt for Codex
     let venture_name = request.venture_name.as_deref().unwrap_or("Startup");
-    let thesis = request.thesis.as_deref().unwrap_or("Building something great");
+    let thesis = request
+        .thesis
+        .as_deref()
+        .unwrap_or("Building something great");
     let stage = request.stage.as_deref().unwrap_or("idea");
     let horizon = request.plan_horizon_days.unwrap_or(30);
     let goals_text = if request.goals.is_empty() {
         "- Define initial goals".to_string()
     } else {
-        request.goals.iter().map(|g| format!("- {}", g)).collect::<Vec<_>>().join("\n")
+        request
+            .goals
+            .iter()
+            .map(|g| format!("- {}", g))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let assets_text = request
         .current_assets
         .as_ref()
         .filter(|a| !a.is_empty())
-        .map(|a| a.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|a| {
+            a.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- None listed yet".to_string());
 
     let prompt = format!(
@@ -1173,19 +1319,32 @@ pub(super) async fn create_90_day_plan(
         .unwrap_or_else(|| "default".to_string());
 
     let venture_name = request.venture_name.as_deref().unwrap_or("Startup");
-    let thesis = request.thesis.as_deref().unwrap_or("Building something great");
+    let thesis = request
+        .thesis
+        .as_deref()
+        .unwrap_or("Building something great");
     let stage = request.stage.as_deref().unwrap_or("idea");
     let horizon = request.plan_horizon_days.unwrap_or(90);
     let goals_text = if request.goals.is_empty() {
         "- Define initial goals".to_string()
     } else {
-        request.goals.iter().map(|g| format!("- {}", g)).collect::<Vec<_>>().join("\n")
+        request
+            .goals
+            .iter()
+            .map(|g| format!("- {}", g))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let assets_text = request
         .current_assets
         .as_ref()
         .filter(|a| !a.is_empty())
-        .map(|a| a.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|a| {
+            a.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- None listed yet".to_string());
 
     let prompt = format!(
@@ -1503,7 +1662,10 @@ mod tests {
         assert_eq!(request.founder_name, "Dylan Tang");
         assert_eq!(request.founder_email, "dylan@example.com");
         assert_eq!(request.venture_name.as_deref(), Some("Acme Labs"));
-        assert_eq!(request.thesis.as_deref(), Some("Building AI tools for productivity"));
+        assert_eq!(
+            request.thesis.as_deref(),
+            Some("Building AI tools for productivity")
+        );
         assert_eq!(request.stage.as_deref(), Some("mvp"));
         assert_eq!(request.goals.len(), 3);
         assert_eq!(request.goals[0], "Launch MVP");
@@ -1563,13 +1725,15 @@ mod tests {
             "plan_horizon_days": 90
         }"#;
 
-        let request: Create90DayPlanRequest =
-            serde_json::from_str(json).expect("should parse");
+        let request: Create90DayPlanRequest = serde_json::from_str(json).expect("should parse");
 
         assert_eq!(request.founder_name, "Dylan Tang");
         assert_eq!(request.founder_email, "dylan@example.com");
         assert_eq!(request.venture_name.as_deref(), Some("Acme Labs"));
-        assert_eq!(request.thesis.as_deref(), Some("Building AI tools for productivity"));
+        assert_eq!(
+            request.thesis.as_deref(),
+            Some("Building AI tools for productivity")
+        );
         assert_eq!(request.stage.as_deref(), Some("mvp"));
         assert_eq!(request.goals.len(), 3);
         assert_eq!(request.goals[0], "Launch MVP");
@@ -1585,8 +1749,7 @@ mod tests {
             "goals": []
         }"#;
 
-        let request: Create90DayPlanRequest =
-            serde_json::from_str(json).expect("should parse");
+        let request: Create90DayPlanRequest = serde_json::from_str(json).expect("should parse");
 
         assert_eq!(request.founder_name, "Jane Doe");
         assert_eq!(request.founder_email, "jane@example.com");
@@ -1658,7 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn build_queue_payload_keeps_html_body_for_non_notion_email() {
+    fn build_queue_payload_strips_html_body_for_non_notion_email() {
         let message = InboundMessage {
             channel: Channel::Email,
             sender: "user@gmail.com".to_string(),
@@ -1675,7 +1838,81 @@ mod tests {
             metadata: ChannelMetadata::default(),
         };
         let payload = build_queue_payload(Channel::Email, &message);
-        assert!(payload.html_body.is_some());
+        assert!(payload.html_body.is_none());
+        assert_eq!(payload.text_body.as_deref(), Some("Text content"));
+    }
+
+    #[test]
+    fn build_queue_payload_uses_html_preview_when_text_missing() {
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: None,
+            html_body: Some("<html><body><p>Hello from html</p></body></html>".to_string()),
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        assert!(payload.html_body.is_none());
+        assert_eq!(payload.text_body.as_deref(), Some("Hello from html"));
+    }
+
+    #[test]
+    fn build_queue_payload_preserves_html_links_when_text_missing() {
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: None,
+            html_body: Some(
+                "<html><body><p>Open <a href=\"https://learning.edx.org/course/123\">the course</a></p><img src=\"data:image/png;base64,AAAA\"></body></html>"
+                    .to_string(),
+            ),
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        let text = payload.text_body.expect("text preview");
+        assert!(payload.html_body.is_none());
+        assert!(text.contains("the course (https://learning.edx.org/course/123)"));
+        assert!(!text.contains("data:image"));
+    }
+
+    #[test]
+    fn build_queue_payload_truncates_large_email_text() {
+        let long_text = "a".repeat(EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES + 512);
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: Some(long_text),
+            html_body: None,
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        let text = payload.text_body.expect("text preview");
+        assert!(text.ends_with(EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX));
+        assert!(text.len() <= EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES);
     }
 
     #[test]

@@ -67,10 +67,7 @@ impl NotionOAuthStore {
         let store = Self::new(collection);
         store.ensure_indexes()?;
 
-        info!(
-            "Initialized NotionOAuthStore for employee {}",
-            employee_id
-        );
+        info!("Initialized NotionOAuthStore for employee {}", employee_id);
 
         Ok(store)
     }
@@ -105,7 +102,11 @@ impl NotionOAuthStore {
     }
 
     /// Get the access token for a workspace.
-    pub fn get_token(&self, workspace_id: &str, employee_id: &str) -> Result<Option<String>, NotionError> {
+    pub fn get_token(
+        &self,
+        workspace_id: &str,
+        employee_id: &str,
+    ) -> Result<Option<String>, NotionError> {
         let collection = match &self.collection {
             Some(c) => c,
             None => return Ok(None),
@@ -124,7 +125,11 @@ impl NotionOAuthStore {
     }
 
     /// Get the full token data for a workspace.
-    pub fn get_token_data(&self, workspace_id: &str, employee_id: &str) -> Result<Option<NotionOAuthToken>, NotionError> {
+    pub fn get_token_data(
+        &self,
+        workspace_id: &str,
+        employee_id: &str,
+    ) -> Result<Option<NotionOAuthToken>, NotionError> {
         let collection = match &self.collection {
             Some(c) => c,
             None => return Ok(None),
@@ -141,8 +146,9 @@ impl NotionOAuthStore {
 
         match result {
             Some(doc) => {
-                let token: NotionOAuthToken = mongodb::bson::from_document(doc)
-                    .map_err(|e| NotionError::StorageError(format!("Failed to deserialize token: {}", e)))?;
+                let token: NotionOAuthToken = mongodb::bson::from_document(doc).map_err(|e| {
+                    NotionError::StorageError(format!("Failed to deserialize token: {}", e))
+                })?;
                 Ok(Some(token))
             }
             None => Ok(None),

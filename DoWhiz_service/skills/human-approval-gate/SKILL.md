@@ -36,6 +36,7 @@ Trigger this skill only after the website has already initiated the challenge. F
 - wait until the page is explicitly waiting for the code / tap / approval, then send the human approval email
 - for 2FA requests, describe exactly which method is active: SMS, email, authenticator app, or device tap / number match
 - for every request type, attach the current browser screenshot(s)
+- if Browserbase live handoff is available, keep the blocker in a single tab so the human opens the same stuck page
 
 For owner/admin login flows, if account email/username is missing, try known admin identifiers first (`dowhiz@deep-tutor.com` on staging, `oliver@dowhiz.com` on production). Do not use the approval gate only to ask for identifier when these known values are available.
 
@@ -68,6 +69,7 @@ Preferred in run_task/Codex environments:
 - Take the current browser screenshot(s) first.
 - Call `dowhiz_human_approval_gate_request_and_wait`.
 - That single tool call sends the email, waits for the first same-thread reply or timeout, and returns the full challenge state.
+- If the email includes a live browser handoff link, the human can finish the blocker directly in that same browser session before replying.
 - In run_task/Codex environments, the injected MCP server config sets `tool_timeout_sec = 1860`, so the tool can stay blocked for the default 30-minute wait window plus a small buffer.
 - While that tool call is pending, do not do any other browser or shell actions.
 

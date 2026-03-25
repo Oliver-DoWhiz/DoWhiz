@@ -401,6 +401,18 @@ pub async fn ingest_notion_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Check for verification token (webhook setup handshake)
+    // Notion sends {"verification_token": "<token>"} and expects it echoed back
+    if let Ok(verification) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if let Some(token) = verification
+            .get("verification_token")
+            .and_then(|v| v.as_str())
+        {
+            info!("notion webhook verification request received");
+            return (StatusCode::OK, Json(json!({"verification_token": token})));
+        }
+    }
+
     // Verify signature
     if let Err(reason) = super::verify::verify_notion(&headers, &body) {
         warn!("notion webhook signature verification failed: {}", reason);
@@ -492,9 +504,7 @@ pub async fn ingest_notion_webhook(
     // Also filter out comments from ANY bot (not just our own)
     // This prevents cross-environment triggers (e.g., prod Oliver triggering staging Boiled-Egg)
     if payload.is_from_any_bot() {
-        info!(
-            "notion webhook from bot author (ignoring to prevent cross-env trigger)"
-        );
+        info!("notion webhook from bot author (ignoring to prevent cross-env trigger)");
         return (
             StatusCode::OK,
             Json(json!({"status": "ignored", "reason": "bot_author"})),
@@ -513,9 +523,15 @@ pub async fn ingest_notion_webhook(
 
     // Extract message details
     let mut comment_text = payload.extract_comment_text();
-    let page_id = payload.get_page_id().unwrap_or_else(|| "unknown".to_string());
-    let comment_id = payload.get_comment_id().unwrap_or_else(|| payload.id.clone());
-    let discussion_id = payload.get_discussion_id().unwrap_or_else(|| comment_id.clone());
+    let page_id = payload
+        .get_page_id()
+        .unwrap_or_else(|| "unknown".to_string());
+    let comment_id = payload
+        .get_comment_id()
+        .unwrap_or_else(|| payload.id.clone());
+    let discussion_id = payload
+        .get_discussion_id()
+        .unwrap_or_else(|| comment_id.clone());
     let mut author_name = payload.author_name();
     let author_id = payload.author_id().unwrap_or_else(|| "unknown".to_string());
 
@@ -558,7 +574,10 @@ pub async fn ingest_notion_webhook(
 
                 match http_client
                     .get(&url)
-                    .header("Authorization", format!("Bearer {}", credential.access_token))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", credential.access_token),
+                    )
                     .header("Notion-Version", "2022-06-28")
                     .send()
                     .await
@@ -581,7 +600,8 @@ pub async fn ingest_notion_webhook(
                                             }
                                             // Extract author name
                                             if author_name.is_none() {
-                                                if let Some(name) = c["created_by"]["name"].as_str() {
+                                                if let Some(name) = c["created_by"]["name"].as_str()
+                                                {
                                                     author_name = Some(name.to_string());
                                                 }
                                             }
@@ -598,7 +618,8 @@ pub async fn ingest_notion_webhook(
                                 // Check for more pages
                                 let has_more = data["has_more"].as_bool().unwrap_or(false);
                                 if has_more {
-                                    next_cursor = data["next_cursor"].as_str().map(|s| s.to_string());
+                                    next_cursor =
+                                        data["next_cursor"].as_str().map(|s| s.to_string());
                                     pages_fetched += 1;
                                 } else {
                                     // No more pages - try retry if available
@@ -680,7 +701,10 @@ pub async fn ingest_notion_webhook(
     let notion_mention = NotionMention {
         id: payload.id.clone(),
         workspace_id: payload.workspace_id.clone(),
-        workspace_name: payload.workspace_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        workspace_name: payload
+            .workspace_name
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string()),
         page_id: page_id.clone(),
         page_title: format!("Notion Page {}", page_id), // Title not available in webhook
         block_id: None,
@@ -732,7 +756,10 @@ pub async fn ingest_notion_webhook(
         }
     };
 
-    info!("notion webhook enqueuing envelope: {}", envelope.envelope_id);
+    info!(
+        "notion webhook enqueuing envelope: {}",
+        envelope.envelope_id
+    );
     let result = enqueue_envelope(state.queue.clone(), envelope).await;
     info!("notion webhook enqueue result: {:?}", result.0);
     result

@@ -30,10 +30,12 @@ pub enum Channel {
     GoogleSlides,
     /// iMessage via BlueBubbles bridge
     BlueBubbles,
-/// Notion collaboration via API
+    /// Notion collaboration via API
     Notion,
     /// WeChat Work (企业微信) via qyapi
     WeChat,
+    /// Lark (飞书) via Open Platform API
+    Lark,
 }
 
 impl Default for Channel {
@@ -55,8 +57,9 @@ impl std::fmt::Display for Channel {
             Channel::GoogleSheets => write!(f, "google_sheets"),
             Channel::GoogleSlides => write!(f, "google_slides"),
             Channel::BlueBubbles => write!(f, "bluebubbles"),
-Channel::Notion => write!(f, "notion"),
+            Channel::Notion => write!(f, "notion"),
             Channel::WeChat => write!(f, "wechat"),
+            Channel::Lark => write!(f, "lark"),
         }
     }
 }
@@ -76,8 +79,9 @@ impl std::str::FromStr for Channel {
             "google_sheets" | "googlesheets" => Ok(Channel::GoogleSheets),
             "google_slides" | "googleslides" => Ok(Channel::GoogleSlides),
             "bluebubbles" | "imessage" => Ok(Channel::BlueBubbles),
-"notion" => Ok(Channel::Notion),
+            "notion" => Ok(Channel::Notion),
             "wechat" | "weixin" => Ok(Channel::WeChat),
+            "lark" | "feishu" => Ok(Channel::Lark),
             _ => Err(format!("unknown channel: {}", s)),
         }
     }
@@ -187,7 +191,7 @@ pub struct ChannelMetadata {
     pub google_slides_owner_email: Option<String>,
     /// BlueBubbles-specific: Chat GUID (e.g., "iMessage;-;+1234567890")
     pub bluebubbles_chat_guid: Option<String>,
-/// Notion-specific: Workspace ID
+    /// Notion-specific: Workspace ID
     pub notion_workspace_id: Option<String>,
     /// Notion-specific: Workspace name
     pub notion_workspace_name: Option<String>,
@@ -207,6 +211,16 @@ pub struct ChannelMetadata {
     pub wechat_user_id: Option<String>,
     /// WeChat Work-specific: Agent ID (应用ID)
     pub wechat_agent_id: Option<String>,
+    /// Lark-specific: App ID
+    pub lark_app_id: Option<String>,
+    /// Lark-specific: Tenant key (workspace identifier)
+    pub lark_tenant_key: Option<String>,
+    /// Lark-specific: User's open_id
+    pub lark_open_id: Option<String>,
+    /// Lark-specific: Chat ID (group or P2P chat)
+    pub lark_chat_id: Option<String>,
+    /// Lark-specific: Message ID
+    pub lark_message_id: Option<String>,
 
     // =========================================================================
     // Multi-channel collaboration support
@@ -354,11 +368,26 @@ mod tests {
         assert_eq!("sms".parse::<Channel>().unwrap(), Channel::Sms);
         assert_eq!("telegram".parse::<Channel>().unwrap(), Channel::Telegram);
         assert_eq!("whatsapp".parse::<Channel>().unwrap(), Channel::WhatsApp);
-        assert_eq!("google_docs".parse::<Channel>().unwrap(), Channel::GoogleDocs);
-        assert_eq!("googledocs".parse::<Channel>().unwrap(), Channel::GoogleDocs);
-        assert_eq!("google_sheets".parse::<Channel>().unwrap(), Channel::GoogleSheets);
-        assert_eq!("google_slides".parse::<Channel>().unwrap(), Channel::GoogleSlides);
-        assert_eq!("bluebubbles".parse::<Channel>().unwrap(), Channel::BlueBubbles);
+        assert_eq!(
+            "google_docs".parse::<Channel>().unwrap(),
+            Channel::GoogleDocs
+        );
+        assert_eq!(
+            "googledocs".parse::<Channel>().unwrap(),
+            Channel::GoogleDocs
+        );
+        assert_eq!(
+            "google_sheets".parse::<Channel>().unwrap(),
+            Channel::GoogleSheets
+        );
+        assert_eq!(
+            "google_slides".parse::<Channel>().unwrap(),
+            Channel::GoogleSlides
+        );
+        assert_eq!(
+            "bluebubbles".parse::<Channel>().unwrap(),
+            Channel::BlueBubbles
+        );
         assert_eq!("imessage".parse::<Channel>().unwrap(), Channel::BlueBubbles);
     }
 

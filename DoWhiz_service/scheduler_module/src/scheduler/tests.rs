@@ -5,7 +5,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelMetadata};
 
 use super::{
     actions::{apply_scheduler_actions, schedule_send_email},
@@ -63,6 +63,7 @@ fn base_run_task(workspace: &Path, mail_root: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
 }
 
@@ -559,6 +560,7 @@ fn discord_run_task(workspace: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
 }
 
@@ -586,7 +588,31 @@ fn slack_run_task(workspace: &Path) -> RunTaskTask {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     }
+}
+
+#[test]
+fn run_task_normalized_channel_metadata_recovers_slack_workspace_context() {
+    let temp = TempDir::new().expect("tempdir");
+    let task = slack_run_task(temp.path());
+
+    let metadata = task.normalized_channel_metadata();
+    assert_eq!(metadata.slack_team_id.as_deref(), Some("T12345678"));
+    assert_eq!(metadata.slack_channel_id.as_deref(), Some("C12345678"));
+}
+
+#[test]
+fn run_task_normalized_channel_metadata_recovers_discord_guild_context() {
+    let temp = TempDir::new().expect("tempdir");
+    let mut task = discord_run_task(temp.path());
+    task.reply_to = vec!["discord_user_123".to_string(), "456".to_string()];
+    task.thread_id = Some("discord:123:456:thread789".to_string());
+    task.channel_metadata = ChannelMetadata::default();
+
+    let metadata = task.normalized_channel_metadata();
+    assert_eq!(metadata.discord_guild_id, Some(123));
+    assert_eq!(metadata.discord_channel_id, Some(456));
 }
 
 #[test]

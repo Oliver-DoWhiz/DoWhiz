@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -48,6 +50,16 @@ DEFAULT_PASSWORD_ENV_KEY = "GOOGLE_PASSWORD"
 CHALLENGE_TYPES = ("captcha", "password", "two_factor")
 TWO_FACTOR_METHODS = ("sms", "email", "auth_app", "device_tap", "other")
 EVENTS_LOG_FILENAME = "events.jsonl"
+BROWSERBASE_STATE_DIR_DEFAULT = ".secrets/browserbase"
+BROWSERBASE_ACTIVE_SESSION_FILENAME = "active_session.json"
+BROWSERBASE_STATE_DIR_ENV_KEY = "BROWSERBASE_STATE_DIR"
+BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY = "BROWSERBASE_ACTIVE_SESSION_PATH"
+BROWSERBASE_API_KEY_ENV_KEY = "BROWSERBASE_API_KEY"
+BROWSERBASE_API_KEY_ALIAS_ENV_KEY = "BROWSER_BASE_API_KEY"
+BROWSERBASE_API_BASE_URL_ENV_KEY = "BROWSERBASE_API_BASE_URL"
+DEFAULT_BROWSERBASE_API_BASE_URL = "https://api.browserbase.com"
+BROWSER_HANDOFF_BASE_URL_ENV_KEY = "BROWSER_HANDOFF_BASE_URL"
+BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY = "BROWSER_HANDOFF_SIGNING_SECRET"
 PAGE_STATES_BY_TYPE = {
     "captcha": {"captcha_blocked"},
     "password": {"waiting_for_password"},
@@ -106,6 +118,171 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
     temp_path = path.with_suffix(".tmp")
     temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     temp_path.replace(path)
+
+
+def resolve_browserbase_active_session_path() -> Path:
+    explicit = get_env_first(BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY)
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        state_dir = get_env_first(BROWSERBASE_STATE_DIR_ENV_KEY) or BROWSERBASE_STATE_DIR_DEFAULT
+        path = Path(state_dir).expanduser() / BROWSERBASE_ACTIVE_SESSION_FILENAME
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+
+def load_active_browserbase_session() -> Optional[Dict[str, Any]]:
+    path = resolve_browserbase_active_session_path()
+    if not path.exists():
+        return None
+    try:
+        payload = read_json(path)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    session_id = str(payload.get("session_id", "")).strip()
+    if not session_id:
+        return None
+    return payload
+
+
+def fetch_browserbase_debug_payload(session_id: str) -> Optional[Dict[str, Any]]:
+    api_key = get_env_first(BROWSERBASE_API_KEY_ENV_KEY, BROWSERBASE_API_KEY_ALIAS_ENV_KEY)
+    if not api_key:
+        return None
+    api_base = (get_env_first(BROWSERBASE_API_BASE_URL_ENV_KEY) or DEFAULT_BROWSERBASE_API_BASE_URL).rstrip(
+        "/"
+    )
+    encoded_session_id = urllib.parse.quote(session_id, safe="")
+    request = urllib.request.Request(
+        f"{api_base}/v1/sessions/{encoded_session_id}/debug",
+        headers={"Accept": "application/json", "X-BB-API-Key": api_key},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read().decode("utf-8")
+    except Exception:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def page_debug_url(page: Dict[str, Any]) -> str:
+    for key in ("debuggerFullscreenUrl", "debuggerUrl"):
+        value = str(page.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def page_text_is_blank(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return (
+        normalized == ""
+        or normalized == "about:blank"
+        or normalized == "new tab"
+        or normalized.startswith("chrome://newtab")
+        or normalized.startswith("edge://newtab")
+        or normalized.startswith("chrome-search://local-ntp")
+    )
+
+
+def page_looks_live(page: Dict[str, Any]) -> bool:
+    return not page_text_is_blank(page.get("url")) or not page_text_is_blank(page.get("title"))
+
+
+def resolve_browserbase_debug_page_id(payload: Dict[str, Any]) -> str:
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        return ""
+
+    def iter_candidates():
+        for raw_page in reversed(pages):
+            if not isinstance(raw_page, dict):
+                continue
+            page_id = str(raw_page.get("id", "")).strip()
+            if not page_id or not page_debug_url(raw_page):
+                continue
+            yield raw_page, page_id
+
+    for page, page_id in iter_candidates():
+        if page_looks_live(page):
+            return page_id
+
+    for _page, page_id in iter_candidates():
+        return page_id
+
+    return ""
+
+
+def resolve_browser_handoff_page_id(active_session: Dict[str, Any]) -> str:
+    page_id = str(active_session.get("page_id", "")).strip()
+    if page_id:
+        return page_id
+
+    session_id = str(active_session.get("session_id", "")).strip()
+    if not session_id:
+        return ""
+
+    payload = fetch_browserbase_debug_payload(session_id)
+    if not payload:
+        return ""
+    return resolve_browserbase_debug_page_id(payload)
+
+
+def encode_browser_handoff_token(claims: Dict[str, Any], secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    encoded_header = base64.urlsafe_b64encode(
+        json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    encoded_claims = base64.urlsafe_b64encode(
+        json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signing_input = f"{encoded_header}.{encoded_claims}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    return f"{encoded_header}.{encoded_claims}.{encoded_signature}"
+
+
+def build_browser_handoff_details(challenge_id: str, expires_at: str) -> Optional[Dict[str, str]]:
+    base_url = get_env_first(BROWSER_HANDOFF_BASE_URL_ENV_KEY)
+    signing_secret = get_env_first(BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY)
+    active_session = load_active_browserbase_session()
+    if not base_url or not signing_secret or not active_session:
+        return None
+
+    session_id = str(active_session.get("session_id", "")).strip()
+    if not session_id:
+        return None
+    page_id = resolve_browser_handoff_page_id(active_session)
+
+    now = utc_now()
+    expires = parse_iso8601(expires_at)
+    claims: Dict[str, Any] = {
+        "version": 1,
+        "challenge_id": challenge_id,
+        "session_id": session_id,
+        "iat": int(now.timestamp()),
+        "exp": int(expires.timestamp()),
+    }
+    if page_id:
+        claims["page_id"] = page_id
+    token = encode_browser_handoff_token(claims, signing_secret)
+    payload = {
+        "browser_handoff_url": f"{base_url.rstrip('/')}/auth/browser-handoff?token={urllib.parse.quote(token, safe='')}",
+        "browser_session_id": session_id,
+    }
+    if page_id:
+        payload["browser_page_id"] = page_id
+    return payload
 
 
 def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
@@ -452,7 +629,7 @@ def build_subject(challenge_id: str, account_label: str, challenge_type: str) ->
     subject_prefix = {
         "captcha": "CAPTCHA help needed",
         "password": "Password needed",
-        "two_factor": "2FA approval needed",
+        "two_factor": "2FA help needed",
     }[challenge_type]
     if account_label.strip():
         return f"{token} {subject_prefix} for {account_label.strip()}"
@@ -515,6 +692,55 @@ def build_default_action_text(
     return f"Please reply with the {method_description} that is currently required on the attached screen."
 
 
+def summarize_blocked_step(
+    challenge_type: str,
+    account_label: str,
+    two_factor_method: str,
+    verification_destination: str,
+) -> str:
+    label = account_label.strip() or "the target account"
+    if challenge_type == "captcha":
+        return f"CAPTCHA on {label}"
+    if challenge_type == "password":
+        return f"Password entry for {label}"
+    method_description = describe_two_factor_method(two_factor_method, verification_destination)
+    if method_description:
+        return f"2FA for {label} ({method_description})"
+    return f"2FA for {label}"
+
+
+def summarize_required_help(
+    challenge_type: str,
+    account_label: str,
+    two_factor_method: str,
+    verification_destination: str,
+    page_state: str,
+    browser_handoff_url: str,
+) -> str:
+    label = account_label.strip() or "the target account"
+    method_description = describe_two_factor_method(two_factor_method, verification_destination)
+    live_browser_available = bool(browser_handoff_url.strip())
+
+    if challenge_type == "captcha":
+        if live_browser_available:
+            return "Open the real browser page and solve the CAPTCHA."
+        return "Reply with the CAPTCHA text or instructions to enter."
+
+    if challenge_type == "password":
+        if live_browser_available:
+            return f"Open the real browser page and enter the password for {label}."
+        return f"Reply with the password for {label}."
+
+    if page_state == "waiting_for_device_approval":
+        if live_browser_available:
+            return 'Open the real browser page, approve the sign-in, then reply "done".'
+        return 'Approve the sign-in, then reply "done".'
+
+    if live_browser_available:
+        return f"Open the real browser page and enter the required {method_description}."
+    return f"Reply with the required {method_description}."
+
+
 def build_text_body(state: Dict[str, Any]) -> str:
     challenge_id = str(state["challenge_id"])
     account_label = str(state.get("account_label", ""))
@@ -526,30 +752,36 @@ def build_text_body(state: Dict[str, Any]) -> str:
     page_state = str(state.get("page_state", ""))
     two_factor_method = str(state.get("two_factor_method", ""))
     verification_destination = str(state.get("verification_destination", ""))
-    password_env_key = str(state.get("password_env_key", ""))
-    password_lookup_status = str(state.get("password_lookup_status", ""))
     screenshots = state.get("request_attachments") or []
+    browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
+    blocked_on = summarize_blocked_step(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+    )
+    required_help = summarize_required_help(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+        page_state,
+        browser_handoff_url,
+    )
 
-    lines = [
-        "DoWhiz agent needs your help to continue a blocked authentication step.",
-        "",
-        f"Challenge ID: {challenge_id}",
-        f"Challenge type: {humanize_challenge_type(challenge_type)}",
-        f"Scope: {scope}",
-    ]
-    if account_label.strip():
-        lines.append(f"Account context: {account_label.strip()}")
-    if page_state:
-        lines.append(f"Current browser state: {humanize_page_state(page_state)}")
-    if challenge_type == "two_factor":
-        lines.append(
-            f"Verification method: {describe_two_factor_method(two_factor_method, verification_destination)}"
+    lines = ["DoWhiz is blocked on sign-in.", ""]
+    if browser_handoff_url:
+        lines.extend(
+            [
+                f"Open the real browser page: {browser_handoff_url}",
+                "This opens the exact page where the agent is stuck.",
+                "",
+            ]
         )
-    if challenge_type == "password":
-        if password_env_key:
-            lines.append(f"Password env key checked: {password_env_key}")
-        if password_lookup_status:
-            lines.append(f"Password lookup status: {password_lookup_status}")
+    lines.append(f"Blocked on: {blocked_on}")
+    lines.append(f"Help needed: {required_help}")
+    if page_state:
+        lines.append(f"Current page: {humanize_page_state(page_state)}")
     if screenshots:
         screenshot_names = ", ".join(
             str(item.get("name", "")).strip()
@@ -557,28 +789,116 @@ def build_text_body(state: Dict[str, Any]) -> str:
             if str(item.get("name", "")).strip()
         )
         lines.append(
-            f"Attached screenshot(s): {screenshot_names or f'{len(screenshots)} file(s)'}"
+            f"Screenshot attached: {screenshot_names or f'{len(screenshots)} file(s)'}"
         )
-    if action_text.strip():
-        lines.append(f"Action needed: {action_text.strip()}")
     if context.strip():
         lines.extend(["", "Additional context:", context.strip()])
     lines.extend(
         [
             "",
-            "Please reply in this same email thread with the exact information",
-            "the current browser screen needs so the agent can continue.",
-            "",
-            f"The agent will wait for up to {timeout_minutes} minutes.",
-            "It will not continue until a reply is received.",
+            (
+                "After you finish in the real browser page, reply \"done\" in this email thread so the agent can continue."
+                if browser_handoff_url
+                else "Reply in this email thread with the exact code, password, or instructions the agent needs."
+            ),
+            f"Wait window: up to {timeout_minutes} minutes.",
+            f"Reference: {challenge_id}",
         ]
     )
     return "\n".join(lines)
 
 
-def build_html_body(text_body: str) -> str:
-    escaped = escape(text_body).replace("\n", "<br>")
-    return f"<html><body><p>{escaped}</p></body></html>"
+def build_html_body(state: Dict[str, Any], text_body: str) -> str:
+    browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
+    challenge_id = str(state["challenge_id"])
+    account_label = str(state.get("account_label", ""))
+    timeout_minutes = int(state.get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES))
+    context = str(state.get("context", "")).strip()
+    challenge_type = str(state.get("challenge_type", ""))
+    page_state = str(state.get("page_state", ""))
+    two_factor_method = str(state.get("two_factor_method", ""))
+    verification_destination = str(state.get("verification_destination", ""))
+    screenshots = state.get("request_attachments") or []
+    blocked_on = summarize_blocked_step(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+    )
+    required_help = summarize_required_help(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+        page_state,
+        browser_handoff_url,
+    )
+    button_html = ""
+    if browser_handoff_url:
+        button_html = (
+            '<p style="margin:0 0 12px 0;">'
+            f'<a href="{escape(browser_handoff_url, quote=True)}" '
+            'style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;'
+            'text-decoration:none;border-radius:8px;font-weight:600;">'
+            "Open the real browser page"
+            "</a>"
+            "</p>"
+            '<p style="margin:0 0 16px 0;color:#4b5563;">This opens the exact browser page where the agent is stuck.</p>'
+        )
+    details: List[str] = []
+    if page_state:
+        details.append(
+            f'<p style="margin:0 0 8px 0;"><strong>Current page:</strong> {escape(humanize_page_state(page_state))}</p>'
+        )
+    if screenshots:
+        screenshot_names = ", ".join(
+            str(item.get("name", "")).strip()
+            for item in screenshots
+            if str(item.get("name", "")).strip()
+        )
+        details.append(
+            f'<p style="margin:0;"><strong>Screenshot attached:</strong> {escape(screenshot_names or f"{len(screenshots)} file(s)")}</p>'
+        )
+    details_html = ""
+    if details:
+        details_html = (
+            '<div style="margin:0 0 16px 0;padding:14px 16px;border:1px solid #e5e7eb;'
+            'border-radius:12px;background:#ffffff;">'
+            + "".join(details)
+            + "</div>"
+        )
+    context_html = ""
+    if context:
+        context_html = (
+            '<div style="margin:0 0 16px 0;padding:14px 16px;border:1px solid #e5e7eb;'
+            'border-radius:12px;background:#ffffff;">'
+            '<p style="margin:0 0 8px 0;"><strong>Additional context:</strong></p>'
+            f'<p style="margin:0;color:#374151;white-space:pre-line;">{escape(context)}</p>'
+            "</div>"
+        )
+    reply_instruction = (
+        'After you finish in the real browser page, reply "done" in this email thread so the agent can continue.'
+        if browser_handoff_url
+        else "Reply in this email thread with the exact code, password, or instructions the agent needs."
+    )
+    return (
+        "<html><body style=\"margin:0;padding:24px;font-family:Arial,sans-serif;color:#111827;"
+        "line-height:1.5;background:#f3f4f6;\">"
+        "<div style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:16px;"
+        "padding:24px;border:1px solid #e5e7eb;\">"
+        f"{button_html}"
+        "<p style=\"margin:0 0 16px 0;font-size:18px;font-weight:600;\">DoWhiz is blocked on sign-in.</p>"
+        '<div style="margin:0 0 16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">'
+        f'<p style="margin:0 0 8px 0;"><strong>Blocked on:</strong> {escape(blocked_on)}</p>'
+        f'<p style="margin:0;"><strong>Help needed:</strong> {escape(required_help)}</p>'
+        "</div>"
+        f"{details_html}"
+        f"{context_html}"
+        f'<p style="margin:0 0 8px 0;color:#374151;">{escape(reply_instruction)}</p>'
+        f'<p style="margin:0 0 4px 0;color:#374151;"><strong>Wait window:</strong> up to {timeout_minutes} minutes.</p>'
+        f'<p style="margin:0;color:#6b7280;font-size:12px;">Reference: {escape(challenge_id)}</p>'
+        "</div></body></html>"
+    )
 
 
 def send_approval_email(
@@ -690,6 +1010,15 @@ def build_reply_payload(details: Dict[str, Any], message_id: str, received_at: O
     }
 
 
+def extract_inbound_messages(search_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    messages = search_response.get("InboundMessages")
+    if not isinstance(messages, list):
+        messages = search_response.get("Messages")
+    if not isinstance(messages, list):
+        return []
+    return [message for message in messages if isinstance(message, dict)]
+
+
 def poll_for_reply_once(
     *,
     api_base: str,
@@ -716,11 +1045,20 @@ def poll_for_reply_once(
         query["recipient"] = recipient_filter
 
     search_response = http_json_request("GET", api_base, token, "/messages/inbound", query=query)
-    messages = search_response.get("InboundMessages")
-    if not isinstance(messages, list):
-        messages = search_response.get("Messages")
-    if not isinstance(messages, list):
-        messages = []
+    messages = extract_inbound_messages(search_response)
+    if recipient_filter and not messages:
+        # Postmark inbound replies often land on the server alias address rather than the
+        # human-facing Reply-To mailbox, so retry without recipient narrowing before giving up.
+        query_without_recipient = dict(query)
+        query_without_recipient.pop("recipient", None)
+        search_response = http_json_request(
+            "GET",
+            api_base,
+            token,
+            "/messages/inbound",
+            query=query_without_recipient,
+        )
+        messages = extract_inbound_messages(search_response)
 
     seen = set(challenge.get("seen_inbound_message_ids", []))
     new_seen: List[str] = []
@@ -844,6 +1182,9 @@ def build_send_event_payload(state: Dict[str, Any]) -> Dict[str, Any]:
         "password_lookup_status": state.get("password_lookup_status"),
         "attachment_count": len(state.get("request_attachments") or []),
         "attachments": state.get("request_attachments") or [],
+        "browser_handoff_url": state.get("browser_handoff_url"),
+        "browser_session_id": state.get("browser_session_id"),
+        "browser_page_id": state.get("browser_page_id"),
         "outbound_message_id": state.get("outbound_message_id"),
         "outbound_dry_run": state.get("outbound_dry_run"),
         "created_at": state.get("created_at"),
@@ -941,11 +1282,14 @@ def build_request_state(args: argparse.Namespace) -> Dict[str, Any]:
         "outbound_dry_run": bool(args.dry_run),
         "message_stream": "outbound",
     }
+    handoff = build_browser_handoff_details(challenge_id, state["expires_at"])
+    if handoff:
+        state.update(handoff)
     text_body = build_text_body(state)
     state["_rendered_email"] = {
         "subject": state["subject"],
         "text_body": text_body,
-        "html_body": build_html_body(text_body),
+        "html_body": build_html_body(state, text_body),
         "attachments": postmark_attachments,
     }
     return state

@@ -8,7 +8,10 @@ use mongodb::options::FindOptions;
 use mongodb::options::IndexOptions;
 use mongodb::sync::Collection;
 use mongodb::IndexModel;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use tracing::{error, info, warn};
 
 use crate::mongo_store::{create_client_from_env, database_from_env, ensure_index_compatible};
 
@@ -20,6 +23,29 @@ pub struct SlackInstallation {
     pub bot_token: String,
     pub bot_user_id: String,
     pub installed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlackRuntimeCredentialSource {
+    StoredInstallation,
+    EmployeeEnv,
+    GlobalEnv,
+}
+
+impl SlackRuntimeCredentialSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            SlackRuntimeCredentialSource::StoredInstallation => "stored_installation",
+            SlackRuntimeCredentialSource::EmployeeEnv => "employee_env",
+            SlackRuntimeCredentialSource::GlobalEnv => "global_env",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSlackInstallation {
+    pub installation: SlackInstallation,
+    pub source: SlackRuntimeCredentialSource,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,23 +100,8 @@ impl SlackStore {
         &self,
         team_id: &str,
     ) -> Result<SlackInstallation, SlackStoreError> {
-        match self.get_installation(team_id) {
-            Ok(installation) => Ok(installation),
-            Err(SlackStoreError::NotFound(_)) => {
-                let bot_token = std::env::var("SLACK_BOT_TOKEN")
-                    .map_err(|_| SlackStoreError::NotFound(team_id.to_string()))?;
-                let bot_user_id = std::env::var("SLACK_BOT_USER_ID").unwrap_or_default();
-
-                Ok(SlackInstallation {
-                    team_id: team_id.to_string(),
-                    team_name: None,
-                    bot_token,
-                    bot_user_id,
-                    installed_at: Utc::now(),
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.resolve_installation_for_runtime(Some(team_id), None)
+            .ok_or_else(|| SlackStoreError::NotFound(team_id.to_string()))
     }
 
     /// Delete an installation (e.g., when app is uninstalled).
@@ -101,6 +112,89 @@ impl SlackStore {
     /// List all installations.
     pub fn list_installations(&self) -> Result<Vec<SlackInstallation>, SlackStoreError> {
         self.mongo.list_installations()
+    }
+
+    /// Resolve the Slack installation for a runtime message flow.
+    ///
+    /// Resolution order:
+    /// 1. Stored installation by Slack team ID
+    /// 2. Per-employee env credentials
+    /// 3. Global env credentials, but only when there is no team-scoped routing context
+    pub fn resolve_installation_for_runtime(
+        &self,
+        team_id: Option<&str>,
+        employee_id: Option<&str>,
+    ) -> Option<SlackInstallation> {
+        self.resolve_installation_for_runtime_details(team_id, employee_id)
+            .map(|resolved| resolved.installation)
+    }
+
+    pub fn resolve_installation_for_runtime_details(
+        &self,
+        team_id: Option<&str>,
+        employee_id: Option<&str>,
+    ) -> Option<ResolvedSlackInstallation> {
+        let normalized_team_id = normalize_optional_value(team_id);
+        let normalized_employee_id = normalize_optional_value(employee_id);
+
+        if let Some(team_id) = normalized_team_id.as_deref() {
+            match self.get_installation(team_id) {
+                Ok(installation) => {
+                    return Some(ResolvedSlackInstallation {
+                        installation,
+                        source: SlackRuntimeCredentialSource::StoredInstallation,
+                    });
+                }
+                Err(SlackStoreError::NotFound(_)) => {}
+                Err(err) => warn!(
+                    "failed to load Slack installation for team {} from store: {}",
+                    team_id, err
+                ),
+            }
+
+            if let Some(resolved) = installation_from_employee_env_details(
+                normalized_employee_id.as_deref(),
+                Some(team_id),
+            ) {
+                emit_slack_routing_fallback_alert_once(
+                    resolved.source,
+                    normalized_employee_id.as_deref(),
+                    Some(team_id),
+                    "team-scoped Slack routing is using employee env credentials because no stored installation was found",
+                );
+                return Some(resolved);
+            }
+
+            if installation_from_global_env(Some(team_id)).is_some() {
+                emit_slack_global_fallback_blocked_alert_once(
+                    normalized_employee_id.as_deref(),
+                    Some(team_id),
+                    "refusing global Slack bot token for team-scoped routing",
+                );
+            }
+
+            return None;
+        }
+
+        installation_from_employee_env_details(normalized_employee_id.as_deref(), None)
+            .inspect(|resolved| {
+                emit_slack_routing_fallback_alert_once(
+                    resolved.source,
+                    normalized_employee_id.as_deref(),
+                    None,
+                    "Slack routing metadata is missing a team_id; using employee env credentials",
+                );
+            })
+            .or_else(|| {
+                installation_from_global_env_details(None).inspect(|resolved| {
+                    emit_slack_routing_fallback_alert_once(
+                        resolved.source,
+                        normalized_employee_id.as_deref(),
+                        None,
+                        "Slack routing metadata is missing a team_id; using global env credentials",
+                    );
+                })
+            })
     }
 }
 
@@ -224,11 +318,287 @@ fn parse_datetime(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
 }
 
+fn normalize_optional_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+fn env_var_trimmed(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn installation_from_employee_env(
+    employee_id: Option<&str>,
+    team_id: Option<&str>,
+) -> Option<SlackInstallation> {
+    let employee_id = normalize_optional_value(employee_id)?;
+    let prefix = employee_id.to_uppercase().replace('-', "_");
+    let token_key = format!("{prefix}_SLACK_BOT_TOKEN");
+    let bot_token = env_var_trimmed(&token_key)?;
+    let bot_user_id = env_var_trimmed(&format!("{prefix}_SLACK_BOT_USER_ID")).unwrap_or_default();
+    Some(SlackInstallation {
+        team_id: normalize_optional_value(team_id).unwrap_or_default(),
+        team_name: None,
+        bot_token,
+        bot_user_id,
+        installed_at: Utc::now(),
+    })
+}
+
+fn installation_from_employee_env_details(
+    employee_id: Option<&str>,
+    team_id: Option<&str>,
+) -> Option<ResolvedSlackInstallation> {
+    installation_from_employee_env(employee_id, team_id).map(|installation| {
+        ResolvedSlackInstallation {
+            installation,
+            source: SlackRuntimeCredentialSource::EmployeeEnv,
+        }
+    })
+}
+
+fn installation_from_global_env(team_id: Option<&str>) -> Option<SlackInstallation> {
+    let bot_token = env_var_trimmed("SLACK_BOT_TOKEN")?;
+    let bot_user_id = env_var_trimmed("SLACK_BOT_USER_ID").unwrap_or_default();
+    Some(SlackInstallation {
+        team_id: normalize_optional_value(team_id).unwrap_or_default(),
+        team_name: None,
+        bot_token,
+        bot_user_id,
+        installed_at: Utc::now(),
+    })
+}
+
+fn installation_from_global_env_details(
+    team_id: Option<&str>,
+) -> Option<ResolvedSlackInstallation> {
+    installation_from_global_env(team_id).map(|installation| ResolvedSlackInstallation {
+        installation,
+        source: SlackRuntimeCredentialSource::GlobalEnv,
+    })
+}
+
+static SLACK_STORE: OnceLock<Option<Arc<SlackStore>>> = OnceLock::new();
+
+fn alerted_slack_routing_keys() -> &'static Mutex<HashSet<String>> {
+    static KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    KEYS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn emit_slack_routing_fallback_alert_once(
+    source: SlackRuntimeCredentialSource,
+    employee_id: Option<&str>,
+    team_id: Option<&str>,
+    reason: &str,
+) {
+    let key = format!(
+        "fallback:{}:{}:{}",
+        source.as_str(),
+        employee_id.unwrap_or_default(),
+        team_id.unwrap_or_default()
+    );
+    let mut keys = alerted_slack_routing_keys()
+        .lock()
+        .expect("slack routing alert mutex poisoned");
+    if !keys.insert(key) {
+        return;
+    }
+    warn!(
+        "SLACK_ROUTING_FALLBACK: source={} employee_id={} team_id={} reason={}",
+        source.as_str(),
+        employee_id.unwrap_or_default(),
+        team_id.unwrap_or_default(),
+        reason
+    );
+}
+
+fn emit_slack_global_fallback_blocked_alert_once(
+    employee_id: Option<&str>,
+    team_id: Option<&str>,
+    reason: &str,
+) {
+    let key = format!(
+        "blocked_global:{}:{}",
+        employee_id.unwrap_or_default(),
+        team_id.unwrap_or_default()
+    );
+    let mut keys = alerted_slack_routing_keys()
+        .lock()
+        .expect("slack routing alert mutex poisoned");
+    if !keys.insert(key) {
+        return;
+    }
+    error!(
+        "SLACK_ROUTING_ALERT: kind=global_env_fallback_blocked employee_id={} team_id={} reason={}",
+        employee_id.unwrap_or_default(),
+        team_id.unwrap_or_default(),
+        reason
+    );
+}
+
+/// Get or initialize the global SlackStore (returns None if not configured).
+pub fn get_global_slack_store() -> Option<Arc<SlackStore>> {
+    SLACK_STORE
+        .get_or_init(|| {
+            let path = std::env::var("SLACK_STORE_PATH").unwrap_or_default();
+            match SlackStore::new(path) {
+                Ok(store) => {
+                    info!("SlackStore initialized for runtime token resolution");
+                    Some(Arc::new(store))
+                }
+                Err(err) => {
+                    info!(
+                        "SlackStore not available ({}), Slack runtime resolution falling back to env",
+                        err
+                    );
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+pub fn resolve_slack_installation_for_runtime(
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
+) -> Option<SlackInstallation> {
+    resolve_slack_installation_for_runtime_details(team_id, employee_id)
+        .map(|resolved| resolved.installation)
+}
+
+pub fn resolve_slack_installation_for_runtime_details(
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
+) -> Option<ResolvedSlackInstallation> {
+    if let Some(store) = get_global_slack_store() {
+        return store.resolve_installation_for_runtime_details(team_id, employee_id);
+    }
+
+    let normalized_team_id = normalize_optional_value(team_id);
+    let normalized_employee_id = normalize_optional_value(employee_id);
+
+    if let Some(team_id) = normalized_team_id.as_deref() {
+        if let Some(resolved) =
+            installation_from_employee_env_details(normalized_employee_id.as_deref(), Some(team_id))
+        {
+            emit_slack_routing_fallback_alert_once(
+                resolved.source,
+                normalized_employee_id.as_deref(),
+                Some(team_id),
+                "SlackStore is unavailable; using employee env credentials for team-scoped routing",
+            );
+            return Some(resolved);
+        }
+
+        if installation_from_global_env(Some(team_id)).is_some() {
+            emit_slack_global_fallback_blocked_alert_once(
+                normalized_employee_id.as_deref(),
+                Some(team_id),
+                "SlackStore is unavailable; refusing global Slack bot token for team-scoped routing",
+            );
+        }
+
+        return None;
+    }
+
+    installation_from_employee_env_details(normalized_employee_id.as_deref(), None)
+        .inspect(|resolved| {
+            emit_slack_routing_fallback_alert_once(
+                resolved.source,
+                normalized_employee_id.as_deref(),
+                None,
+                "SlackStore is unavailable and team_id is missing; using employee env credentials",
+            );
+        })
+        .or_else(|| {
+            installation_from_global_env_details(None).inspect(|resolved| {
+                emit_slack_routing_fallback_alert_once(
+                    resolved.source,
+                    normalized_employee_id.as_deref(),
+                    None,
+                    "SlackStore is unavailable and team_id is missing; using global env credentials",
+                );
+            })
+        })
+}
+
+pub fn resolve_slack_bot_token_for_runtime(
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
+) -> Option<String> {
+    resolve_slack_installation_for_runtime(team_id, employee_id)
+        .map(|installation| installation.bot_token)
+}
+
+pub fn resolve_slack_bot_user_id_for_runtime(
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
+) -> Option<String> {
+    resolve_slack_installation_for_runtime(team_id, employee_id)
+        .map(|installation| installation.bot_user_id)
+        .filter(|value| !value.trim().is_empty())
+}
+
+pub fn emit_slack_channel_not_found_alert(
+    context: &str,
+    employee_id: Option<&str>,
+    team_id: Option<&str>,
+    channel_id: Option<&str>,
+) {
+    error!(
+        "SLACK_CHANNEL_NOT_FOUND_ALERT: context={} employee_id={} team_id={} channel_id={}",
+        context,
+        employee_id.unwrap_or_default(),
+        team_id.unwrap_or_default(),
+        channel_id.unwrap_or_default(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+
+        fn clear(key: &'static str) -> Self {
+            let original = env::var(key).ok();
+            env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     fn test_store() -> (TempDir, SlackStore) {
         let temp = TempDir::new().expect("tempdir");
@@ -344,5 +714,81 @@ mod tests {
         for team_id in team_ids {
             assert!(ids.contains(&team_id));
         }
+    }
+
+    #[test]
+    fn resolve_installation_for_runtime_prefers_store_team_over_env() {
+        let _env_guard = env_lock().lock().expect("env lock");
+        let (_temp, store) = test_store();
+        let team_id = unique_team_id("T12345");
+        let _employee_token = EnvGuard::set("LITTLE_BEAR_SLACK_BOT_TOKEN", "xoxb-env-token");
+        let _employee_user = EnvGuard::set("LITTLE_BEAR_SLACK_BOT_USER_ID", "UENV");
+        let _global_token = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-global-token");
+        let _global_user = EnvGuard::set("SLACK_BOT_USER_ID", "UGLOBAL");
+
+        let installation = SlackInstallation {
+            team_id: team_id.clone(),
+            team_name: Some("Store Workspace".to_string()),
+            bot_token: "xoxb-store-token".to_string(),
+            bot_user_id: "USTORE".to_string(),
+            installed_at: Utc::now(),
+        };
+        store.upsert_installation(&installation).expect("upsert");
+
+        let resolved = store
+            .resolve_installation_for_runtime(Some(&team_id), Some("little_bear"))
+            .expect("resolved installation");
+        assert_eq!(resolved.bot_token, "xoxb-store-token");
+        assert_eq!(resolved.bot_user_id, "USTORE");
+        assert_eq!(resolved.team_id, team_id);
+    }
+
+    #[test]
+    fn resolve_installation_for_runtime_falls_back_to_employee_env() {
+        let _env_guard = env_lock().lock().expect("env lock");
+        let (_temp, store) = test_store();
+        let team_id = unique_team_id("TMISSING");
+        let _employee_token = EnvGuard::set("LITTLE_BEAR_SLACK_BOT_TOKEN", "xoxb-employee-token");
+        let _employee_user = EnvGuard::set("LITTLE_BEAR_SLACK_BOT_USER_ID", "UEMP");
+        let _global_token = EnvGuard::clear("SLACK_BOT_TOKEN");
+        let _global_user = EnvGuard::clear("SLACK_BOT_USER_ID");
+
+        let resolved = store
+            .resolve_installation_for_runtime(Some(&team_id), Some("little_bear"))
+            .expect("resolved installation");
+        assert_eq!(resolved.bot_token, "xoxb-employee-token");
+        assert_eq!(resolved.bot_user_id, "UEMP");
+        assert_eq!(resolved.team_id, team_id);
+    }
+
+    #[test]
+    fn resolve_installation_for_runtime_blocks_global_env_when_team_id_is_present() {
+        let _env_guard = env_lock().lock().expect("env lock");
+        let (_temp, store) = test_store();
+        let team_id = unique_team_id("TMISSING");
+        let _employee_token = EnvGuard::clear("LITTLE_BEAR_SLACK_BOT_TOKEN");
+        let _employee_user = EnvGuard::clear("LITTLE_BEAR_SLACK_BOT_USER_ID");
+        let _global_token = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-global-token");
+        let _global_user = EnvGuard::set("SLACK_BOT_USER_ID", "UGLOBAL");
+
+        let resolved = store.resolve_installation_for_runtime(Some(&team_id), Some("little_bear"));
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_installation_for_runtime_falls_back_to_global_env_without_team_context() {
+        let _env_guard = env_lock().lock().expect("env lock");
+        let (_temp, store) = test_store();
+        let _employee_token = EnvGuard::clear("LITTLE_BEAR_SLACK_BOT_TOKEN");
+        let _employee_user = EnvGuard::clear("LITTLE_BEAR_SLACK_BOT_USER_ID");
+        let _global_token = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-global-token");
+        let _global_user = EnvGuard::set("SLACK_BOT_USER_ID", "UGLOBAL");
+
+        let resolved = store
+            .resolve_installation_for_runtime(None, Some("little_bear"))
+            .expect("resolved installation");
+        assert_eq!(resolved.bot_token, "xoxb-global-token");
+        assert_eq!(resolved.bot_user_id, "UGLOBAL");
+        assert!(resolved.team_id.is_empty());
     }
 }

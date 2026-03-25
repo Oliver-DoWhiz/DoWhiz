@@ -595,7 +595,8 @@ fn is_internal_sender(task: &RunTaskTask) -> bool {
         | Channel::Sms
         | Channel::WhatsApp
         | Channel::BlueBubbles
-        | Channel::WeChat => {
+        | Channel::WeChat
+        | Channel::Lark => {
             let sender = match task.reply_to.first() {
                 Some(value) => normalize_identity_token(value),
                 None => return false,
@@ -910,7 +911,8 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
         | Channel::WhatsApp
         | Channel::Sms
         | Channel::Notion
-        | Channel::WeChat => ("reply_message.txt", "reply_attachments"),
+        | Channel::WeChat
+        | Channel::Lark => ("reply_message.txt", "reply_attachments"),
         Channel::Email | Channel::GoogleDocs | Channel::GoogleSheets | Channel::GoogleSlides => {
             ("reply_email_draft.html", "reply_email_attachments")
         }
@@ -979,7 +981,8 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
             | Channel::WhatsApp
             | Channel::Sms
             | Channel::Notion
-            | Channel::WeChat => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::WeChat
+            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1018,6 +1021,7 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
                 thread_epoch: task.thread_epoch,
                 thread_state_path: task.thread_state_path.clone(),
                 employee_id: task.employee_id.clone(),
+                channel_metadata: task.normalized_channel_metadata(),
             };
 
             let ack_task_id =
@@ -1044,6 +1048,7 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
         thread_epoch: task.thread_epoch,
         thread_state_path: task.thread_state_path.clone(),
         employee_id: task.employee_id.clone(),
+        channel_metadata: task.normalized_channel_metadata(),
     };
 
     let task_id =
@@ -1068,6 +1073,7 @@ fn format_channel_name(channel: &Channel) -> &'static str {
         Channel::WhatsApp => "WhatsApp",
         Channel::BlueBubbles => "iMessage",
         Channel::WeChat => "WeChat",
+        Channel::Lark => "Lark",
         Channel::GoogleDocs => "Google Docs",
         Channel::GoogleSheets => "Google Sheets",
         Channel::GoogleSlides => "Google Slides",
@@ -1168,6 +1174,7 @@ pub(crate) fn schedule_send_email<E: TaskExecutor>(
         thread_epoch: task.thread_epoch,
         thread_state_path: task.thread_state_path.clone(),
         employee_id: task.employee_id.clone(),
+        channel_metadata: task.normalized_channel_metadata(),
     };
 
     if let Some(run_at_raw) = request.run_at.as_deref() {
@@ -1400,7 +1407,13 @@ fn resolve_rel_path(root: &Path, raw: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn parse_channel_valid_channels() {
@@ -1499,7 +1512,8 @@ mod tests {
             | Channel::WhatsApp
             | Channel::Sms
             | Channel::Notion
-            | Channel::WeChat => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::WeChat
+            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1520,7 +1534,8 @@ mod tests {
             | Channel::WhatsApp
             | Channel::Sms
             | Channel::Notion
-            | Channel::WeChat => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::WeChat
+            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1593,6 +1608,7 @@ mod tests {
 
     #[test]
     fn resolve_employee_primary_email_returns_first_address() {
+        let _lock = env_lock().lock().expect("env lock");
         let temp = TempDir::new().expect("tempdir");
         let config_path = temp.path().join("employee.toml");
 
@@ -1615,6 +1631,7 @@ addresses = ["primary@example.com", "secondary@example.com"]
 
     #[test]
     fn resolve_employee_primary_email_returns_none_for_unknown_employee() {
+        let _lock = env_lock().lock().expect("env lock");
         let temp = TempDir::new().expect("tempdir");
         let config_path = temp.path().join("employee.toml");
 
@@ -1635,6 +1652,7 @@ addresses = ["known@example.com"]
 
     #[test]
     fn resolve_employee_primary_email_with_multiple_employees() {
+        let _lock = env_lock().lock().expect("env lock");
         let temp = TempDir::new().expect("tempdir");
         let config_path = temp.path().join("employee.toml");
 
@@ -1686,6 +1704,7 @@ addresses = ["proto@dowhiz.com", "boiled-egg@dowhiz.com"]
             requester_identifier_type: None,
             requester_identifier: None,
             account_id: None,
+            channel_metadata: Default::default(),
         }
     }
 
@@ -1885,7 +1904,8 @@ addresses = ["proto@dowhiz.com", "boiled-egg@dowhiz.com"]
             | Channel::Telegram
             | Channel::WhatsApp
             | Channel::Sms
-            | Channel::WeChat => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::WeChat
+            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1946,7 +1966,8 @@ addresses = ["proto@dowhiz.com", "boiled-egg@dowhiz.com"]
             | Channel::Telegram
             | Channel::WhatsApp
             | Channel::Sms
-            | Channel::WeChat => ("reply_message.txt", "reply_attachments"),
+            | Channel::WeChat
+            | Channel::Lark => ("reply_message.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets

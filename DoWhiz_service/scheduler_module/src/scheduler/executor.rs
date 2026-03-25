@@ -23,8 +23,11 @@ use crate::memory_store::{
     sync_user_memory_to_workspace,
 };
 use crate::secrets_store::{
-    resolve_user_secrets_path, sync_user_secrets_to_workspace, sync_workspace_secrets_to_user,
+    resolve_user_browserbase_state_dir, resolve_user_secrets_path,
+    sync_user_browserbase_state_to_workspace, sync_user_secrets_to_workspace,
+    sync_workspace_browserbase_state_to_user, sync_workspace_secrets_to_user,
 };
+use crate::slack_store::{emit_slack_channel_not_found_alert, resolve_slack_bot_token_for_runtime};
 use crate::thread_state::{current_thread_epoch, find_thread_state_path};
 use crate::user_store::lookup_user_id_by_identifier;
 use run_task_module::UserIdentities;
@@ -80,8 +83,8 @@ fn sync_blob_memo_to_workspace(account_id: Uuid, workspace_memory_dir: &Path) ->
 
 use super::outbound::{
     execute_bluebubbles_send, execute_discord_send, execute_email_send, execute_google_docs_send,
-    execute_notion_send, execute_slack_send, execute_sms_send, execute_telegram_send,
-    execute_wechat_send, execute_whatsapp_send,
+    execute_lark_send, execute_notion_send, execute_slack_send, execute_sms_send,
+    execute_telegram_send, execute_wechat_send, execute_whatsapp_send,
 };
 use super::types::{SchedulerError, SendReplyTask, TaskExecution, TaskKind};
 use super::utils::load_google_access_token_from_service_env;
@@ -155,6 +158,31 @@ fn run_task_dedupe_key(task: &super::types::RunTaskTask) -> String {
         thread_id,
         thread_epoch
     )
+}
+
+fn run_task_supersede_reason(task: &super::types::RunTaskTask) -> Option<String> {
+    let expected_epoch = task.thread_epoch?;
+    let state_path = task
+        .thread_state_path
+        .clone()
+        .unwrap_or_else(|| task.workspace_dir.join("thread_state.json"));
+    let current_epoch = current_thread_epoch(&state_path)?;
+    if current_epoch > expected_epoch {
+        Some(format!(
+            "thread superseded by a newer follow-up (expected epoch {}, current epoch {})",
+            expected_epoch, current_epoch
+        ))
+    } else {
+        None
+    }
+}
+
+fn superseded_task_execution(reason: impl Into<String>) -> TaskExecution {
+    let mut execution = TaskExecution::empty();
+    execution.skip_auto_reply = true;
+    execution.superseded = true;
+    execution.terminal_note = Some(reason.into());
+    execution
 }
 
 fn track_scheduler_event(
@@ -545,6 +573,9 @@ fn dispatch_send_reply_task(task: &SendReplyTask) -> Result<(), SchedulerError> 
         Channel::WeChat => {
             execute_wechat_send(task)?;
         }
+        Channel::Lark => {
+            execute_lark_send(task)?;
+        }
         Channel::Email => {
             execute_email_send(task)?;
         }
@@ -592,6 +623,7 @@ fn send_insufficient_balance_notice(
         thread_epoch: task.thread_epoch,
         thread_state_path: task.thread_state_path.clone(),
         employee_id: task.employee_id.clone(),
+        channel_metadata: task.normalized_channel_metadata(),
     };
 
     dispatch_send_reply_task(&send_task)?;
@@ -618,23 +650,6 @@ fn resolve_discord_bot_token_for_employee(employee_id: Option<&str>) -> Option<S
     }
 
     std::env::var("DISCORD_BOT_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn resolve_slack_bot_token_for_employee(employee_id: Option<&str>) -> Option<String> {
-    if let Some(emp_id) = employee_id {
-        let emp_upper = emp_id.to_uppercase().replace('-', "_");
-        let emp_token_key = format!("{}_SLACK_BOT_TOKEN", emp_upper);
-        if let Ok(token) = std::env::var(&emp_token_key) {
-            if !token.trim().is_empty() {
-                return Some(token);
-            }
-        }
-    }
-
-    std::env::var("SLACK_BOT_TOKEN")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -710,7 +725,11 @@ fn post_slack_working_placeholder(task: &super::types::RunTaskTask) {
     let Some((channel_id, thread_ts)) = slack_channel_and_thread(task) else {
         return;
     };
-    let Some(bot_token) = resolve_slack_bot_token_for_employee(task.employee_id.as_deref()) else {
+    let task_metadata = task.normalized_channel_metadata();
+    let Some(bot_token) = resolve_slack_bot_token_for_runtime(
+        task_metadata.slack_team_id.as_deref(),
+        task.employee_id.as_deref(),
+    ) else {
         return;
     };
 
@@ -763,6 +782,14 @@ fn post_slack_working_placeholder(task: &super::types::RunTaskTask) {
         }
     };
     if !status.is_success() {
+        if body.contains("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "working_placeholder_http",
+                task.employee_id.as_deref(),
+                task_metadata.slack_team_id.as_deref(),
+                Some(&channel_id),
+            );
+        }
         warn!(
             "slack working placeholder failed for employee={} channel={} status={} body={}",
             task.employee_id.as_deref().unwrap_or_default(),
@@ -794,6 +821,14 @@ fn post_slack_working_placeholder(task: &super::types::RunTaskTask) {
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
     if !ok || message_ts.is_none() {
+        if payload.get("error").and_then(|value| value.as_str()) == Some("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "working_placeholder_api",
+                task.employee_id.as_deref(),
+                task_metadata.slack_team_id.as_deref(),
+                Some(&channel_id),
+            );
+        }
         warn!(
             "slack working placeholder API error for employee={} channel={} error={}",
             task.employee_id.as_deref().unwrap_or_default(),
@@ -876,7 +911,11 @@ fn delete_slack_working_placeholder_before_send(task: &SendReplyTask) {
         clear_slack_placeholder_marker(&marker_path);
         return;
     };
-    let Some(bot_token) = resolve_slack_bot_token_for_employee(task.employee_id.as_deref()) else {
+    let metadata = task.normalized_channel_metadata();
+    let Some(bot_token) = resolve_slack_bot_token_for_runtime(
+        metadata.slack_team_id.as_deref(),
+        task.employee_id.as_deref(),
+    ) else {
         return;
     };
 
@@ -920,6 +959,14 @@ fn delete_slack_working_placeholder_before_send(task: &SendReplyTask) {
         }
     };
     if !status.is_success() {
+        if body.contains("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "delete_working_placeholder_http",
+                task.employee_id.as_deref(),
+                metadata.slack_team_id.as_deref(),
+                Some(&channel_id),
+            );
+        }
         warn!(
             "slack delete placeholder failed for {} status={} body={}",
             task.html_path.display(),
@@ -943,6 +990,14 @@ fn delete_slack_working_placeholder_before_send(task: &SendReplyTask) {
 
     let ok = payload.get("ok").and_then(|value| value.as_bool()) == Some(true);
     let error = payload.get("error").and_then(|value| value.as_str());
+    if error == Some("channel_not_found") {
+        emit_slack_channel_not_found_alert(
+            "delete_working_placeholder_api",
+            task.employee_id.as_deref(),
+            metadata.slack_team_id.as_deref(),
+            Some(&channel_id),
+        );
+    }
     if ok || matches!(error, Some("message_not_found")) {
         clear_slack_placeholder_marker(&marker_path);
     } else {
@@ -1077,6 +1132,14 @@ impl TaskExecutor for ModuleExecutor {
                 Ok(TaskExecution::empty())
             }
             TaskKind::RunTask(task) => {
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip superseded run_task before execution in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
+                }
                 let github_inbound = load_github_inbound_context(task);
                 let account_id =
                     resolve_account_for_run_task(task, github_inbound.sender_login.as_deref());
@@ -1146,6 +1209,7 @@ impl TaskExecutor for ModuleExecutor {
                 let workspace_memory_dir = task.workspace_dir.join(&task.memory_dir);
                 let user_memory_dir = resolve_user_memory_dir(task);
                 let user_secrets_path = resolve_user_secrets_path(task);
+                let user_browserbase_state_dir = resolve_user_browserbase_state_dir(task);
                 let _typing_heartbeat = DiscordTypingHeartbeat::start(task);
                 post_slack_working_placeholder(task);
 
@@ -1243,6 +1307,47 @@ impl TaskExecutor for ModuleExecutor {
                         task.workspace_dir.display()
                     );
                 }
+                if let Some(user_browserbase_state_dir) = user_browserbase_state_dir.as_ref() {
+                    sync_user_browserbase_state_to_workspace(
+                        user_browserbase_state_dir,
+                        &task.workspace_dir,
+                    )
+                    .map_err(|err| {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!(
+                                    "task_failed:{}:browserbase_sync_to_workspace",
+                                    task_dedupe_key
+                                )),
+                                task,
+                                json!({
+                                    "error_reason": "browserbase_sync_to_workspace_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        SchedulerError::TaskFailed(format!(
+                            "browserbase state sync failed: {}",
+                            err
+                        ))
+                    })?;
+                } else {
+                    warn!(
+                        "unable to resolve user browserbase state for workspace {}",
+                        task.workspace_dir.display()
+                    );
+                }
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip superseded run_task before agent launch in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
+                }
                 let user_identities = fetch_user_identities(account_id);
                 let params = run_task_module::RunTaskParams {
                     workspace_dir: task.workspace_dir.clone(),
@@ -1258,23 +1363,36 @@ impl TaskExecutor for ModuleExecutor {
                     google_access_token: load_google_access_token_from_service_env(),
                     has_unified_account: account_id.is_some(),
                     user_identities,
+                    thread_epoch: task.thread_epoch,
+                    thread_state_path: task.thread_state_path.clone(),
                 };
-                let output = run_task_module::run_task(&params).map_err(|err| {
-                    if let Some(account_id) = account_id {
-                        track_scheduler_event(
-                            "task_failed",
-                            account_id,
-                            Some(format!("task_failed:{}:run_task", task_dedupe_key)),
-                            task,
-                            json!({
-                                "error_reason": "run_task_failed",
-                                "error": err.to_string(),
-                                "channel": task.channel.to_string(),
-                            }),
+                let output = match run_task_module::run_task(&params) {
+                    Ok(output) => output,
+                    Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                        info!(
+                            "run_task superseded while executing in {}: {}",
+                            task.workspace_dir.display(),
+                            reason
                         );
+                        return Ok(superseded_task_execution(reason));
                     }
-                    SchedulerError::TaskFailed(err.to_string())
-                })?;
+                    Err(err) => {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!("task_failed:{}:run_task", task_dedupe_key)),
+                                task,
+                                json!({
+                                    "error_reason": "run_task_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        return Err(SchedulerError::TaskFailed(err.to_string()));
+                    }
+                };
 
                 // Track token usage for accounts
                 if let Some(account_id) = account_id {
@@ -1297,6 +1415,14 @@ impl TaskExecutor for ModuleExecutor {
                             }
                         }
                     }
+                }
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip stale post-run side effects in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
                 }
 
                 // After task completes, compute diff and submit to queue instead of direct sync
@@ -1374,6 +1500,34 @@ impl TaskExecutor for ModuleExecutor {
                             SchedulerError::TaskFailed(format!("secrets sync failed: {}", err))
                         })?;
                 }
+                if let Some(user_browserbase_state_dir) = user_browserbase_state_dir.as_ref() {
+                    sync_workspace_browserbase_state_to_user(
+                        &task.workspace_dir,
+                        user_browserbase_state_dir,
+                    )
+                    .map_err(|err| {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!(
+                                    "task_failed:{}:browserbase_sync_to_user",
+                                    task_dedupe_key
+                                )),
+                                task,
+                                json!({
+                                    "error_reason": "browserbase_sync_to_user_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        SchedulerError::TaskFailed(format!(
+                            "browserbase state sync failed: {}",
+                            err
+                        ))
+                    })?;
+                }
                 if let Some(account_id) = account_id {
                     track_task_success_markers(account_id, task, &task_dedupe_key);
                 }
@@ -1383,6 +1537,8 @@ impl TaskExecutor for ModuleExecutor {
                     scheduler_actions: output.scheduler_actions,
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
+                    superseded: false,
+                    terminal_note: None,
                 })
             }
             TaskKind::Noop => Ok(TaskExecution::empty()),
@@ -1421,6 +1577,7 @@ mod tests {
             requester_identifier_type: None,
             requester_identifier: None,
             account_id: None,
+            channel_metadata: Default::default(),
         }
     }
 
@@ -1446,6 +1603,7 @@ mod tests {
             requester_identifier_type: None,
             requester_identifier: None,
             account_id: None,
+            channel_metadata: Default::default(),
         }
     }
 
@@ -1603,6 +1761,7 @@ mod tests {
             thread_epoch: None,
             thread_state_path: Some(workspace.join("thread_state.json")),
             employee_id: Some("little_bear".to_string()),
+            channel_metadata: Default::default(),
         };
 
         let found = find_slack_placeholder_marker(&send_task).expect("marker found");

@@ -10,14 +10,16 @@ use crate::adapters::google_common::GoogleCommentsClient;
 use crate::adapters::telegram::send_quick_telegram_response;
 use crate::adapters::wechat::WeChatOutboundAdapter;
 use crate::adapters::whatsapp::send_quick_whatsapp_response;
-use crate::channel::OutboundMessage;
 use crate::blob_store::get_blob_store;
 use crate::channel::Channel;
+use crate::channel::OutboundMessage;
 use crate::google_auth::{GoogleAuth, GoogleAuthConfig};
 use crate::memory_diff::{MemoryDiff, SectionChange};
 use crate::memory_queue::{global_memory_queue, MemoryWriteRequest};
 use crate::message_router::{MessageRouter, RouterDecision};
-use crate::slack_store::SlackStore;
+use crate::slack_store::{
+    emit_slack_channel_not_found_alert, SlackRuntimeCredentialSource, SlackStore,
+};
 use crate::user_store::UserStore;
 use uuid::Uuid;
 
@@ -425,7 +427,12 @@ pub(crate) fn try_quick_response_slack(
                 let thread_ts = Some(message.thread_id.as_str());
                 if runtime
                     .block_on(send_quick_slack_response(
-                        &token, channel_id, thread_ts, &response,
+                        &token,
+                        channel_id,
+                        message.metadata.slack_team_id.as_deref(),
+                        Some(&config.employee_profile.id),
+                        thread_ts,
+                        &response,
                     ))
                     .is_ok()
                 {
@@ -457,30 +464,28 @@ fn resolve_slack_bot_token(
     slack_store: &SlackStore,
     team_id: Option<&str>,
 ) -> Option<String> {
-    // First, try per-employee token (e.g., LITTLE_BEAR_SLACK_BOT_TOKEN)
-    let emp_upper = config.employee_profile.id.to_uppercase().replace('-', "_");
-    let emp_token_key = format!("{}_SLACK_BOT_TOKEN", emp_upper);
-    if let Ok(token) = std::env::var(&emp_token_key) {
-        if !token.trim().is_empty() {
-            info!(
-                "quick response using {} for employee {}",
-                emp_token_key, config.employee_profile.id
-            );
-            return Some(token);
-        }
-    }
-
-    // Then try slack_store by team_id
-    if let Some(team_id) = team_id {
-        if let Ok(installation) = slack_store.get_installation_or_env(team_id) {
-            if !installation.bot_token.trim().is_empty() {
-                return Some(installation.bot_token);
+    if let Some(resolved) = slack_store
+        .resolve_installation_for_runtime_details(team_id, Some(&config.employee_profile.id))
+    {
+        if !resolved.installation.bot_token.trim().is_empty() {
+            match resolved.source {
+                SlackRuntimeCredentialSource::StoredInstallation => info!(
+                    "quick response using Slack installation for employee {} team {}",
+                    config.employee_profile.id, resolved.installation.team_id
+                ),
+                SlackRuntimeCredentialSource::EmployeeEnv => info!(
+                    "quick response using employee Slack env credentials for employee {} team {}",
+                    config.employee_profile.id, resolved.installation.team_id
+                ),
+                SlackRuntimeCredentialSource::GlobalEnv => info!(
+                    "quick response using global Slack env credentials for employee {}",
+                    config.employee_profile.id
+                ),
             }
+            return Some(resolved.installation.bot_token);
         }
     }
-
-    // Fall back to global SLACK_BOT_TOKEN
-    config.slack_bot_token.clone()
+    None
 }
 
 fn resolve_discord_bot_token(config: &ServiceConfig) -> Option<String> {
@@ -742,6 +747,8 @@ pub(crate) fn try_quick_response_telegram(
 async fn send_quick_slack_response(
     bot_token: &str,
     channel: &str,
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
     thread_ts: Option<&str>,
     response_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -772,6 +779,14 @@ async fn send_quick_slack_response(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if body.contains("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "quick_response_http",
+                employee_id,
+                team_id,
+                Some(channel),
+            );
+        }
         return Err(format!("Slack API returned {}: {}", status, body).into());
     }
 
@@ -785,6 +800,14 @@ async fn send_quick_slack_response(
             .get("error")
             .and_then(|e| e.as_str())
             .unwrap_or("unknown error");
+        if error == "channel_not_found" {
+            emit_slack_channel_not_found_alert(
+                "quick_response_api",
+                employee_id,
+                team_id,
+                Some(channel),
+            );
+        }
         return Err(format!("Slack API error: {}", error).into());
     }
 
@@ -948,12 +971,8 @@ pub(crate) fn try_quick_response_google_workspace(
     let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
 
     let employee_name = config.employee_profile.display_name.as_deref();
-    let decision = runtime.block_on(message_router.classify(
-        text,
-        memory.as_deref(),
-        employee_name,
-        None,
-    ));
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
 
     match decision {
         RouterDecision::Simple {
@@ -1029,12 +1048,8 @@ pub(crate) fn try_quick_response_wechat(
     let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
 
     let employee_name = config.employee_profile.display_name.as_deref();
-    let decision = runtime.block_on(message_router.classify(
-        text,
-        memory.as_deref(),
-        employee_name,
-        None,
-    ));
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
 
     match decision {
         RouterDecision::Simple {
@@ -1089,6 +1104,95 @@ fn send_quick_wechat_response(user_id: &str, response: &str) -> Result<(), BoxEr
 
     if !result.success {
         return Err(format!("WeChat send failed: {:?}", result.error).into());
+    }
+
+    Ok(())
+}
+
+/// Try to handle a Lark message with the upstream classifier.
+/// Returns Ok(true) if the message was handled, Ok(false) if it should go to the full pipeline.
+pub(crate) fn try_quick_response_lark(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message_router: &MessageRouter,
+    runtime: &tokio::runtime::Handle,
+    message: &crate::channel::InboundMessage,
+) -> Result<bool, BoxError> {
+    let Some(text) = message.text_body.as_deref() else {
+        return Ok(false);
+    };
+
+    // Lark user ID is the sender (open_id)
+    let open_id = &message.sender;
+
+    // Look up unified account first, fall back to legacy user_store
+    let account_id = lookup_account_by_channel(&Channel::Lark, open_id);
+    let user = user_store.get_or_create_user("lark", open_id)?;
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
+
+    let employee_name = config.employee_profile.display_name.as_deref();
+    let decision =
+        runtime.block_on(message_router.classify(text, memory.as_deref(), employee_name, None));
+
+    match decision {
+        RouterDecision::Simple {
+            response,
+            memory_update,
+        } => {
+            // Write memory update if present
+            if let Some(update) = memory_update {
+                if let Err(e) =
+                    write_memory_update(account_id, &user.user_id, &user_paths.memory_dir, &update)
+                {
+                    warn!("Failed to write memory update: {}", e);
+                } else if let Some(aid) = account_id {
+                    info!("Updated memory for unified account {}", aid);
+                } else {
+                    info!("Updated memory for legacy user {}", user.user_id);
+                }
+            }
+
+            // Send quick response via Lark API
+            if send_quick_lark_response(open_id, &response).is_ok() {
+                info!("lark quick response sent: open_id={}", open_id);
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        RouterDecision::Complex | RouterDecision::Passthrough => Ok(false),
+    }
+}
+
+/// Send a quick response to a Lark user.
+fn send_quick_lark_response(open_id: &str, response: &str) -> Result<(), BoxError> {
+    use crate::adapters::lark::LarkOutboundAdapter;
+    use crate::channel::{ChannelMetadata, OutboundAdapter};
+
+    let adapter = LarkOutboundAdapter::from_env()
+        .map_err(|e| format!("Failed to create Lark adapter: {}", e))?;
+
+    let message = OutboundMessage {
+        channel: Channel::Lark,
+        from: None,
+        to: vec![open_id.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: String::new(),
+        text_body: response.to_string(),
+        html_body: String::new(),
+        html_path: None,
+        attachments_dir: None,
+        thread_id: None,
+        metadata: ChannelMetadata::default(),
+    };
+
+    let result = adapter
+        .send(&message)
+        .map_err(|e| format!("Failed to send Lark message: {}", e))?;
+
+    if !result.success {
+        return Err(format!("Lark send failed: {:?}", result.error).into());
     }
 
     Ok(())
@@ -1338,11 +1442,8 @@ mod tests {
 
     #[test]
     fn google_docs_message_has_correct_metadata() {
-        let message = build_google_docs_message(
-            Some("doc-123"),
-            Some("comment-456"),
-            Some("Hello!"),
-        );
+        let message =
+            build_google_docs_message(Some("doc-123"), Some("comment-456"), Some("Hello!"));
 
         assert_eq!(message.channel, Channel::GoogleDocs);
         assert_eq!(
@@ -1459,10 +1560,7 @@ mod tests {
         assert_eq!(message.channel, Channel::WeChat);
         assert_eq!(message.sender, "user123");
         assert_eq!(message.text_body, Some("Hello!".to_string()));
-        assert_eq!(
-            message.metadata.wechat_corp_id,
-            Some("corp456".to_string())
-        );
+        assert_eq!(message.metadata.wechat_corp_id, Some("corp456".to_string()));
     }
 
     #[test]

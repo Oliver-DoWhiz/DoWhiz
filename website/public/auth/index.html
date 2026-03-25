@@ -1738,12 +1738,19 @@
                           </svg>
                           Connect Notion
                         </button>
+                        <button id="lark-oauth-btn" class="auth-btn auth-btn-oauth" style="display: flex; align-items: center; gap: 0.5rem;">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                          </svg>
+                          Connect Lark
+                        </button>
                       </div>
                       <div class="settings-status-stack">
                         <span id="discord-oauth-status"></span>
                         <span id="slack-oauth-status"></span>
                         <span id="github-connect-status"></span>
                         <span id="notion-oauth-status"></span>
+                        <span id="lark-oauth-status"></span>
                       </div>
                     </div>
 
@@ -2072,7 +2079,8 @@
         discord: 'discord-oauth-btn',
         github: 'github-connect-btn',
         notion: 'notion-oauth-btn',
-        slack: 'slack-oauth-btn'
+        slack: 'slack-oauth-btn',
+        lark: 'lark-oauth-btn'
       };
       const RECOMMENDATION_SECTION_LABELS = {
         'section-channels': 'Open Channels',
@@ -3351,6 +3359,14 @@
           identifierType: 'notion',
           channelKey: 'notion',
           oauthButtonId: 'notion-oauth-btn'
+        },
+        {
+          id: 'connect-lark',
+          title: 'Connect Lark',
+          description: 'Link your Lark (Feishu) account for team collaboration.',
+          identifierType: 'lark',
+          channelKey: 'lark',
+          oauthButtonId: 'lark-oauth-btn'
         }
       ];
 
@@ -4667,6 +4683,56 @@
           const reason = urlParams.get('reason') || 'unknown error';
           notionStatus.textContent = `Failed to connect Notion: ${reason}`;
           notionStatus.style.color = '#ef4444';
+        }
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+
+      // Lark OAuth button
+      document.getElementById('lark-oauth-btn').addEventListener('click', async () => {
+        const larkStatus = document.getElementById('lark-oauth-status');
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!session) {
+          larkStatus.textContent = 'Please sign in first';
+          larkStatus.style.color = '#ef4444';
+          return;
+        }
+
+        larkStatus.textContent = 'Redirecting to Lark...';
+        larkStatus.style.color = 'var(--text-muted, #888)';
+
+        try {
+          const res = await fetch(`${DOWHIZ_API_URL}/auth/lark`, {
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
+          });
+
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Failed to start Lark OAuth');
+          }
+
+          const data = await res.json();
+          // Redirect to Lark OAuth page
+          window.location.href = data.redirect_url;
+        } catch (err) {
+          console.error('Lark OAuth error:', err);
+          larkStatus.textContent = `Error: ${err.message}`;
+          larkStatus.style.color = '#ef4444';
+        }
+      });
+
+      // Check for Lark OAuth callback result
+      const larkResult = urlParams.get('lark');
+      if (larkResult) {
+        const larkStatus = document.getElementById('lark-oauth-status');
+        if (larkResult === 'success') {
+          larkStatus.textContent = 'Lark connected successfully!';
+          larkStatus.style.color = '#22c55e';
+        } else if (larkResult === 'error') {
+          const reason = urlParams.get('reason') || 'unknown error';
+          larkStatus.textContent = `Failed to connect Lark: ${reason}`;
+          larkStatus.style.color = '#ef4444';
         }
         // Clean up URL
         window.history.replaceState({}, document.title, window.location.pathname);

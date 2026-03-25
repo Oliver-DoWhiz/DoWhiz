@@ -97,6 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             google_access_token: None,
             has_unified_account: false,
             user_identities: Default::default(),
+            thread_epoch: None,
+            thread_state_path: None,
         });
     }
 

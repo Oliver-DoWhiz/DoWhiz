@@ -1370,6 +1370,7 @@ mod tests {
                 requester_identifier_type: Some("email".to_string()),
                 requester_identifier: Some("user@example.com".to_string()),
                 account_id: None,
+                channel_metadata: Default::default(),
             }),
             schedule: Schedule::OneShot { run_at: Utc::now() },
             enabled: true,

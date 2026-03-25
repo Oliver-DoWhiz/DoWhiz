@@ -38,7 +38,9 @@ pub(crate) fn process_slack_event(
     // Look up bot_user_id from SlackStore (with fallback to env var)
     let team_id = wrapper.team_id.as_deref().unwrap_or("");
     let mut bot_user_ids = HashSet::new();
-    if let Ok(installation) = slack_store.get_installation_or_env(team_id) {
+    if let Some(installation) = slack_store
+        .resolve_installation_for_runtime(Some(team_id), Some(&config.employee_profile.id))
+    {
         if !installation.bot_user_id.is_empty() {
             bot_user_ids.insert(installation.bot_user_id);
         }
@@ -154,6 +156,7 @@ pub(crate) fn process_slack_event(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: message.metadata.clone(),
     };
 
     // Clone run_task before consuming it, in case we need to write to account-level storage

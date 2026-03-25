@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,6 +11,35 @@ const DEFAULT_SCHEDULER_TASK_TIMEOUT_SECS: u64 = 600;
 const DEFAULT_RUN_TASK_TIMEOUT_SECS: u64 = 36000;
 const WATCHDOG_HEADROOM_SECS: u64 = 30;
 const MIN_RUN_TASK_TIMEOUT_SECS: u64 = 30;
+
+#[derive(Debug, Clone)]
+pub(super) struct ThreadSupersedeMonitor {
+    thread_state_path: PathBuf,
+    expected_epoch: u64,
+}
+
+impl ThreadSupersedeMonitor {
+    pub(super) fn new(thread_state_path: &Path, expected_epoch: u64) -> Self {
+        Self {
+            thread_state_path: thread_state_path.to_path_buf(),
+            expected_epoch,
+        }
+    }
+
+    pub(super) fn supersede_reason(&self) -> Option<String> {
+        let current_epoch = current_thread_epoch(&self.thread_state_path)?;
+        if current_epoch > self.expected_epoch {
+            Some(format!(
+                "thread superseded by newer follow-up (expected epoch {}, current epoch {}, state_path={})",
+                self.expected_epoch,
+                current_epoch,
+                self.thread_state_path.display()
+            ))
+        } else {
+            None
+        }
+    }
+}
 
 pub(super) fn tail_string(input: &str, max_len: usize) -> String {
     let trimmed = input.trim();
@@ -72,9 +102,18 @@ fn spawn_pipe_drainer<R: Read + Send + 'static>(
 }
 
 pub(super) fn run_command_with_timeout(
+    cmd: Command,
+    timeout: Duration,
+    label: &'static str,
+) -> Result<Output, RunTaskError> {
+    run_command_with_timeout_and_cancel(cmd, timeout, label, None)
+}
+
+pub(super) fn run_command_with_timeout_and_cancel(
     mut cmd: Command,
     timeout: Duration,
     label: &'static str,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<Output, RunTaskError> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(RunTaskError::Io)?;
@@ -97,7 +136,16 @@ pub(super) fn run_command_with_timeout(
     // Poll for exit or timeout
     let status: ExitStatus;
     let timed_out;
+    let mut cancel_reason: Option<String> = None;
     loop {
+        if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
+            let _ = child.kill();
+            status = child.wait().map_err(RunTaskError::Io)?;
+            timed_out = false;
+            cancel_reason = Some(reason);
+            break;
+        }
+
         if let Some(s) = child.try_wait().map_err(RunTaskError::Io)? {
             status = s;
             timed_out = false;
@@ -132,6 +180,16 @@ pub(super) fn run_command_with_timeout(
         Err(arc) => arc.lock().map(|g| g.clone()).unwrap_or_default(),
     };
 
+    if let Some(reason) = cancel_reason {
+        let mut combined = String::new();
+        combined.push_str(&String::from_utf8_lossy(&stdout));
+        combined.push_str(&String::from_utf8_lossy(&stderr));
+        return Err(RunTaskError::Canceled {
+            reason,
+            output: tail_string(&combined, 2000),
+        });
+    }
+
     if timed_out {
         let mut combined = String::new();
         combined.push_str(&String::from_utf8_lossy(&stdout));
@@ -150,10 +208,19 @@ pub(super) fn run_command_with_timeout(
     })
 }
 
+pub(super) fn current_thread_epoch(path: &Path) -> Option<u64> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    payload.get("epoch")?.as_u64()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::process::Command;
     use std::sync::Mutex;
+    use tempfile::TempDir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -250,5 +317,51 @@ mod tests {
         ];
 
         assert_eq!(run_task_timeout(), Duration::from_secs(36000));
+    }
+
+    #[test]
+    fn run_command_with_timeout_and_cancel_stops_when_thread_epoch_advances() {
+        let temp = TempDir::new().expect("tempdir");
+        let thread_state_path = temp.path().join("thread_state.json");
+        fs::write(
+            &thread_state_path,
+            r#"{"thread_id":"thread-1","epoch":1,"last_email_seq":1,"last_message_id":null,"updated_at":"2026-03-25T00:00:00Z"}"#,
+        )
+        .expect("write thread state");
+        let state_path_for_update = thread_state_path.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            fs::write(
+                &state_path_for_update,
+                r#"{"thread_id":"thread-1","epoch":2,"last_email_seq":2,"last_message_id":null,"updated_at":"2026-03-25T00:00:01Z"}"#,
+            )
+            .expect("update thread state");
+        });
+
+        let monitor = ThreadSupersedeMonitor::new(&thread_state_path, 1);
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30");
+
+        let err = run_command_with_timeout_and_cancel(
+            cmd,
+            Duration::from_secs(5),
+            "sleep",
+            Some(&monitor),
+        )
+        .expect_err("command should be canceled");
+
+        match err {
+            RunTaskError::Canceled { reason, .. } => {
+                assert!(
+                    reason.contains("expected epoch 1"),
+                    "reason should include the expected epoch: {reason}"
+                );
+                assert!(
+                    reason.contains("current epoch 2"),
+                    "reason should include the new epoch: {reason}"
+                );
+            }
+            other => panic!("expected canceled error, got {other:?}"),
+        }
     }
 }

@@ -68,6 +68,9 @@ pub(super) fn build_prompt(
             "wechat" => {
                 "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Do not use HTML or markdown. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
             }
+            "lark" | "feishu" => {
+                "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Lark supports basic markdown: **bold**, *italic*, ~~strikethrough~~, `code`. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
+            }
             "notion" => {
                 r#"2. After finishing the task (step one), you MUST reply directly to the Notion comment using the Notion API CLI.
 
@@ -151,9 +154,12 @@ You main goal is
 {reply_instruction}
 
 Inputs (relative to workspace root):
-- Incoming email dir: {input_email} (email.html, postmark_payload.json, thread_history.md, entries/)
+- Incoming email dir: {input_email} (latest raw payload plus `thread_request.md`, `thread_history.md`, and `entries/`)
+- `incoming_email/thread_request.md` is the canonical merged request for reruns after follow-up messages. Latest follow-up wins if it conflicts with older instructions.
+- `incoming_email/thread_history.md` maps the full thread history and raw source files.
 - For incoming email, all previous emails in current thread: /incoming_email/entries/
 - Incoming attachments dir: {input_attachments}
+- `incoming_attachments/` is the merged attachment view across the whole active thread. Historical per-message copies remain under `incoming_attachments/entries/`.
 - Memory dir (memory about the current user): {memory}
 - Reference dir (contain all past emails with the current user): {reference}
 
@@ -262,7 +268,8 @@ fn build_web_auth_capabilities_section() -> &'static str {
   - The CLI tool explicitly fails and browser is the only option.
 - For plain HTTP fetches of public content, prefer `curl` or similar over browser automation.
 - Complete sign-in only through the active browser session when needed.
-- Do not assume pre-bootstrapped auth state exists in the workspace.
+- If Browserbase-backed browser sessions are configured, `playwright-cli` may reconnect to a persistent remote browser context from `.secrets/browserbase`. Still verify the actual page before assuming you are already signed in.
+- During login, MFA, CAPTCHA, or other approval blockers, keep the flow in a single browser tab whenever possible so a live browser handoff can reopen the same stuck page. Avoid opening extra tabs until authentication is complete.
 - If browser launch fails before sign-in:
   - If error says Chrome is missing, retry with:
     - `export PLAYWRIGHT_MCP_EXECUTABLE_PATH=/opt/google/chrome/chrome`
@@ -291,6 +298,7 @@ fn build_human_approval_gate_section() -> &'static str {
 - If the requested login still cannot proceed because required credential/challenge input is missing after trying known safe identifiers, request it through `human_approval_gate` instead of guessing.
 - Inside run_task/Codex environments, do NOT use the shell CLI `human_approval_gate` or split request/wait steps yourself. Use only the MCP tool `dowhiz_human_approval_gate_request_and_wait`, which blocks this Codex turn until reply or timeout.
 - Every `dowhiz_human_approval_gate_request_and_wait` call must attach the current browser screenshot path(s) and must describe the current state honestly. Never claim a code was sent unless the page actually shows that it was sent and is waiting.
+- If the HAG email includes a live browser handoff link, the human may complete the blocker directly inside that live browser. While waiting, do not keep clicking around or open new tabs in the blocked session.
 - HAG sends still write `.human_approval_gate/events.jsonl` and emit a `HAG_EVENT ...` stderr line that includes challenge type plus attachment filenames and sizes. Use those records for debugging instead of guessing.
 - Primary flow:
   1) Take the current browser screenshot(s)
@@ -993,6 +1001,8 @@ mod tests {
             discord_user_ids: vec!["987654321".to_string()],
             phone_numbers: vec!["+15551234567".to_string()],
             telegram_user_ids: vec!["12345678".to_string()],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![],
         };
         let section = build_user_identities_section(&identities);
@@ -1078,6 +1088,8 @@ mod tests {
         assert!(prompt.contains("SKILL.md"));
         assert!(prompt.contains("/app/.cache/ms-playwright/*/chrome-linux*/chrome"));
         assert!(prompt.contains("Never include raw credentials"));
+        assert!(prompt.contains("persistent remote browser context"));
+        assert!(prompt.contains("single browser tab"));
     }
 
     #[test]
@@ -1115,6 +1127,7 @@ mod tests {
         assert!(prompt.contains("waiting_for_code_input"));
         assert!(prompt.contains("waiting_for_device_approval"));
         assert!(prompt.contains("Never claim a code was sent"));
+        assert!(prompt.contains("live browser handoff link"));
         assert!(prompt.contains(".human_approval_gate/events.jsonl"));
         assert!(prompt.contains("HAG_EVENT"));
         assert!(prompt.contains("status is `replied`"));
@@ -1209,6 +1222,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![],
         };
 
@@ -1245,6 +1260,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![user_uuid.to_string()],
         };
 
@@ -1286,6 +1303,8 @@ mod tests {
             discord_user_ids: vec!["987654321012345678".to_string()],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![
                 email_uuid.to_string(),
                 slack_uuid.to_string(),
@@ -1327,6 +1346,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec![], // Empty even though account exists
         };
 
@@ -1459,6 +1480,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec!["uuid-email-alice".to_string()],
         };
 
@@ -1498,6 +1521,8 @@ mod tests {
             discord_user_ids: vec!["123456789012345678".to_string()],
             phone_numbers: vec!["+15551234567".to_string()],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             // Each channel has its own filesystem user directory
             allowed_user_ids: vec![
                 "uuid-email-bob".to_string(),
@@ -1551,6 +1576,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             // In production, identifiers_to_user_identities deduplicates
             // So if email and slack both map to same user_id, only one entry
             allowed_user_ids: vec!["uuid-charlie-shared".to_string()],
@@ -1590,6 +1617,8 @@ mod tests {
             discord_user_ids: vec![],
             phone_numbers: vec![],
             telegram_user_ids: vec![],
+            lark_user_ids: vec![],
+            wechat_user_ids: vec![],
             allowed_user_ids: vec!["uuid-email-dave".to_string(), "uuid-slack-dave".to_string()],
         };
 

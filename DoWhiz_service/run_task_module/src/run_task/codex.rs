@@ -11,6 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use super::browserbase::{
+    collect_browserbase_env_overrides, BrowserbaseSessionCleanupGuard,
+    BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY, BROWSERBASE_STATE_DIR_ENV_KEY,
+    BROWSER_HANDOFF_BASE_URL_ENV_KEY, BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY,
+};
 use super::constants::{
     CODEX_CONFIG_BASE_URL_PLACEHOLDER, CODEX_CONFIG_BLOCK_TEMPLATE, CODEX_CONFIG_MARKER,
     CODEX_MODEL_NAME, CODEX_SANDBOX_MODE, DOCKER_CODEX_HOME_DIR, DOCKER_WORKSPACE_DIR,
@@ -25,7 +30,10 @@ use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
-use super::utils::{run_command_with_timeout, run_task_timeout, tail_string};
+use super::utils::{
+    run_command_with_timeout, run_command_with_timeout_and_cancel, run_task_timeout, tail_string,
+    ThreadSupersedeMonitor,
+};
 use super::workspace::{canonicalize_dir, workspace_path_in_container};
 
 const PAYMENT_ENV_KEYS: &[&str] = &[
@@ -57,6 +65,10 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
     "HUMAN_APPROVAL_FROM",
     "HUMAN_APPROVAL_REPLY_TO",
     "POSTMARK_API_BASE_URL",
+    BROWSERBASE_STATE_DIR_ENV_KEY,
+    BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY,
+    BROWSER_HANDOFF_BASE_URL_ENV_KEY,
+    BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY,
 ];
 const HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY: &str = "HUMAN_APPROVAL_GATE_REQUIRE_MCP";
 const HUMAN_APPROVAL_GATE_MCP_SERVER_NAME: &str = "human-approval-gate";
@@ -198,6 +210,13 @@ struct AzureAciExecutionArtifacts {
     container_state: String,
     container_logs: String,
     container_show_json: Option<String>,
+    remote_artifact_completion: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AciPollState {
+    container_state: String,
+    remote_artifact_completion: bool,
 }
 
 /// Check if cross-channel routing was requested and return the correct expected reply path.
@@ -230,9 +249,8 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
         "email" | "googledocs" | "googlesheets" | "googleslides" => {
             workspace_dir.join("reply_email_draft.html")
         }
-        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" => {
-            workspace_dir.join("reply_message.txt")
-        }
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" => workspace_dir.join("reply_message.txt"),
         "notion" => {
             // Notion agent posts directly via API and creates .notion_api_replied marker
             workspace_dir.join(".notion_api_replied")
@@ -248,6 +266,11 @@ pub(super) fn run_codex_task(
     reply_attachments_dir: PathBuf,
 ) -> Result<RunTaskOutput, RunTaskError> {
     super::env::load_env_sources(request.workspace_dir)?;
+    let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
+    let cancel_monitor = request
+        .thread_epoch
+        .zip(request.thread_state_path)
+        .map(|(epoch, path)| ThreadSupersedeMonitor::new(path, epoch));
     let backend = resolve_execution_backend();
     match backend {
         ExecutionBackend::AzureAci => {
@@ -261,7 +284,13 @@ pub(super) fn run_codex_task(
         }
     }
     if backend == ExecutionBackend::AzureAci {
-        return run_codex_task_azure_aci(request, runner, reply_html_path, reply_attachments_dir);
+        return run_codex_task_azure_aci(
+            request,
+            runner,
+            reply_html_path,
+            reply_attachments_dir,
+            cancel_monitor.as_ref(),
+        );
     }
     ensure_local_execution_allowed()?;
     let docker_image = read_env_trimmed("RUN_TASK_DOCKER_IMAGE");
@@ -344,6 +373,12 @@ pub(super) fn run_codex_task(
             .as_deref()
             .unwrap_or(request.workspace_dir),
     )?;
+    let browserbase_workspace_dir = if use_docker {
+        PathBuf::from(DOCKER_WORKSPACE_DIR)
+    } else {
+        canonicalize_dir(request.workspace_dir)?
+    };
+    let browserbase_env_overrides = collect_browserbase_env_overrides(&browserbase_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -382,6 +417,9 @@ pub(super) fn run_codex_task(
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &google_workspace_cli_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &browserbase_env_overrides {
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &human_approval_gate_env_overrides {
@@ -502,6 +540,9 @@ pub(super) fn run_codex_task(
                 cmd.arg("-e").arg(format!("{}={}", key, value));
             }
         }
+        for (key, value) in &browserbase_env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
         for (key, value) in &human_approval_gate_env_overrides {
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
@@ -553,7 +594,12 @@ pub(super) fn run_codex_task(
             .arg(DOCKER_WORKSPACE_DIR)
             .arg(prompt);
 
-        match run_command_with_timeout(cmd, timeout, "docker run") {
+        match run_command_with_timeout_and_cancel(
+            cmd,
+            timeout,
+            "docker run",
+            cancel_monitor.as_ref(),
+        ) {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
                 let failure = RunTaskError::DockerNotFound;
@@ -632,6 +678,9 @@ pub(super) fn run_codex_task(
         for (key, value) in &google_workspace_cli_env_overrides {
             cmd.env(key, value);
         }
+        for (key, value) in &browserbase_env_overrides {
+            cmd.env(key, value);
+        }
         for (key, value) in &human_approval_gate_env_overrides {
             cmd.env(key, value);
         }
@@ -644,7 +693,7 @@ pub(super) fn run_codex_task(
             cmd.env("GIT_TERMINAL_PROMPT", "0");
         }
 
-        match run_command_with_timeout(cmd, timeout, "codex") {
+        match run_command_with_timeout_and_cancel(cmd, timeout, "codex", cancel_monitor.as_ref()) {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
                 let failure = RunTaskError::CodexNotFound;
@@ -799,7 +848,9 @@ fn run_codex_task_azure_aci(
     runner: &str,
     reply_html_path: PathBuf,
     reply_attachments_dir: PathBuf,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<RunTaskOutput, RunTaskError> {
+    let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let config = load_azure_aci_config()?;
 
     let host_workspace_dir = canonicalize_dir(request.workspace_dir)?;
@@ -843,6 +894,7 @@ fn run_codex_task_azure_aci(
     let bright_data_env_overrides = collect_bright_data_env_overrides();
     let google_workspace_cli_env_overrides =
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
+    let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -934,6 +986,9 @@ fn run_codex_task_azure_aci(
             env_overrides.push((key, value));
         }
     }
+    for (key, value) in browserbase_env_overrides {
+        env_overrides.push((key, value));
+    }
     for (key, value) in human_approval_gate_env_overrides {
         env_overrides.push((key, value));
     }
@@ -957,6 +1012,7 @@ fn run_codex_task_azure_aci(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
+    let env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
 
     let container_name = build_aci_container_name();
     let timeout = run_task_timeout();
@@ -998,11 +1054,13 @@ fn run_codex_task_azure_aci(
         &container_name,
         &container_workspace_dir,
         &add_dirs,
+        &remote_exit_code_path,
         &model_name,
         &sandbox_mode,
         bypass_sandbox,
         &env_overrides,
         timeout,
+        cancel_monitor,
     );
     eprintln!(
         "[run_task] azure_aci delete-request container={} resource_group={}",
@@ -1042,8 +1100,8 @@ fn run_codex_task_azure_aci(
         }
     };
     eprintln!(
-        "[run_task] azure_aci finished container={} state={}",
-        container_name, execution.container_state
+        "[run_task] azure_aci finished container={} state={} remote_artifact_completion={}",
+        container_name, execution.container_state, execution.remote_artifact_completion
     );
     if let Some(show_json) = execution.container_show_json.as_deref() {
         let _ = trace.record_text("aci/container_show.json", show_json);
@@ -1070,12 +1128,13 @@ fn run_codex_task_azure_aci(
     let token_usage = extract_token_usage(&combined_output);
     let output_tail = tail_string(&combined_output, 4000);
 
-    if execution.container_state != "Succeeded" || exit_status != Some(0) {
+    if !azure_aci_execution_succeeded(&execution, exit_status) {
         let err = RunTaskError::CodexFailed {
             status: exit_status,
             output: format!(
-                "azure_aci_state={}{}\n{}",
+                "azure_aci_state={} remote_artifact_completion={}{}\n{}",
                 execution.container_state,
+                execution.remote_artifact_completion,
                 match exit_status {
                     Some(code) => format!(" exit_code={code}"),
                     None => String::new(),
@@ -1269,12 +1328,21 @@ fn run_azure_aci_execution(
     container_name: &str,
     container_workspace_dir: &Path,
     add_dirs: &[String],
+    remote_exit_code_path: &Path,
     model_name: &str,
     sandbox_mode: &str,
     bypass_sandbox: bool,
     env_overrides: &[(String, String)],
     timeout: Duration,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<AzureAciExecutionArtifacts, RunTaskError> {
+    if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
+        return Err(RunTaskError::Canceled {
+            reason,
+            output: "superseded before Azure ACI execution started".to_string(),
+        });
+    }
+
     let workspace_sh = shell_quote(&container_workspace_dir.to_string_lossy());
     let output_file = shell_quote(
         &container_workspace_dir
@@ -1425,23 +1493,56 @@ exit \"$status\"\n",
         });
     }
     let poll_timeout = timeout.saturating_sub(elapsed_after_create);
-    let container_state = poll_aci_state(config, container_name, poll_timeout)?;
+    let poll_state = poll_aci_state(
+        config,
+        container_name,
+        remote_exit_code_path,
+        poll_timeout,
+        cancel_monitor,
+    )?;
     let logs = fetch_aci_logs(config, container_name).unwrap_or_default();
     let container_show_json = fetch_aci_show_json(config, container_name).ok();
     Ok(AzureAciExecutionArtifacts {
-        container_state,
+        container_state: poll_state.container_state,
         container_logs: logs,
         container_show_json,
+        remote_artifact_completion: poll_state.remote_artifact_completion,
     })
 }
 
 fn poll_aci_state(
     config: &AzureAciConfig,
     container_name: &str,
+    remote_exit_code_path: &Path,
     timeout: Duration,
-) -> Result<String, RunTaskError> {
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
+) -> Result<AciPollState, RunTaskError> {
     let start = Instant::now();
+    let mut last_state: Option<String> = None;
     loop {
+        if remote_aci_result_ready(remote_exit_code_path) {
+            return Ok(AciPollState {
+                container_state: last_state
+                    .clone()
+                    .unwrap_or_else(|| "remote_artifact_completion".to_string()),
+                remote_artifact_completion: true,
+            });
+        }
+
+        if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
+            let cleanup_message = match delete_aci_container_with_retry(config, container_name) {
+                Ok(()) => "remote container deleted after supersede".to_string(),
+                Err(err) if is_aci_not_found_error(&err) => {
+                    "remote container already absent after supersede".to_string()
+                }
+                Err(err) => format!("failed to delete remote container after supersede: {}", err),
+            };
+            return Err(RunTaskError::Canceled {
+                reason,
+                output: cleanup_message,
+            });
+        }
+
         let elapsed = start.elapsed();
         if elapsed >= timeout {
             return Err(RunTaskError::CommandTimeout {
@@ -1477,12 +1578,22 @@ fn poll_aci_state(
             });
         }
         let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        last_state = Some(state.clone());
+        if remote_aci_result_ready(remote_exit_code_path) {
+            return Ok(AciPollState {
+                container_state: state,
+                remote_artifact_completion: true,
+            });
+        }
         if state.eq_ignore_ascii_case("Succeeded")
             || state.eq_ignore_ascii_case("Failed")
             || state.eq_ignore_ascii_case("Terminated")
             || state.eq_ignore_ascii_case("Stopped")
         {
-            return Ok(state);
+            return Ok(AciPollState {
+                container_state: state,
+                remote_artifact_completion: false,
+            });
         }
         if start.elapsed() >= timeout {
             return Err(RunTaskError::CommandTimeout {
@@ -1496,6 +1607,19 @@ fn poll_aci_state(
             thread::sleep(sleep_for);
         }
     }
+}
+
+fn remote_aci_result_ready(remote_exit_code_path: &Path) -> bool {
+    remote_exit_code_path.is_file()
+}
+
+fn azure_aci_execution_succeeded(
+    execution: &AzureAciExecutionArtifacts,
+    exit_status: Option<i32>,
+) -> bool {
+    (execution.container_state.eq_ignore_ascii_case("Succeeded")
+        || execution.remote_artifact_completion)
+        && exit_status == Some(0)
 }
 
 fn fetch_aci_logs(config: &AzureAciConfig, container_name: &str) -> Result<String, RunTaskError> {
@@ -1549,9 +1673,10 @@ fn create_aci_container(
     env_overrides: &[(String, String)],
 ) -> Result<(), RunTaskError> {
     let mut create_cmd = build_aci_create_command(config, container_name, create_command);
+    let env_overrides = dedupe_env_overrides_last_wins(env_overrides);
     if !env_overrides.is_empty() {
         create_cmd.arg("--environment-variables");
-        for (key, value) in env_overrides {
+        for (key, value) in &env_overrides {
             create_cmd.arg(format!("{key}={value}"));
         }
     }
@@ -1631,6 +1756,18 @@ fn build_aci_create_command(
             .arg(password);
     }
     create_cmd
+}
+
+fn dedupe_env_overrides_last_wins(env_overrides: &[(String, String)]) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(env_overrides.len());
+    for (key, value) in env_overrides.iter().rev() {
+        if seen.insert(key.clone()) {
+            deduped.push((key.clone(), value.clone()));
+        }
+    }
+    deduped.reverse();
+    deduped
 }
 
 fn cleanup_stale_aci_containers(config: &AzureAciConfig) -> Result<usize, RunTaskError> {
@@ -3593,6 +3730,182 @@ printf '%s\n' "$@" > "$capture_file"
         assert!(args.contains("BRIGHT_DATA_API_KEY=bright-key"));
         assert!(args.contains("BRIGHTDATA_API_KEY=bright-key"));
         assert!(args.contains("BRIGHT_DATA_XIAOHONGSHU_COLLECTOR=collector-123"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_create_aci_container_dedupes_duplicate_env_keys_with_last_value() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let capture_path = temp.path().join("az-args.txt");
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake az");
+        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "stg-rg".to_string(),
+            image: "stg.azurecr.io/dowhiz-service:test".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "storageacct".to_string(),
+            storage_key: "storagekey".to_string(),
+            file_share: "run-task-share".to_string(),
+            host_share_root: PathBuf::from("/host/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+        let env_overrides = vec![
+            (
+                BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY.to_string(),
+                "first-secret".to_string(),
+            ),
+            ("OTHER_KEY".to_string(), "other-value".to_string()),
+            (
+                BROWSER_HANDOFF_SIGNING_SECRET_ENV_KEY.to_string(),
+                "final-secret".to_string(),
+            ),
+        ];
+
+        create_aci_container(
+            &config,
+            "dwz-codex-env-dedupe-test",
+            "/bin/bash -lc 'echo ok'",
+            &env_overrides,
+        )
+        .expect("create container");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert_eq!(
+            args.matches("BROWSER_HANDOFF_SIGNING_SECRET=").count(),
+            1,
+            "expected duplicate env key to be emitted once"
+        );
+        assert!(args.contains("BROWSER_HANDOFF_SIGNING_SECRET=final-secret"));
+        assert!(!args.contains("BROWSER_HANDOFF_SIGNING_SECRET=first-secret"));
+        assert!(args.contains("OTHER_KEY=other-value"));
+    }
+
+    #[test]
+    fn test_dedupe_env_overrides_last_wins_preserves_order() {
+        let env_overrides = vec![
+            ("FIRST".to_string(), "1".to_string()),
+            ("SHARED".to_string(), "old".to_string()),
+            ("SECOND".to_string(), "2".to_string()),
+            ("SHARED".to_string(), "new".to_string()),
+        ];
+
+        let deduped = dedupe_env_overrides_last_wins(&env_overrides);
+
+        assert_eq!(
+            deduped,
+            vec![
+                ("FIRST".to_string(), "1".to_string()),
+                ("SECOND".to_string(), "2".to_string()),
+                ("SHARED".to_string(), "new".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_azure_aci_execution_succeeded_accepts_remote_artifact_completion() {
+        let execution = AzureAciExecutionArtifacts {
+            container_state: "Running".to_string(),
+            container_logs: String::new(),
+            container_show_json: None,
+            remote_artifact_completion: true,
+        };
+
+        assert!(azure_aci_execution_succeeded(&execution, Some(0)));
+        assert!(!azure_aci_execution_succeeded(&execution, Some(1)));
+        assert!(!azure_aci_execution_succeeded(&execution, None));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_poll_aci_state_returns_immediately_when_remote_exit_code_exists() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let capture_path = temp.path().join("az-called.txt");
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            format!(
+                "#!/bin/sh\nset -e\nprintf 'called' > '{}'\nprintf 'Running'\n",
+                capture_path.display()
+            ),
+        )
+        .expect("write fake az");
+        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+
+        let remote_exit_code_path = temp.path().join(REMOTE_EXIT_CODE_FILENAME);
+        fs::write(&remote_exit_code_path, "0").expect("write remote exit code");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let _guards = vec![EnvVarGuard::set("PATH", &path_value)];
+
+        let config = AzureAciConfig {
+            resource_group: "stg-rg".to_string(),
+            image: "stg.azurecr.io/dowhiz-service:test".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "storageacct".to_string(),
+            storage_key: "storagekey".to_string(),
+            file_share: "run-task-share".to_string(),
+            host_share_root: PathBuf::from("/host/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        let poll_state = poll_aci_state(
+            &config,
+            "dwz-codex-test",
+            &remote_exit_code_path,
+            Duration::from_secs(2),
+            None,
+        )
+        .expect("poll state");
+
+        assert_eq!(poll_state.container_state, "remote_artifact_completion");
+        assert!(poll_state.remote_artifact_completion);
+        assert!(
+            !capture_path.exists(),
+            "az should not be queried once the remote exit artifact is already present"
+        );
     }
 
     #[test]

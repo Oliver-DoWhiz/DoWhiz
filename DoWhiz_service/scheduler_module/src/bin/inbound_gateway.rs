@@ -20,10 +20,10 @@ mod verify;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use std::env;
 use std::sync::Arc;
 use tokio::task;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use scheduler_module::account_store::AccountStore;
@@ -36,6 +36,7 @@ use scheduler_module::ingestion_queue::{
 };
 use scheduler_module::service::agent_market::{agent_market_router, AgentMarketState};
 use scheduler_module::service::auth::{auth_router, AuthState};
+use scheduler_module::slack_store::SlackStore;
 
 use config::{
     load_gateway_config, resolve_employee_config_path, resolve_gateway_config_path,
@@ -45,8 +46,8 @@ use discord::spawn_discord_gateway;
 use google_drive_webhook::handle_google_drive_webhook;
 use google_workspace::spawn_google_workspace_poller;
 use handlers::{
-    create_90_day_plan, create_workspace_brief, health, ingest_bluebubbles, ingest_postmark,
-    ingest_slack, ingest_sms, ingest_telegram, ingest_wechat, ingest_whatsapp,
+    create_90_day_plan, create_workspace_brief, health, ingest_bluebubbles, ingest_lark,
+    ingest_postmark, ingest_slack, ingest_sms, ingest_telegram, ingest_wechat, ingest_whatsapp,
     verify_wechat_webhook, verify_whatsapp_webhook,
 };
 use notion_webhook::ingest_notion_webhook;
@@ -160,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let supabase_url = env::var("SUPABASE_PROJECT_URL")
         .unwrap_or_else(|_| "https://resmseutzmwumflevfqw.supabase.co".to_string());
     let blob_store = get_blob_store();
+    let slack_store = Arc::new(SlackStore::new("slack_store")?);
 
     // Discord OAuth config (optional)
     let discord_client_id = env::var("DISCORD_CLIENT_ID").ok();
@@ -181,6 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let notion_client_secret = env::var("NOTION_CLIENT_SECRET").ok();
     let notion_redirect_uri = env::var("NOTION_REDIRECT_URI").ok();
 
+    // Lark OAuth config (optional)
+    let lark_client_id = env::var("LARK_APP_ID").ok();
+    let lark_client_secret = env::var("LARK_APP_SECRET").ok();
+    let lark_redirect_uri = env::var("LARK_REDIRECT_URI").ok();
+
     // Frontend URL for OAuth redirects
     let frontend_url =
         env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
@@ -188,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth_state = AuthState {
         account_store,
         blob_store,
+        slack_store,
         supabase_url,
         discord_client_id,
         discord_client_secret,
@@ -201,6 +209,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         notion_client_id,
         notion_client_secret,
         notion_redirect_uri,
+        lark_client_id,
+        lark_client_secret,
+        lark_redirect_uri,
         frontend_url,
         user_store: None, // Task lookups not available in inbound gateway
         users_root: None,
@@ -218,13 +229,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/whatsapp/webhook", post(ingest_whatsapp))
         .route("/wechat/webhook", get(verify_wechat_webhook))
         .route("/wechat/webhook", post(ingest_wechat))
+        .route("/lark/webhook", post(ingest_lark))
         .route("/webhook/notion", post(ingest_notion_webhook))
         .route(
             "/webhooks/google-drive-changes",
             post(handle_google_drive_webhook),
         )
         .route("/api/workspace/create-brief", post(create_workspace_brief))
-        .route("/api/workspace/create-90-day-plan", post(create_90_day_plan))
+        .route(
+            "/api/workspace/create-90-day-plan",
+            post(create_90_day_plan),
+        )
         .with_state(state)
         .merge(auth_router(auth_state))
         .merge(agent_market_router(agent_market_state))

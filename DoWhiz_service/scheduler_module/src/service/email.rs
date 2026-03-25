@@ -26,11 +26,11 @@ use crate::{ModuleExecutor, RunTaskTask, Scheduler, TaskKind};
 use super::bump_thread_state;
 use super::config::ServiceConfig;
 use super::default_thread_state_path;
-use super::html::render_email_html;
+use super::html::{derive_inbound_email_text, render_email_html};
 use super::postmark::{collect_service_address_candidates, normalize_message_id};
 use super::recipients::replyable_recipients;
 use super::scheduler::cancel_pending_thread_tasks;
-use super::workspace::{create_unique_dir, ensure_thread_workspace, write_thread_history};
+use super::workspace::{create_unique_dir, ensure_thread_workspace, refresh_thread_input_snapshot};
 use super::BoxError;
 
 pub use super::postmark::PostmarkInbound;
@@ -159,7 +159,10 @@ pub fn process_inbound_payload(
                             ))
                         })?
                 } else {
-                    info!("account_id={} has no email identifier, using requester", acct_id);
+                    info!(
+                        "account_id={} has no email identifier, using requester",
+                        acct_id
+                    );
                     user_store
                         .get_or_create_user(requester.identifier_type, &requester.identifier)
                         .map_err(|err| {
@@ -171,7 +174,10 @@ pub fn process_inbound_payload(
                 }
             }
             Err(err) => {
-                warn!("failed to list identifiers for account_id={}: {}, using requester", acct_id, err);
+                warn!(
+                    "failed to list identifiers for account_id={}: {}, using requester",
+                    acct_id, err
+                );
                 user_store
                     .get_or_create_user(requester.identifier_type, &requester.identifier)
                     .map_err(|err| {
@@ -380,6 +386,7 @@ pub fn process_inbound_payload(
         requester_identifier_type: Some(requester.identifier_type.to_string()),
         requester_identifier: Some(requester.identifier.clone()),
         account_id: resolved_account_id,
+        channel_metadata: Default::default(),
     };
 
     // Clone run_task before consuming it, in case we need to write to account-level storage
@@ -626,8 +633,8 @@ fn append_inbound_payload(
 
     clear_dir_except(&incoming_attachments, &entries_attachments)?;
     write_inbound_payload(payload, raw_payload, &incoming_email, &incoming_attachments)?;
-    if let Err(err) = write_thread_history(&incoming_email, &incoming_attachments) {
-        warn!("failed to write thread history: {}", err);
+    if let Err(err) = refresh_thread_input_snapshot(&incoming_email, &incoming_attachments) {
+        warn!("failed to refresh thread input snapshot: {}", err);
     }
     Ok(())
 }
@@ -682,8 +689,12 @@ fn write_inbound_payload(
     incoming_email: &Path,
     incoming_attachments: &Path,
 ) -> Result<(), BoxError> {
-    std::fs::write(incoming_email.join("postmark_payload.json"), raw_payload)?;
     let email_html = render_email_html(payload);
+    let workspace_payload = build_workspace_payload_json(payload, raw_payload, &email_html);
+    std::fs::write(
+        incoming_email.join("postmark_payload.json"),
+        workspace_payload,
+    )?;
     std::fs::write(incoming_email.join("email.html"), email_html)?;
 
     if let Some(attachments) = payload.attachments.as_ref() {
@@ -695,6 +706,86 @@ fn write_inbound_payload(
         }
     }
     Ok(())
+}
+
+fn build_workspace_payload_json(
+    payload: &PostmarkInbound,
+    raw_payload: &[u8],
+    email_html: &str,
+) -> Vec<u8> {
+    let mut payload_json: serde_json::Value = match serde_json::from_slice(raw_payload) {
+        Ok(value) => value,
+        Err(_) => return raw_payload.to_vec(),
+    };
+    let Some(obj) = payload_json.as_object_mut() else {
+        return raw_payload.to_vec();
+    };
+
+    let canonical_text = derive_inbound_email_text(
+        payload.text_body.as_deref(),
+        payload.stripped_text_reply.as_deref(),
+        payload.html_body.as_deref(),
+    );
+    obj.insert(
+        "TextBody".to_string(),
+        canonical_text
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    obj.insert(
+        "HtmlBody".to_string(),
+        serde_json::Value::String(email_html.to_string()),
+    );
+    sanitize_workspace_attachments(obj);
+
+    serde_json::to_vec_pretty(&payload_json).unwrap_or_else(|_| raw_payload.to_vec())
+}
+
+fn sanitize_workspace_attachments(payload_json: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(attachments) = payload_json
+        .get_mut("Attachments")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+
+    for attachment in attachments {
+        let Some(obj) = attachment.as_object_mut() else {
+            continue;
+        };
+        let storage_ref = obj
+            .get("StorageRef")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let content = obj
+            .get("Content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if content.is_empty() {
+            continue;
+        }
+
+        let content_len = BASE64_STANDARD
+            .decode(content.as_bytes())
+            .ok()
+            .map(|bytes| bytes.len() as u64)
+            .or_else(|| obj.get("ContentLength").and_then(serde_json::Value::as_u64));
+
+        if storage_ref.is_some() || content_len.is_some() {
+            obj.insert(
+                "Content".to_string(),
+                serde_json::Value::String(String::new()),
+            );
+            if let Some(content_len) = content_len {
+                obj.insert(
+                    "ContentLength".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(content_len)),
+                );
+            }
+        }
+    }
 }
 
 fn resolve_attachment_bytes(
@@ -916,6 +1007,65 @@ mod tests {
     }
 
     #[test]
+    fn write_inbound_payload_sanitizes_workspace_email_views() {
+        let temp = TempDir::new().expect("tempdir");
+        let incoming_email = temp.path().join("incoming_email");
+        let incoming_attachments = temp.path().join("incoming_attachments");
+        fs::create_dir_all(&incoming_email).expect("incoming_email");
+        fs::create_dir_all(&incoming_attachments).expect("incoming_attachments");
+
+        let raw = r#"{
+  "From": "Maggie Ke <wjke@uchicago.edu>",
+  "To": "Oliver <oliver@dowhiz.com>",
+  "Subject": "Re:",
+  "TextBody": "我把我的账号信息再发一次给你：",
+  "HtmlBody": "<p>我把我的账号信息再发一次给你：</p><p><a href=\"https://learning.edx.org/course/123\">Course link</a></p><img src=\"data:image/png;base64,AAAA\" alt=\"image.png\">",
+  "Attachments": [
+    {"Name": "image.png", "Content": "aGVsbG8=", "ContentType": "image/png"}
+  ]
+}"#;
+        let payload: PostmarkInbound = serde_json::from_str(raw).expect("payload");
+
+        write_inbound_payload(
+            &payload,
+            raw.as_bytes(),
+            &incoming_email,
+            &incoming_attachments,
+        )
+        .expect("write inbound payload");
+
+        let email_html = fs::read_to_string(incoming_email.join("email.html")).expect("email html");
+        assert!(email_html.contains("我把我的账号信息再发一次给你："));
+        assert!(email_html.contains("https://learning.edx.org/course/123"));
+        assert!(!email_html.contains("data:image"));
+
+        let workspace_payload =
+            fs::read_to_string(incoming_email.join("postmark_payload.json")).expect("payload json");
+        assert!(!workspace_payload.contains("data:image"));
+        assert!(!workspace_payload.contains("aGVsbG8="));
+
+        let workspace_json: serde_json::Value =
+            serde_json::from_str(&workspace_payload).expect("parse payload json");
+        assert_eq!(
+            workspace_json["TextBody"].as_str(),
+            Some("我把我的账号信息再发一次给你：\n\nLinks:\n- https://learning.edx.org/course/123")
+        );
+        assert_eq!(
+            workspace_json["HtmlBody"].as_str(),
+            Some(email_html.as_str())
+        );
+        assert_eq!(
+            workspace_json["Attachments"][0]["Content"].as_str(),
+            Some("")
+        );
+        assert_eq!(
+            workspace_json["Attachments"][0]["ContentLength"].as_u64(),
+            Some(5)
+        );
+        assert!(incoming_attachments.join("image.png").exists());
+    }
+
+    #[test]
     fn resolve_attachment_bytes_prefers_base64_content() {
         let attachment = super::super::postmark::PostmarkAttachment {
             name: "report.txt".to_string(),
@@ -1037,8 +1187,10 @@ mod tests {
     fn account_for_tasks_prefers_resolved_account_id() {
         use uuid::Uuid;
 
-        let resolved_account_id = Some(Uuid::parse_str("26a8b960-bef3-4329-a4b1-6ccfbfd49bbf").unwrap());
-        let fallback_account_id = Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
+        let resolved_account_id =
+            Some(Uuid::parse_str("26a8b960-bef3-4329-a4b1-6ccfbfd49bbf").unwrap());
+        let fallback_account_id =
+            Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
 
         // When resolved_account_id is Some, use it (ignore fallback)
         let account_for_tasks = if resolved_account_id.is_some() {
@@ -1067,7 +1219,8 @@ mod tests {
         use uuid::Uuid;
 
         let resolved_account_id: Option<Uuid> = None;
-        let fallback_account_id = Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
+        let fallback_account_id =
+            Some(Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap());
 
         // When resolved_account_id is None, use fallback
         let account_for_tasks = if resolved_account_id.is_some() {

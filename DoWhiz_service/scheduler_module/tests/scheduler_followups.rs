@@ -31,6 +31,8 @@ impl TaskExecutor for FollowUpExecutor {
                     scheduler_actions: Vec::new(),
                     scheduler_actions_error: None,
                     skip_auto_reply: false,
+                    superseded: false,
+                    terminal_note: None,
                 })
             }
             _ => Ok(TaskExecution::default()),
@@ -68,6 +70,7 @@ fn run_task_followups_persist_across_restarts() {
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: Default::default(),
     };
 
     let mut scheduler =

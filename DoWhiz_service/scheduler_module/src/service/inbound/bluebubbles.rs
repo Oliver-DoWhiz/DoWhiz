@@ -115,6 +115,7 @@ pub(crate) fn process_bluebubbles_event(
         requester_identifier_type: None,
         requester_identifier: None,
         account_id: None,
+        channel_metadata: message.metadata.clone(),
     };
 
     // Schedule the task

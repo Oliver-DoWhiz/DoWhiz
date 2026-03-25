@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelMetadata};
 
 pub(crate) const RUN_TASK_FAILURE_LIMIT: u32 = 3;
 
@@ -47,6 +47,33 @@ pub struct SendReplyTask {
     /// Employee ID for per-employee credentials (optional)
     #[serde(default)]
     pub employee_id: Option<String>,
+    /// Normalized channel metadata carried from inbound context to outbound delivery.
+    #[serde(default)]
+    pub channel_metadata: ChannelMetadata,
+}
+
+impl SendReplyTask {
+    pub fn normalized_channel_metadata(&self) -> ChannelMetadata {
+        let mut metadata = self.channel_metadata.clone();
+
+        match self.channel {
+            Channel::Slack => {
+                if metadata.slack_channel_id.is_none() {
+                    metadata.slack_channel_id = preferred_string_slot(&self.to, 1)
+                        .or_else(|| preferred_string_slot(&self.to, 0));
+                }
+            }
+            Channel::Discord => {
+                if metadata.discord_channel_id.is_none() {
+                    metadata.discord_channel_id =
+                        preferred_u64_slot(&self.to, 1).or_else(|| preferred_u64_slot(&self.to, 0));
+                }
+            }
+            _ => {}
+        }
+
+        metadata
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +121,89 @@ pub struct RunTaskTask {
     /// The resolved account ID for this task (avoids re-lookup during status sync)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<Uuid>,
+    /// Normalized channel metadata carried from the inbound event.
+    #[serde(default)]
+    pub channel_metadata: ChannelMetadata,
+}
+
+impl RunTaskTask {
+    pub fn normalized_channel_metadata(&self) -> ChannelMetadata {
+        let mut metadata = self.channel_metadata.clone();
+
+        if metadata.slack_team_id.is_none() {
+            metadata.slack_team_id = normalized_optional_string(self.slack_team_id.as_deref());
+        }
+
+        match self.channel {
+            Channel::Slack => {
+                if metadata.slack_channel_id.is_none() {
+                    metadata.slack_channel_id = preferred_string_slot(&self.reply_to, 1)
+                        .or_else(|| slack_channel_id_from_thread_key(self.thread_id.as_deref()))
+                        .or_else(|| preferred_string_slot(&self.reply_to, 0));
+                }
+            }
+            Channel::Discord => {
+                if metadata.discord_channel_id.is_none() {
+                    metadata.discord_channel_id = preferred_u64_slot(&self.reply_to, 1)
+                        .or_else(|| preferred_u64_slot(&self.reply_to, 0));
+                }
+                if metadata.discord_guild_id.is_none() {
+                    metadata.discord_guild_id =
+                        discord_guild_id_from_thread_key(self.thread_id.as_deref());
+                }
+            }
+            _ => {}
+        }
+
+        metadata
+    }
+}
+
+fn normalized_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+fn preferred_string_slot(values: &[String], preferred_index: usize) -> Option<String> {
+    values
+        .get(preferred_index)
+        .and_then(|value| normalized_optional_string(Some(value)))
+        .or_else(|| {
+            values
+                .first()
+                .and_then(|value| normalized_optional_string(Some(value)))
+        })
+}
+
+fn preferred_u64_slot(values: &[String], preferred_index: usize) -> Option<u64> {
+    values
+        .get(preferred_index)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .or_else(|| {
+            values
+                .first()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+}
+
+fn discord_guild_id_from_thread_key(thread_id: Option<&str>) -> Option<u64> {
+    let raw = thread_id.map(str::trim).filter(|value| !value.is_empty())?;
+    let mut parts = raw.splitn(4, ':');
+    match (parts.next(), parts.next()) {
+        (Some("discord"), Some(guild_id)) => guild_id.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn slack_channel_id_from_thread_key(thread_id: Option<&str>) -> Option<String> {
+    let raw = thread_id.map(str::trim).filter(|value| !value.is_empty())?;
+    let mut parts = raw.splitn(3, ':');
+    match (parts.next(), parts.next()) {
+        (Some("slack"), Some(channel_id)) => normalized_optional_string(Some(channel_id)),
+        _ => None,
+    }
 }
 
 fn default_runner() -> String {
@@ -160,6 +270,8 @@ pub struct TaskExecution {
     pub scheduler_actions: Vec<run_task_module::SchedulerActionRequest>,
     pub scheduler_actions_error: Option<String>,
     pub skip_auto_reply: bool,
+    pub superseded: bool,
+    pub terminal_note: Option<String>,
 }
 
 impl TaskExecution {
