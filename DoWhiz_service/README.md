@@ -279,8 +279,9 @@ Azure ACI execution path (required vars):
   prod/staging task logs can prove exactly what was sent. Sender resolution
   priority is `--from` > `HUMAN_APPROVAL_FROM` > employee mailbox from employee
   config. When an active Browserbase session exists, the HAG email also includes a
-  signed `/auth/browser-handoff` link that opens the same live Browserbase session so
-  the human can finish the blocker in-browser and then reply in the email thread to
+  signed browser handoff link under the configured public service base (for example
+  `/service/auth/browser-handoff`) so the human can open the same live Browserbase
+  session, finish the blocker in-browser, and then reply in the email thread to
   resume the agent. HAG-thread replies (`[HAG:...]`) are ignored by normal inbound
   task routing to prevent recursive Email->task loops.
 - ACI run_task sets Playwright/NPM runtime defaults for mounted workspaces:
