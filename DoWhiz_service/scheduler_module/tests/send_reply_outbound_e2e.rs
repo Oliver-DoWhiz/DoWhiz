@@ -1,7 +1,10 @@
 mod test_support;
 
 use mockito::Matcher;
-use scheduler_module::{channel::Channel, ModuleExecutor, Scheduler, SendReplyTask, TaskKind};
+use scheduler_module::{
+    channel::{Channel, ChannelMetadata},
+    ModuleExecutor, Scheduler, SendReplyTask, TaskKind,
+};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -140,6 +143,57 @@ fn send_reply_slack_includes_thread_ts_when_present() -> Result<(), Box<dyn std:
     let mut task = base_send_task(Channel::Slack, html_path, attachments_dir);
     task.to = vec!["C123".to_string()];
     task.in_reply_to = Some("1700000000.123".to_string());
+
+    let db_path = temp.path().join("tasks.db");
+    let mut scheduler = Scheduler::load(&db_path, ModuleExecutor::default())?;
+    scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::SendReply(task))?;
+    scheduler.tick()?;
+
+    slack_mock.assert();
+    Ok(())
+}
+
+#[test]
+fn send_reply_slack_team_scoped_prefers_employee_token_over_global(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let Some(mut server) = test_support::start_mockito_server(
+        "send_reply_slack_team_scoped_prefers_employee_token_over_global",
+    ) else {
+        return Ok(());
+    };
+
+    let slack_mock = server
+        .mock("POST", "/chat.postMessage")
+        .match_header("authorization", "Bearer xoxb-secondary")
+        .match_header("content-type", "application/json")
+        .match_body(Matcher::Regex("\\\"channel\\\":\\\"C456\\\"".to_string()))
+        .match_body(Matcher::Regex("Hello non-primary workspace".to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"ok":true,"ts":"1700000000.789"}"#)
+        .expect(1)
+        .create();
+
+    let _guard_global_token = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-primary");
+    let _guard_employee_token = EnvGuard::set("LITTLE_BEAR_SLACK_BOT_TOKEN", "xoxb-secondary");
+    let _guard_api = EnvGuard::set("SLACK_API_BASE_URL", server.url());
+
+    let temp = TempDir::new()?;
+    let html_path = write_text_file(
+        &temp,
+        "slack_message_secondary.txt",
+        "Hello non-primary workspace",
+    )?;
+    let attachments_dir = create_attachments_dir(&temp)?;
+
+    let mut task = base_send_task(Channel::Slack, html_path, attachments_dir);
+    task.employee_id = Some("little_bear".to_string());
+    task.to = vec!["U123".to_string(), "C456".to_string()];
+    task.channel_metadata = ChannelMetadata {
+        slack_team_id: Some("TSECONDARY".to_string()),
+        ..Default::default()
+    };
 
     let db_path = temp.path().join("tasks.db");
     let mut scheduler = Scheduler::load(&db_path, ModuleExecutor::default())?;

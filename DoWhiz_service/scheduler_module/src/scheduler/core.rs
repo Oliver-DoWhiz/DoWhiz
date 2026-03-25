@@ -716,7 +716,7 @@ fn notify_run_task_failure(
                 thread_epoch: None,
                 thread_state_path: None,
                 employee_id: task.employee_id.clone(),
-                channel_metadata: task.channel_metadata.clone(),
+                channel_metadata: task.normalized_channel_metadata(),
             };
             execute_slack_send(&send_task)?;
         } else {
