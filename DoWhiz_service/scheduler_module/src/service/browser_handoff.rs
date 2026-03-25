@@ -194,8 +194,8 @@ fn select_debug_url(
         }
     }
 
-    if payload.pages.len() == 1 {
-        if let Some(url) = page_debug_url(&payload.pages[0]) {
+    if let Some(page) = select_fallback_page(payload) {
+        if let Some(url) = page_debug_url(page) {
             return Some(url);
         }
     }
@@ -211,6 +211,35 @@ fn page_debug_url(page: &BrowserbaseDebugPage) -> Option<String> {
     page.debugger_fullscreen_url
         .clone()
         .or_else(|| page.debugger_url.clone())
+}
+
+fn select_fallback_page(payload: &BrowserbaseDebugUrls) -> Option<&BrowserbaseDebugPage> {
+    payload
+        .pages
+        .iter()
+        .rev()
+        .find(|page| page_debug_url(page).is_some() && page_looks_live(page))
+        .or_else(|| {
+            payload
+                .pages
+                .iter()
+                .rev()
+                .find(|page| page_debug_url(page).is_some())
+        })
+}
+
+fn page_looks_live(page: &BrowserbaseDebugPage) -> bool {
+    !page_text_is_blank(&page.url) || !page_text_is_blank(&page.title)
+}
+
+fn page_text_is_blank(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.is_empty()
+        || normalized == "about:blank"
+        || normalized == "new tab"
+        || normalized.starts_with("chrome://newtab")
+        || normalized.starts_with("edge://newtab")
+        || normalized.starts_with("chrome-search://local-ntp")
 }
 
 fn render_browser_handoff_html(
@@ -541,6 +570,43 @@ mod tests {
         assert_eq!(
             select_debug_url(&claims, &payload).as_deref(),
             Some("https://page-b-full.example.com")
+        );
+    }
+
+    #[test]
+    fn select_debug_url_prefers_live_page_over_session_level_blank_debugger() {
+        let claims = BrowserHandoffGrant {
+            version: 1,
+            challenge_id: "hag-123".to_string(),
+            session_id: "sess-123".to_string(),
+            page_id: None,
+            iat: 1,
+            exp: usize::MAX,
+        };
+        let payload = BrowserbaseDebugUrls {
+            debugger_url: Some("https://session.example.com".to_string()),
+            debugger_fullscreen_url: Some("https://session-full.example.com".to_string()),
+            pages: vec![
+                BrowserbaseDebugPage {
+                    id: "page-a".to_string(),
+                    url: "about:blank".to_string(),
+                    title: "about:blank".to_string(),
+                    debugger_url: Some("https://page-a.example.com".to_string()),
+                    debugger_fullscreen_url: Some("https://page-a-full.example.com".to_string()),
+                },
+                BrowserbaseDebugPage {
+                    id: "page-live".to_string(),
+                    url: "https://example.com/login".to_string(),
+                    title: "Login".to_string(),
+                    debugger_url: Some("https://page-live.example.com".to_string()),
+                    debugger_fullscreen_url: Some("https://page-live-full.example.com".to_string()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            select_debug_url(&claims, &payload).as_deref(),
+            Some("https://page-live-full.example.com")
         );
     }
 

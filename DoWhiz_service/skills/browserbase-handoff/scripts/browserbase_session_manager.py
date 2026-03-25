@@ -302,6 +302,54 @@ def get_debug_urls(config: BrowserbaseConfig, session_id: str) -> Dict[str, Any]
     )
 
 
+def page_debug_url(page: Dict[str, Any]) -> str:
+    for key in ("debuggerFullscreenUrl", "debuggerUrl"):
+        value = str(page.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def page_text_is_blank(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return (
+        normalized == ""
+        or normalized == "about:blank"
+        or normalized == "new tab"
+        or normalized.startswith("chrome://newtab")
+        or normalized.startswith("edge://newtab")
+        or normalized.startswith("chrome-search://local-ntp")
+    )
+
+
+def page_looks_live(page: Dict[str, Any]) -> bool:
+    return not page_text_is_blank(page.get("url")) or not page_text_is_blank(page.get("title"))
+
+
+def select_page_id_from_debug_payload(debug_urls: Dict[str, Any]) -> Optional[str]:
+    pages = debug_urls.get("pages")
+    if not isinstance(pages, list):
+        return None
+
+    def iter_candidates():
+        for raw_page in reversed(pages):
+            if not isinstance(raw_page, dict):
+                continue
+            page_id = str(raw_page.get("id", "")).strip()
+            if not page_id or not page_debug_url(raw_page):
+                continue
+            yield raw_page, page_id
+
+    for page, page_id in iter_candidates():
+        if page_looks_live(page):
+            return page_id
+
+    for _page, page_id in iter_candidates():
+        return page_id
+
+    return None
+
+
 def create_session(config: BrowserbaseConfig, context_id: str) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "browserSettings": {
@@ -346,16 +394,7 @@ def resolve_page_id_for_session(
     except CliError:
         return None, False
 
-    pages = debug_urls.get("pages")
-    if not isinstance(pages, list):
-        return None, True
-    if len(pages) != 1:
-        return None, True
-
-    page = pages[0]
-    if not isinstance(page, dict):
-        return None, True
-    page_id = str(page.get("id", "")).strip()
+    page_id = select_page_id_from_debug_payload(debug_urls)
     if not page_id:
         return None, True
     return page_id, True

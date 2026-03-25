@@ -97,7 +97,14 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
                 "expiresAt": "2026-03-24T01:00:00Z",
             }
             MODULE.get_debug_urls = lambda *_args, **_kwargs: {
-                "pages": [{"id": "page_live"}],
+                "pages": [
+                    {
+                        "id": "page_live",
+                        "url": "https://example.com/login",
+                        "title": "Login",
+                        "debuggerFullscreenUrl": "https://page-live.example.com",
+                    }
+                ],
             }
             MODULE.create_session = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("create_session should not be called")
@@ -215,6 +222,45 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
         self.assertEqual(payload["provider_status_code"], 402)
         self.assertEqual(payload["error_kind"], "browserbase_quota_exhausted")
         self.assertIn("upgrade the browserbase plan", payload["action_required"].lower())
+
+    def test_resolve_page_id_for_session_prefers_live_page_when_blank_tabs_exist(self):
+        config = MODULE.BrowserbaseConfig(
+            api_key="bb_test",
+            project_id="proj_test",
+            api_base=MODULE.API_BASE_DEFAULT,
+            timeout_seconds=3600,
+        )
+
+        original_debug = MODULE.get_debug_urls
+        MODULE.get_debug_urls = lambda *_args, **_kwargs: {
+            "pages": [
+                {
+                    "id": "page_blank",
+                    "url": "about:blank",
+                    "title": "about:blank",
+                    "debuggerFullscreenUrl": "https://blank.example.com",
+                },
+                {
+                    "id": "page_live",
+                    "url": "https://example.com/2fa",
+                    "title": "2FA",
+                    "debuggerFullscreenUrl": "https://live.example.com",
+                },
+                {
+                    "id": "page_blank_tail",
+                    "url": "about:blank",
+                    "title": "about:blank",
+                    "debuggerFullscreenUrl": "https://blank-tail.example.com",
+                },
+            ]
+        }
+        try:
+            page_id, page_id_known = MODULE.resolve_page_id_for_session(config, "sess_live")
+        finally:
+            MODULE.get_debug_urls = original_debug
+
+        self.assertTrue(page_id_known)
+        self.assertEqual(page_id, "page_live")
 
 
 if __name__ == "__main__":
