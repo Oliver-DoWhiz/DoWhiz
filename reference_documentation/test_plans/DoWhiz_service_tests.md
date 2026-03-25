@@ -59,8 +59,25 @@ Status legend:
 | MAN-OPS-01 | `DoWhiz_service/scripts/test_auth_api.sh` | `/auth/*` endpoint roundtrip |
 | MAN-OPS-02 | `DoWhiz_service/scripts/test_auth_link_only.sh` | link/verify flow without full account deletion |
 | MAN-OPS-03 | `DoWhiz_service/scripts/test_blob_store.sh` | Azure Blob upload/download/list roundtrip |
+| MAN-BB-01 | Send a task to `dowhiz@deep-tutor.com` that opens `/service/browserbase-handoff-demo?run=<unique-id>`, stops at the blocked page, requests HAG help, then resume after the human completes the same-tab demo | Deterministic Browserbase same-tab handoff validation on staging |
+| MAN-BB-02 | Send a task to `dowhiz@deep-tutor.com` that signs into Google as `dowhiz@deep-tutor.com`, lets the agent use `GOOGLE_PASSWORD` if available, and uses HAG for any remaining 2FA/device/CAPTCHA blocker | Real Browserbase + HAG login handoff validation on staging |
 | MAN-GWS-01 | `DoWhiz_service/scheduler_module/tests/google_workspace_cli_test.sh` | Google Workspace CLI smoke test |
 | MAN-GWS-02 | `DoWhiz_service/scheduler_module/tests/google_workspace_e2e_test.sh` | Google Workspace comment workflow smoke |
+
+### 2.4 Browserbase handoff evidence
+
+For `MAN-BB-01` and `MAN-BB-02`, capture all of the following in the verification notes:
+
+1. The HAG help email showing the top live-browser button/link.
+2. The live handoff page in the blocked state the agent originally hit.
+3. The same live page after the human completes the unblock step.
+4. The final DoWhiz reply showing that the agent resumed and completed the task.
+
+Additional expectations:
+
+1. For the demo route, the page must stay in one tab and persist state by `run` via browser localStorage.
+2. For the real Google flow, prefer the staging admin mailbox `dowhiz@deep-tutor.com` and allow HAG only after the site is explicitly waiting for the human step.
+3. If a live-browser button is present, use that path first rather than replying with raw codes unless the page itself requires it.
 
 ## 3) Planned Gaps
 
