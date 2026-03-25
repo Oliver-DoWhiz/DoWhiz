@@ -26,13 +26,25 @@ fn first_dir(root: &Path) -> PathBuf {
 
 fn assert_clean_html(html: &str) {
     let lower = html.to_ascii_lowercase();
-    assert!(html.contains("Hi @bingran-you"), "missing mention");
-    assert!(html.contains("New comment on"), "missing comment text");
     assert!(
-        html.contains("https://github.com/KnoWhiz/DoWhiz/issues/102"),
+        html.starts_with("<pre>"),
+        "expected plain-text html wrapper"
+    );
+    assert!(html.ends_with("</pre>"), "expected plain-text html wrapper");
+    assert!(html.contains("Hi @bingran-you"), "missing mention");
+    assert!(
+        html.contains("New comment on issue #102."),
+        "missing comment text"
+    );
+    assert!(
+        html.contains("Links:\n- https://github.com/KnoWhiz/DoWhiz/issues/102"),
         "missing issue link"
     );
-    assert!(html.contains("avatar.png"), "missing image");
+    assert!(!lower.contains("<img"), "inline image should be removed");
+    assert!(
+        !lower.contains("avatar.png"),
+        "image filename should be removed"
+    );
     assert!(!lower.contains("unsubscribe"), "footer still present");
     assert!(
         !lower.contains("display:none"),
@@ -162,7 +174,7 @@ fn inbound_email_html_is_sanitized() -> Result<(), Box<dyn std::error::Error + S
         "From": "Alice <alice@example.com>",
         "To": "Service <service@example.com>",
         "Subject": "Issue update",
-        "TextBody": "Plain text fallback",
+        "TextBody": "Hi @bingran-you,\n\nNew comment on issue #102.",
         "HtmlBody": html_body,
         "Headers": [{"Name": "Message-ID", "Value": "<msg-1@example.com>"}]
     });

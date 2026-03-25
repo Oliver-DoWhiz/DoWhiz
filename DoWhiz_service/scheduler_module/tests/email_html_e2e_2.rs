@@ -26,16 +26,21 @@ fn first_dir(root: &Path) -> PathBuf {
 
 fn assert_complex_html_sanitized(html: &str) {
     let lower = html.to_ascii_lowercase();
+    assert!(
+        html.starts_with("<pre>"),
+        "expected plain-text html wrapper"
+    );
+    assert!(html.ends_with("</pre>"), "expected plain-text html wrapper");
     assert!(html.contains("Hi @bingran-you"), "missing mention");
     assert!(html.contains("Build failed on"), "missing comment text");
     assert!(
         html.contains("https://github.com/KnoWhiz/DoWhiz/pull/2042"),
         "missing pull request link"
     );
-    assert!(html.contains("avatar.png"), "missing image");
+    assert!(html.contains("malicious link"), "anchor text should remain");
     assert!(
-        html.contains(">malicious link</a>"),
-        "anchor text should remain"
+        html.contains("Context block preserved."),
+        "expected remaining visible text"
     );
     assert!(
         !lower.contains("unsubscribe"),
@@ -64,6 +69,11 @@ fn assert_complex_html_sanitized(html: &str) {
     assert!(
         !lower.contains("should not appear"),
         "aria-hidden block should be removed"
+    );
+    assert!(!lower.contains("<img"), "inline images should be removed");
+    assert!(
+        !lower.contains("avatar.png"),
+        "image filename should be removed"
     );
     assert!(!html.contains("style="), "style attribute still present");
     assert!(!html.contains("class="), "class attribute still present");
@@ -269,7 +279,6 @@ fn inbound_email_complex_html_is_sanitized() -> Result<(), Box<dyn std::error::E
         "From": "Alice <alice@example.com>",
         "To": "Service <service@example.com>",
         "Subject": "Build alert",
-        "TextBody": "Plain text fallback",
         "HtmlBody": html_body,
         "Headers": [{"Name": "Message-ID", "Value": "<msg-complex@example.com>"}]
     });
