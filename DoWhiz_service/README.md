@@ -291,7 +291,32 @@ Azure ACI execution path (required vars):
   handoff flow now prefers the most recent non-blank debuggable page instead of
   dropping the user into a session-level `about:blank` inspector. HAG-thread
   replies (`[HAG:...]`) are ignored by normal inbound
-  task routing to prevent recursive Email->task loops.
+  task routing to prevent recursive Email->task loops. The HTML help email keeps
+  the live-browser handoff button at the top when available and summarizes the
+  blocker using short `Blocked on` / `Help needed` copy so humans can scan it
+  quickly.
+- Browserbase handoff validation endpoints:
+  `/service/browserbase-handoff-demo?run=<run_id>` is a DoWhiz-owned same-tab
+  demo page for manual validation. It intentionally starts in a blocked state,
+  stores its state in browser localStorage scoped by `run`, and can be completed
+  in-place by the human so the resumed agent sees the exact same tab change.
+- Recommended staging validation flow for Browserbase/HAG:
+  1. Deterministic same-tab demo:
+     send a task to `dowhiz@deep-tutor.com` instructing the agent to open
+     `/service/browserbase-handoff-demo?run=<unique-id>`, stop at the blocked
+     state, and request HAG help. Open the top button from the HAG email, verify
+     the live page is the blocked demo tab, click the in-page completion button,
+     then reply `done` in the HAG thread and confirm the agent resumes.
+  2. Real Google admin staging flow:
+     send a task to `dowhiz@deep-tutor.com` instructing the agent to sign into
+     Google as `dowhiz@deep-tutor.com` and perform one harmless follow-up action
+     after login. Let the agent use `GOOGLE_PASSWORD` if present, rely on HAG for
+     any remaining 2FA / device approval / CAPTCHA blocker, complete the blocker
+     through the live handoff page, reply `done`, and verify the agent finishes.
+- Evidence to capture during Browserbase handoff validation:
+  the HAG email showing the top live-browser button, the live handoff page in its
+  blocked state, the same page after the human completes the unblock step, and
+  the final DoWhiz reply proving the agent resumed.
 - ACI run_task sets Playwright/NPM runtime defaults for mounted workspaces:
   `PLAYWRIGHT_MCP_EXECUTABLE_PATH` auto-discovery (`chrome-linux` / `chrome-linux64`),
   `PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright`,
