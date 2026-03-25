@@ -160,6 +160,31 @@ fn run_task_dedupe_key(task: &super::types::RunTaskTask) -> String {
     )
 }
 
+fn run_task_supersede_reason(task: &super::types::RunTaskTask) -> Option<String> {
+    let expected_epoch = task.thread_epoch?;
+    let state_path = task
+        .thread_state_path
+        .clone()
+        .unwrap_or_else(|| task.workspace_dir.join("thread_state.json"));
+    let current_epoch = current_thread_epoch(&state_path)?;
+    if current_epoch > expected_epoch {
+        Some(format!(
+            "thread superseded by a newer follow-up (expected epoch {}, current epoch {})",
+            expected_epoch, current_epoch
+        ))
+    } else {
+        None
+    }
+}
+
+fn superseded_task_execution(reason: impl Into<String>) -> TaskExecution {
+    let mut execution = TaskExecution::empty();
+    execution.skip_auto_reply = true;
+    execution.superseded = true;
+    execution.terminal_note = Some(reason.into());
+    execution
+}
+
 fn track_scheduler_event(
     event_name: &str,
     account_id: Uuid,
@@ -1107,6 +1132,14 @@ impl TaskExecutor for ModuleExecutor {
                 Ok(TaskExecution::empty())
             }
             TaskKind::RunTask(task) => {
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip superseded run_task before execution in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
+                }
                 let github_inbound = load_github_inbound_context(task);
                 let account_id =
                     resolve_account_for_run_task(task, github_inbound.sender_login.as_deref());
@@ -1307,6 +1340,14 @@ impl TaskExecutor for ModuleExecutor {
                         task.workspace_dir.display()
                     );
                 }
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip superseded run_task before agent launch in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
+                }
                 let user_identities = fetch_user_identities(account_id);
                 let params = run_task_module::RunTaskParams {
                     workspace_dir: task.workspace_dir.clone(),
@@ -1322,23 +1363,36 @@ impl TaskExecutor for ModuleExecutor {
                     google_access_token: load_google_access_token_from_service_env(),
                     has_unified_account: account_id.is_some(),
                     user_identities,
+                    thread_epoch: task.thread_epoch,
+                    thread_state_path: task.thread_state_path.clone(),
                 };
-                let output = run_task_module::run_task(&params).map_err(|err| {
-                    if let Some(account_id) = account_id {
-                        track_scheduler_event(
-                            "task_failed",
-                            account_id,
-                            Some(format!("task_failed:{}:run_task", task_dedupe_key)),
-                            task,
-                            json!({
-                                "error_reason": "run_task_failed",
-                                "error": err.to_string(),
-                                "channel": task.channel.to_string(),
-                            }),
+                let output = match run_task_module::run_task(&params) {
+                    Ok(output) => output,
+                    Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                        info!(
+                            "run_task superseded while executing in {}: {}",
+                            task.workspace_dir.display(),
+                            reason
                         );
+                        return Ok(superseded_task_execution(reason));
                     }
-                    SchedulerError::TaskFailed(err.to_string())
-                })?;
+                    Err(err) => {
+                        if let Some(account_id) = account_id {
+                            track_scheduler_event(
+                                "task_failed",
+                                account_id,
+                                Some(format!("task_failed:{}:run_task", task_dedupe_key)),
+                                task,
+                                json!({
+                                    "error_reason": "run_task_failed",
+                                    "error": err.to_string(),
+                                    "channel": task.channel.to_string(),
+                                }),
+                            );
+                        }
+                        return Err(SchedulerError::TaskFailed(err.to_string()));
+                    }
+                };
 
                 // Track token usage for accounts
                 if let Some(account_id) = account_id {
@@ -1361,6 +1415,14 @@ impl TaskExecutor for ModuleExecutor {
                             }
                         }
                     }
+                }
+                if let Some(reason) = run_task_supersede_reason(task) {
+                    info!(
+                        "skip stale post-run side effects in {}: {}",
+                        task.workspace_dir.display(),
+                        reason
+                    );
+                    return Ok(superseded_task_execution(reason));
                 }
 
                 // After task completes, compute diff and submit to queue instead of direct sync
@@ -1475,6 +1537,8 @@ impl TaskExecutor for ModuleExecutor {
                     scheduler_actions: output.scheduler_actions,
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
+                    superseded: false,
+                    terminal_note: None,
                 })
             }
             TaskKind::Noop => Ok(TaskExecution::empty()),

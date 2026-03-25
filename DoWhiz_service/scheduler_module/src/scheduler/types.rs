@@ -270,6 +270,8 @@ pub struct TaskExecution {
     pub scheduler_actions: Vec<run_task_module::SchedulerActionRequest>,
     pub scheduler_actions_error: Option<String>,
     pub skip_auto_reply: bool,
+    pub superseded: bool,
+    pub terminal_note: Option<String>,
 }
 
 impl TaskExecution {

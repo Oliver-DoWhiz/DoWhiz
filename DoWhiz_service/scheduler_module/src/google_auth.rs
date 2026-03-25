@@ -176,9 +176,12 @@ impl GoogleAuth {
         };
 
         // Use provided scopes or default to workspace scopes
-        let scopes = config
-            .scopes
-            .unwrap_or_else(|| GOOGLE_WORKSPACE_SCOPES.iter().map(|s| s.to_string()).collect());
+        let scopes = config.scopes.unwrap_or_else(|| {
+            GOOGLE_WORKSPACE_SCOPES
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        });
 
         Ok(Self {
             inner: Arc::new(RwLock::new(GoogleAuthInner {
@@ -228,7 +231,11 @@ impl GoogleAuth {
             let subject = inner.subject.clone();
             let scopes = inner.scopes.clone();
             drop(inner); // Release read lock before acquiring write lock
-            return self.refresh_via_service_account(&service_account_json, subject.as_deref(), &scopes);
+            return self.refresh_via_service_account(
+                &service_account_json,
+                subject.as_deref(),
+                &scopes,
+            );
         }
 
         // Fall back to OAuth refresh token
@@ -312,8 +319,10 @@ impl GoogleAuth {
         );
 
         // Parse service account JSON
-        let sa_info: ServiceAccountInfo = serde_json::from_str(service_account_json)
-            .map_err(|e| GoogleAuthError::JsonError(format!("Invalid service account JSON: {}", e)))?;
+        let sa_info: ServiceAccountInfo =
+            serde_json::from_str(service_account_json).map_err(|e| {
+                GoogleAuthError::JsonError(format!("Invalid service account JSON: {}", e))
+            })?;
 
         // Create JWT claims
         let now = SystemTime::now()
@@ -334,11 +343,13 @@ impl GoogleAuth {
 
         // Sign JWT with RS256
         let header = Header::new(Algorithm::RS256);
-        let key = EncodingKey::from_rsa_pem(sa_info.private_key.as_bytes())
-            .map_err(|e| GoogleAuthError::ServiceAccountAuthFailed(format!("Invalid private key: {}", e)))?;
+        let key = EncodingKey::from_rsa_pem(sa_info.private_key.as_bytes()).map_err(|e| {
+            GoogleAuthError::ServiceAccountAuthFailed(format!("Invalid private key: {}", e))
+        })?;
 
-        let jwt = encode(&header, &claims, &key)
-            .map_err(|e| GoogleAuthError::ServiceAccountAuthFailed(format!("JWT signing failed: {}", e)))?;
+        let jwt = encode(&header, &claims, &key).map_err(|e| {
+            GoogleAuthError::ServiceAccountAuthFailed(format!("JWT signing failed: {}", e))
+        })?;
 
         // Exchange JWT for access token
         let client = reqwest::blocking::Client::new();
@@ -354,7 +365,10 @@ impl GoogleAuth {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            error!("Service account token exchange failed: {} - {}", status, body);
+            error!(
+                "Service account token exchange failed: {} - {}",
+                status, body
+            );
             return Err(GoogleAuthError::ServiceAccountAuthFailed(format!(
                 "HTTP {}: {}",
                 status, body

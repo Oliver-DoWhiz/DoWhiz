@@ -438,5 +438,7 @@ pub fn build_params(workspace: &Path) -> RunTaskParams {
         google_access_token: std::env::var("GOOGLE_ACCESS_TOKEN").ok(),
         has_unified_account: true, // Default to true for tests
         user_identities: Default::default(),
+        thread_epoch: None,
+        thread_state_path: None,
     }
 }

@@ -183,6 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let notion_client_secret = env::var("NOTION_CLIENT_SECRET").ok();
     let notion_redirect_uri = env::var("NOTION_REDIRECT_URI").ok();
 
+    // Lark OAuth config (optional)
+    let lark_client_id = env::var("LARK_APP_ID").ok();
+    let lark_client_secret = env::var("LARK_APP_SECRET").ok();
+    let lark_redirect_uri = env::var("LARK_REDIRECT_URI").ok();
+
     // Frontend URL for OAuth redirects
     let frontend_url =
         env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
@@ -204,6 +209,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         notion_client_id,
         notion_client_secret,
         notion_redirect_uri,
+        lark_client_id,
+        lark_client_secret,
+        lark_redirect_uri,
         frontend_url,
         user_store: None, // Task lookups not available in inbound gateway
         users_root: None,

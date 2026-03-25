@@ -110,7 +110,10 @@ impl GoogleDriveClient {
                 "Failed to share file {} with {}: {} - {}",
                 file_id, email, status, body
             );
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         let json: serde_json::Value = response
@@ -167,7 +170,10 @@ impl GoogleDriveClient {
                 "Failed to get sharing link for file {}: {} - {}",
                 file_id, status, body
             );
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         let json: serde_json::Value = response
@@ -230,7 +236,10 @@ impl GoogleDriveClient {
                 "Failed to make file {} public: {} - {}",
                 file_id, status, body
             );
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         info!("Made file {} public with {} access", file_id, role.as_str());
@@ -265,7 +274,10 @@ impl GoogleDriveClient {
                 "Failed to list permissions for file {}: {} - {}",
                 file_id, status, body
             );
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         let json: serde_json::Value = response
@@ -312,13 +324,13 @@ impl GoogleDriveClient {
                 "Failed to remove permission {} from file {}: {} - {}",
                 permission_id, file_id, status, body
             );
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
-        info!(
-            "Removed permission {} from file {}",
-            permission_id, file_id
-        );
+        info!("Removed permission {} from file {}", permission_id, file_id);
 
         Ok(())
     }

@@ -320,8 +320,14 @@ impl GoogleSlidesOutboundAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            error!("Failed to create presentation '{}': {} - {}", title, status, body);
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            error!(
+                "Failed to create presentation '{}': {} - {}",
+                title, status, body
+            );
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         let json: serde_json::Value = response
@@ -331,10 +337,15 @@ impl GoogleSlidesOutboundAdapter {
         let presentation_id = json
             .get("presentationId")
             .and_then(|id| id.as_str())
-            .ok_or_else(|| AdapterError::ParseError("Missing presentationId in response".to_string()))?
+            .ok_or_else(|| {
+                AdapterError::ParseError("Missing presentationId in response".to_string())
+            })?
             .to_string();
 
-        info!("Created new presentation '{}' with ID {}", title, presentation_id);
+        info!(
+            "Created new presentation '{}' with ID {}",
+            title, presentation_id
+        );
 
         Ok(presentation_id)
     }

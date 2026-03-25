@@ -111,15 +111,28 @@ impl TaskExecutor for RecordingExecutor {
                         scheduler_module::load_google_access_token_from_service_env(),
                     has_unified_account: false,
                     user_identities: Default::default(),
+                    thread_epoch: run.thread_epoch,
+                    thread_state_path: run.thread_state_path.clone(),
                 };
-                let output = run_task_module::run_task(&params)
-                    .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
+                let output = match run_task_module::run_task(&params) {
+                    Ok(output) => output,
+                    Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                        let mut execution = TaskExecution::default();
+                        execution.skip_auto_reply = true;
+                        execution.superseded = true;
+                        execution.terminal_note = Some(reason);
+                        return Ok(execution);
+                    }
+                    Err(err) => return Err(SchedulerError::TaskFailed(err.to_string())),
+                };
                 Ok(TaskExecution {
                     follow_up_tasks: output.scheduled_tasks,
                     follow_up_error: output.scheduled_tasks_error,
                     scheduler_actions: output.scheduler_actions,
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
+                    superseded: false,
+                    terminal_note: None,
                 })
             }
             TaskKind::SendReply(send) => {
@@ -177,6 +190,26 @@ exit 0
     Ok(())
 }
 
+fn write_slow_fake_codex(bin_dir: &Path) -> io::Result<()> {
+    let script = r#"#!/bin/sh
+set -e
+printf 'started' > codex_started.flag
+while true; do
+  sleep 1
+done
+"#;
+    let path = bin_dir.join("codex");
+    fs::write(&path, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms)?;
+    }
+    Ok(())
+}
+
 fn first_workspace_dir(root: &Path) -> PathBuf {
     let mut entries = fs::read_dir(root).expect("read workspaces dir");
     while let Some(entry) = entries.next() {
@@ -186,6 +219,17 @@ fn first_workspace_dir(root: &Path) -> PathBuf {
         }
     }
     panic!("no workspace directory created");
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for {}", path.display());
 }
 
 #[test]
@@ -264,6 +308,13 @@ fn thread_latest_epoch_end_to_end() {
   "To": "Service <service@example.com>",
   "Subject": "Hello 1",
   "TextBody": "First message",
+  "Attachments": [
+    {
+      "Name": "brief_v1.txt",
+      "Content": "djE=",
+      "ContentType": "text/plain"
+    }
+  ],
   "Headers": [{"Name": "Message-ID", "Value": "<msg-1@example.com>"}]
 }"#;
     let payload_1: PostmarkInbound = serde_json::from_str(inbound_raw_1).expect("parse inbound 1");
@@ -282,6 +333,7 @@ fn thread_latest_epoch_end_to_end() {
         .get_or_create_user("email", "alice@example.com")
         .expect("user lookup");
     let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    let workspace = first_workspace_dir(&user_paths.workspaces_root);
 
     let executor = RecordingExecutor::default();
     let mut scheduler =
@@ -300,6 +352,13 @@ fn thread_latest_epoch_end_to_end() {
   "To": "Service <service@example.com>",
   "Subject": "Hello 2",
   "TextBody": "Second message",
+  "Attachments": [
+    {
+      "Name": "brief_v2.txt",
+      "Content": "djI=",
+      "ContentType": "text/plain"
+    }
+  ],
   "Headers": [
     {"Name": "Message-ID", "Value": "<msg-2@example.com>"},
     {"Name": "References", "Value": "<msg-1@example.com>"}
@@ -316,6 +375,43 @@ fn thread_latest_epoch_end_to_end() {
         None,
     )
     .expect("process inbound 2");
+
+    let thread_request =
+        fs::read_to_string(workspace.join("incoming_email").join("thread_request.md"))
+            .expect("thread_request");
+    assert!(
+        thread_request.contains("First message"),
+        "thread_request should include the first message"
+    );
+    assert!(
+        thread_request.contains("Second message"),
+        "thread_request should include the second message"
+    );
+    assert!(
+        thread_request.contains("Latest inbound message"),
+        "thread_request should mark the latest inbound message"
+    );
+    assert!(
+        workspace
+            .join("incoming_attachments")
+            .join("brief_v1.txt")
+            .exists(),
+        "merged attachment view should keep the first attachment"
+    );
+    assert!(
+        workspace
+            .join("incoming_attachments")
+            .join("brief_v2.txt")
+            .exists(),
+        "merged attachment view should keep the second attachment"
+    );
+    assert!(
+        workspace
+            .join("incoming_attachments")
+            .join("thread_manifest.json")
+            .exists(),
+        "merged attachment manifest should be written"
+    );
 
     let mut scheduler =
         Scheduler::load(&user_paths.tasks_db_path, executor.clone()).expect("reload scheduler");
@@ -337,8 +433,6 @@ fn thread_latest_epoch_end_to_end() {
         .lock()
         .expect("sent_subjects lock poisoned");
     assert_eq!(sent.len(), 1, "only latest send should fire");
-
-    let workspace = first_workspace_dir(&user_paths.workspaces_root);
     let reply_html =
         fs::read_to_string(workspace.join("reply_email_draft.html")).expect("reply draft");
     assert!(
@@ -360,4 +454,218 @@ fn thread_latest_epoch_end_to_end() {
     let drafts_dir = workspace.join("drafts");
     let drafts_count = fs::read_dir(drafts_dir).expect("drafts dir").count();
     assert!(drafts_count >= 2, "draft history should be preserved");
+}
+
+#[test]
+fn follow_up_supersedes_running_task_and_reruns_from_merged_thread_snapshot() {
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path();
+    let users_root = root.join("users");
+    let state_root = root.join("state");
+    let bin_root = root.join("bin");
+    let home_root = root.join("home");
+    fs::create_dir_all(&users_root).expect("users root");
+    fs::create_dir_all(&state_root).expect("state root");
+    fs::create_dir_all(&bin_root).expect("bin root");
+    fs::create_dir_all(&home_root).expect("home root");
+
+    write_slow_fake_codex(&bin_root).expect("write slow fake codex");
+    let original_path = env::var("PATH").unwrap_or_default();
+    let path_value = format!("{}:{}", bin_root.display(), original_path);
+    let _path_guard = EnvGuard::set("PATH", path_value);
+    let _api_guard = EnvGuard::set("AZURE_OPENAI_API_KEY_BACKUP", "test-key");
+    let _endpoint_guard = EnvGuard::set("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.test");
+    let _docker_guard = EnvGuard::set("RUN_TASK_DOCKER_IMAGE", "");
+    let _home_guard = EnvGuard::set("HOME", &home_root);
+    let _timeout_guard = EnvGuard::set("RUN_TASK_TIMEOUT_SECS", "5");
+
+    let Some(ingestion_db_url) = test_support::require_supabase_db_url(
+        "follow_up_supersedes_running_task_and_reruns_from_merged_thread_snapshot",
+    ) else {
+        return;
+    };
+    let (employee_profile, employee_directory) = test_employee_directory(root);
+    let config = ServiceConfig {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        employee_id: employee_profile.id.clone(),
+        employee_config_path: root.join("employee.toml"),
+        employee_profile,
+        employee_directory,
+        workspace_root: root.join("workspaces"),
+        scheduler_state_path: state_root.join("tasks.db"),
+        processed_ids_path: state_root.join("processed_ids.txt"),
+        ingestion_db_url,
+        ingestion_poll_interval: Duration::from_millis(50),
+        users_root: users_root.clone(),
+        users_db_path: state_root.join("users.db"),
+        task_index_path: state_root.join("task_index.db"),
+        codex_model: "gpt-5.4".to_string(),
+        codex_disabled: false,
+        scheduler_poll_interval: Duration::from_millis(50),
+        scheduler_max_concurrency: 2,
+        scheduler_user_max_concurrency: 1,
+        inbound_body_max_bytes: DEFAULT_INBOUND_BODY_MAX_BYTES,
+        skills_source_dir: None,
+        slack_bot_token: None,
+        slack_bot_user_id: None,
+        slack_store_path: state_root.join("slack.db"),
+        slack_client_id: None,
+        slack_client_secret: None,
+        slack_redirect_uri: None,
+        discord_bot_token: None,
+        discord_bot_user_id: None,
+        google_docs_enabled: false,
+        bluebubbles_url: None,
+        bluebubbles_password: None,
+        telegram_bot_token: None,
+        whatsapp_access_token: None,
+        whatsapp_phone_number_id: None,
+        whatsapp_verify_token: None,
+    };
+
+    let user_store = UserStore::new(&config.users_db_path).expect("user store");
+    let index_store = IndexStore::new(&config.task_index_path).expect("index store");
+    let account_store = AccountStore::new(&config.ingestion_db_url).expect("account store");
+
+    let inbound_raw_1 = r#"{
+  "From": "Alice <alice@example.com>",
+  "To": "Service <service@example.com>",
+  "Subject": "Hello 1",
+  "TextBody": "First message",
+  "Attachments": [
+    {
+      "Name": "brief_v1.txt",
+      "Content": "djE=",
+      "ContentType": "text/plain"
+    }
+  ],
+  "Headers": [{"Name": "Message-ID", "Value": "<msg-1@example.com>"}]
+}"#;
+    let payload_1: PostmarkInbound = serde_json::from_str(inbound_raw_1).expect("parse inbound 1");
+    process_inbound_payload(
+        &config,
+        &user_store,
+        &index_store,
+        &account_store,
+        &payload_1,
+        inbound_raw_1.as_bytes(),
+        None,
+    )
+    .expect("process inbound 1");
+
+    let user = user_store
+        .get_or_create_user("email", "alice@example.com")
+        .expect("user lookup");
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    let workspace = first_workspace_dir(&user_paths.workspaces_root);
+
+    let executor = RecordingExecutor::default();
+    let tasks_db_path = user_paths.tasks_db_path.clone();
+    let tick_executor = executor.clone();
+    let tick_handle = std::thread::spawn(move || {
+        let mut scheduler =
+            Scheduler::load(&tasks_db_path, tick_executor).expect("load scheduler for task 1");
+        scheduler.tick().expect("tick run_task 1");
+    });
+
+    wait_for_path(
+        &workspace.join("codex_started.flag"),
+        Duration::from_secs(2),
+    );
+
+    let inbound_raw_2 = r#"{
+  "From": "Alice <alice@example.com>",
+  "To": "Service <service@example.com>",
+  "Subject": "Hello 2",
+  "TextBody": "Second message",
+  "Attachments": [
+    {
+      "Name": "brief_v2.txt",
+      "Content": "djI=",
+      "ContentType": "text/plain"
+    }
+  ],
+  "Headers": [
+    {"Name": "Message-ID", "Value": "<msg-2@example.com>"},
+    {"Name": "References", "Value": "<msg-1@example.com>"}
+  ]
+}"#;
+    let payload_2: PostmarkInbound = serde_json::from_str(inbound_raw_2).expect("parse inbound 2");
+    process_inbound_payload(
+        &config,
+        &user_store,
+        &index_store,
+        &account_store,
+        &payload_2,
+        inbound_raw_2.as_bytes(),
+        None,
+    )
+    .expect("process inbound 2");
+
+    tick_handle.join().expect("join superseded task");
+
+    let status_rows = scheduler_module::load_tasks_with_status(&user_paths.tasks_db_path);
+    assert!(
+        status_rows
+            .iter()
+            .any(|task| task.execution_status.as_deref() == Some("superseded")),
+        "first run should complete as superseded"
+    );
+
+    let thread_request =
+        fs::read_to_string(workspace.join("incoming_email").join("thread_request.md"))
+            .expect("thread_request");
+    assert!(
+        thread_request.contains("First message"),
+        "merged request should retain the original message"
+    );
+    assert!(
+        thread_request.contains("Second message"),
+        "merged request should retain the follow-up message"
+    );
+    assert!(
+        workspace
+            .join("incoming_attachments")
+            .join("brief_v1.txt")
+            .exists(),
+        "merged attachment view should preserve the original attachment"
+    );
+    assert!(
+        workspace
+            .join("incoming_attachments")
+            .join("brief_v2.txt")
+            .exists(),
+        "merged attachment view should include the follow-up attachment"
+    );
+
+    write_fake_codex(&bin_root).expect("swap to fast fake codex");
+
+    let mut scheduler =
+        Scheduler::load(&user_paths.tasks_db_path, executor.clone()).expect("reload scheduler");
+    let enabled_sends_before_rerun = scheduler
+        .tasks()
+        .iter()
+        .filter(|task| matches!(task.kind, TaskKind::SendReply(_)) && task.enabled)
+        .count();
+    assert_eq!(
+        enabled_sends_before_rerun, 0,
+        "superseded run should not leave an enabled send task behind"
+    );
+
+    scheduler.tick().expect("tick run_task 2");
+    scheduler.tick().expect("tick send 2");
+
+    let sent = executor
+        .sent_subjects
+        .lock()
+        .expect("sent_subjects lock poisoned");
+    assert_eq!(sent.len(), 1, "only the fresh rerun should send a reply");
+
+    let reply_html =
+        fs::read_to_string(workspace.join("reply_email_draft.html")).expect("reply draft");
+    assert!(
+        reply_html.contains("Hello 2"),
+        "fresh rerun should reply using the latest follow-up"
+    );
 }

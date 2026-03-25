@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -152,6 +153,33 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
             self.assertFalse((state_dir / MODULE.ACTIVE_SESSION_FILENAME).exists())
             self.assertEqual(calls[0][0], "POST")
             self.assertIn("REQUEST_RELEASE", json.dumps(calls[0][2], sort_keys=True))
+
+    def test_write_json_uses_unique_temp_files_for_parallel_writers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = Path(temp_dir)
+            target = state_dir / MODULE.ACTIVE_SESSION_FILENAME
+            start = threading.Barrier(6)
+            errors = []
+
+            def writer(index: int) -> None:
+                try:
+                    start.wait(timeout=5)
+                    MODULE.write_json(target, {"version": 1, "writer": index})
+                except Exception as exc:  # pragma: no cover - failure path asserted below
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=writer, args=(index,)) for index in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+            self.assertEqual(errors, [])
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["version"], 1)
+            self.assertIn(payload["writer"], range(6))
+            leftovers = sorted(path.name for path in state_dir.iterdir())
+            self.assertEqual(leftovers, [MODULE.ACTIVE_SESSION_FILENAME])
 
     def test_emit_shell_outputs_expected_exports(self):
         payload = {

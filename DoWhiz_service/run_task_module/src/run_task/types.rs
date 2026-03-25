@@ -61,6 +61,10 @@ pub struct RunTaskParams {
     pub has_unified_account: bool,
     /// User's linked channel identifiers for cross-channel routing
     pub user_identities: UserIdentities,
+    /// Expected thread epoch for cancellation when a newer follow-up supersedes this run.
+    pub thread_epoch: Option<u64>,
+    /// Path to thread_state.json for detecting superseding follow-ups.
+    pub thread_state_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +80,8 @@ pub(super) struct RunTaskRequest<'a> {
     pub(super) google_access_token: Option<&'a str>,
     pub(super) has_unified_account: bool,
     pub(super) user_identities: &'a UserIdentities,
+    pub(super) thread_epoch: Option<u64>,
+    pub(super) thread_state_path: Option<&'a Path>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

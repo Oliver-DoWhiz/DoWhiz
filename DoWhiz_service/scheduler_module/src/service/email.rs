@@ -30,7 +30,7 @@ use super::html::{derive_inbound_email_text, render_email_html};
 use super::postmark::{collect_service_address_candidates, normalize_message_id};
 use super::recipients::replyable_recipients;
 use super::scheduler::cancel_pending_thread_tasks;
-use super::workspace::{create_unique_dir, ensure_thread_workspace, write_thread_history};
+use super::workspace::{create_unique_dir, ensure_thread_workspace, refresh_thread_input_snapshot};
 use super::BoxError;
 
 pub use super::postmark::PostmarkInbound;
@@ -633,8 +633,8 @@ fn append_inbound_payload(
 
     clear_dir_except(&incoming_attachments, &entries_attachments)?;
     write_inbound_payload(payload, raw_payload, &incoming_email, &incoming_attachments)?;
-    if let Err(err) = write_thread_history(&incoming_email, &incoming_attachments) {
-        warn!("failed to write thread history: {}", err);
+    if let Err(err) = refresh_thread_input_snapshot(&incoming_email, &incoming_attachments) {
+        warn!("failed to refresh thread input snapshot: {}", err);
     }
     Ok(())
 }

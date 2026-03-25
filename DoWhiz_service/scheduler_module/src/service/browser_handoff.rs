@@ -15,6 +15,8 @@ const BROWSERBASE_API_KEY_ENV_KEY: &str = "BROWSERBASE_API_KEY";
 const BROWSERBASE_API_KEY_ALIAS_ENV_KEY: &str = "BROWSER_BASE_API_KEY";
 const BROWSERBASE_API_BASE_URL_ENV_KEY: &str = "BROWSERBASE_API_BASE_URL";
 const DEFAULT_BROWSERBASE_API_BASE_URL: &str = "https://api.browserbase.com";
+const DEMO_DEFAULT_RUN_ID: &str = "demo";
+const DEMO_RUN_ID_MAX_LEN: usize = 80;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BrowserHandoffGrant {
@@ -30,6 +32,12 @@ struct BrowserHandoffGrant {
 #[derive(Debug, Deserialize)]
 struct BrowserHandoffQuery {
     token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserHandoffDemoQuery {
+    #[serde(default)]
+    run: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +64,9 @@ struct BrowserbaseDebugPage {
 }
 
 pub fn browser_handoff_router() -> Router {
-    Router::new().route("/auth/browser-handoff", get(browser_handoff_page))
+    Router::new()
+        .route("/auth/browser-handoff", get(browser_handoff_page))
+        .route("/browserbase-handoff-demo", get(browser_handoff_demo_page))
 }
 
 async fn browser_handoff_page(Query(query): Query<BrowserHandoffQuery>) -> Response {
@@ -83,6 +93,12 @@ async fn browser_handoff_page(Query(query): Query<BrowserHandoffQuery>) -> Respo
     };
 
     let page = render_browser_handoff_html(&claims, &target_url, &debug_urls);
+    (StatusCode::OK, Html(page)).into_response()
+}
+
+async fn browser_handoff_demo_page(Query(query): Query<BrowserHandoffDemoQuery>) -> Response {
+    let run_id = normalize_demo_run_id(query.run.as_deref().unwrap_or(""));
+    let page = render_browser_handoff_demo_html(&run_id);
     (StatusCode::OK, Html(page)).into_response()
 }
 
@@ -422,6 +438,365 @@ fn render_browser_handoff_html(
     )
 }
 
+fn normalize_demo_run_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return DEMO_DEFAULT_RUN_ID.to_string();
+    }
+
+    let mut normalized = String::new();
+    for ch in trimmed.chars() {
+        if normalized.len() >= DEMO_RUN_ID_MAX_LEN {
+            break;
+        }
+
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            normalized.push(ch);
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+
+    let normalized = normalized.trim_matches('-').to_string();
+    if normalized.is_empty() {
+        DEMO_DEFAULT_RUN_ID.to_string()
+    } else {
+        normalized
+    }
+}
+
+fn render_browser_handoff_demo_html(run_id: &str) -> String {
+    let run_text = escape_html(run_id);
+    let run_attr = escape_html_attr(run_id);
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DoWhiz Browserbase Handoff Demo</title>
+    <style>
+      :root {{
+        color-scheme: light;
+        --bg: #f7f3eb;
+        --panel: rgba(255, 255, 255, 0.94);
+        --panel-strong: #fffdf8;
+        --ink: #171411;
+        --muted: #625c55;
+        --line: rgba(23, 20, 17, 0.12);
+        --accent: #1c7c54;
+        --warn: #b6521e;
+        --shadow: rgba(23, 20, 17, 0.09);
+      }}
+      * {{ box-sizing: border-box; }}
+      body {{
+        margin: 0;
+        min-height: 100vh;
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(28, 124, 84, 0.15), transparent 24rem),
+          radial-gradient(circle at bottom right, rgba(182, 82, 30, 0.14), transparent 28rem),
+          linear-gradient(180deg, #fbfaf7 0%, var(--bg) 100%);
+      }}
+      .shell {{
+        width: min(70rem, calc(100vw - 2rem));
+        margin: 0 auto;
+        padding: 1rem 0 2rem;
+      }}
+      .panel {{
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: 0 24px 64px var(--shadow);
+      }}
+      .hero {{
+        padding: 1.4rem 1.5rem 1.1rem;
+      }}
+      h1 {{
+        margin: 0 0 0.45rem;
+        font-size: clamp(1.5rem, 3vw, 2.3rem);
+      }}
+      p {{
+        margin: 0.3rem 0;
+        line-height: 1.55;
+        color: var(--muted);
+      }}
+      .run-chip {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin-top: 0.7rem;
+        padding: 0.45rem 0.7rem;
+        border-radius: 999px;
+        background: rgba(23, 20, 17, 0.06);
+        color: var(--ink);
+        font-size: 0.95rem;
+      }}
+      .grid {{
+        display: grid;
+        grid-template-columns: 1.3fr 0.9fr;
+        gap: 1rem;
+        margin-top: 1rem;
+      }}
+      .card {{
+        padding: 1.25rem;
+      }}
+      .state-card {{
+        background: var(--panel-strong);
+      }}
+      .eyebrow {{
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }}
+      .state-banner {{
+        display: inline-flex;
+        align-items: center;
+        margin-top: 0.7rem;
+        padding: 0.35rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }}
+      .state-banner.blocked {{
+        background: rgba(182, 82, 30, 0.12);
+        color: var(--warn);
+      }}
+      .state-banner.complete {{
+        background: rgba(28, 124, 84, 0.12);
+        color: var(--accent);
+      }}
+      h2 {{
+        margin: 0.7rem 0 0.45rem;
+        font-size: 1.35rem;
+      }}
+      .instruction-list {{
+        margin: 1rem 0 0;
+        padding-left: 1.1rem;
+      }}
+      .instruction-list li {{
+        margin: 0.45rem 0;
+        color: var(--muted);
+      }}
+      .actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1.2rem;
+      }}
+      button {{
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 0.85rem 1.1rem;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }}
+      .primary {{
+        background: var(--ink);
+        color: #fff;
+      }}
+      .secondary {{
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }}
+      .facts {{
+        display: grid;
+        gap: 0.8rem;
+        margin-top: 1rem;
+      }}
+      .fact {{
+        padding: 0.9rem 1rem;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+      }}
+      .fact strong {{
+        display: block;
+        margin-bottom: 0.25rem;
+      }}
+      code {{
+        display: inline-block;
+        padding: 0.18rem 0.35rem;
+        border-radius: 6px;
+        background: rgba(23, 20, 17, 0.06);
+        color: var(--ink);
+      }}
+      .timestamp {{
+        margin-top: 1rem;
+        font-size: 0.94rem;
+      }}
+      .status-note {{
+        margin-top: 0.8rem;
+        padding: 0.9rem 1rem;
+        border-radius: 16px;
+        background: rgba(23, 20, 17, 0.05);
+        color: var(--muted);
+      }}
+      @media (max-width: 860px) {{
+        .shell {{
+          width: calc(100vw - 1rem);
+          padding-top: 0.5rem;
+        }}
+        .grid {{
+          grid-template-columns: 1fr;
+        }}
+        .hero, .card {{
+          padding: 1rem;
+        }}
+      }}
+    </style>
+  </head>
+  <body>
+    <main class="shell panel" id="demo-root" data-run-id="{run_attr}" data-demo-state="booting">
+      <section class="hero">
+        <div class="eyebrow">Browserbase Same-Tab Demo</div>
+        <h1>Browser handoff demo for run <span id="run-id-copy">{run_text}</span></h1>
+        <p>This page is designed for DoWhiz Browserbase handoff testing. The blocked and completed states are stored in this page's localStorage so the agent and the human can operate the same browser tab without opening a second workflow.</p>
+        <div class="run-chip">Namespaced by <code>?run={run_text}</code></div>
+      </section>
+      <section class="grid">
+        <section class="card state-card">
+          <div class="eyebrow">Current Browser State</div>
+          <div id="state-banner" class="state-banner blocked">Blocked</div>
+          <h2 id="state-title">Agent should stop here and request human approval.</h2>
+          <p id="state-copy">This demo intentionally pauses progress. If the agent sees the blocked state, it should stop clicking, call the human approval gate, and wait for the human to finish the unblock step in this same tab.</p>
+          <div class="status-note" id="status-note">The browser is waiting for a human action. Do not open a new tab or navigate away.</div>
+          <ul class="instruction-list">
+            <li><strong>Agent:</strong> if this page is blocked, request HAG help and wait.</li>
+            <li><strong>Human:</strong> click the completion button below inside the shared Browserbase tab, then reply to the DoWhiz HAG email thread.</li>
+            <li><strong>Resume:</strong> when the agent returns to this tab, it should see the completed state immediately or after a normal refresh.</li>
+          </ul>
+          <div class="actions">
+            <button id="complete-button" class="primary" type="button">Mark handoff complete in this tab</button>
+            <button id="reset-button" class="secondary" type="button">Reset demo state</button>
+          </div>
+          <p class="timestamp" id="updated-at">State not initialized yet.</p>
+        </section>
+        <aside class="card">
+          <div class="eyebrow">State Facts</div>
+          <div class="facts">
+            <section class="fact">
+              <strong>Storage key</strong>
+              <p><code id="storage-key">pending</code></p>
+            </section>
+            <section class="fact">
+              <strong>Why this matters</strong>
+              <p>The human approval link should reopen the exact same stuck tab the agent was using, not a separate browser session.</p>
+            </section>
+            <section class="fact">
+              <strong>Expected operator evidence</strong>
+              <p>Capture the HAG email link, this page in blocked state, this page in completed state, and the final DoWhiz reply after the agent resumes.</p>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script>
+      (function () {{
+        const root = document.getElementById("demo-root");
+        const runId = root.dataset.runId || "{run_attr}";
+        const storageKey = "dowhiz-browserbase-handoff-demo:" + runId;
+        const stateBanner = document.getElementById("state-banner");
+        const stateTitle = document.getElementById("state-title");
+        const stateCopy = document.getElementById("state-copy");
+        const statusNote = document.getElementById("status-note");
+        const updatedAt = document.getElementById("updated-at");
+        const storageKeyNode = document.getElementById("storage-key");
+        const completeButton = document.getElementById("complete-button");
+        const resetButton = document.getElementById("reset-button");
+
+        storageKeyNode.textContent = storageKey;
+
+        function makeBlockedState() {{
+          return {{
+            version: 1,
+            status: "blocked",
+            updatedAt: new Date().toISOString()
+          }};
+        }}
+
+        function isValidState(value) {{
+          return value && value.version === 1 && (value.status === "blocked" || value.status === "complete");
+        }}
+
+        function loadState() {{
+          try {{
+            const raw = window.localStorage.getItem(storageKey);
+            if (!raw) {{
+              return makeBlockedState();
+            }}
+            const parsed = JSON.parse(raw);
+            if (isValidState(parsed)) {{
+              return parsed;
+            }}
+          }} catch (_error) {{
+          }}
+          return makeBlockedState();
+        }}
+
+        function saveState(value) {{
+          window.localStorage.setItem(storageKey, JSON.stringify(value));
+          return value;
+        }}
+
+        function renderState(value) {{
+          root.dataset.demoState = value.status;
+          if (value.status === "complete") {{
+            stateBanner.textContent = "Complete";
+            stateBanner.className = "state-banner complete";
+            stateTitle.textContent = "Human handoff finished in this same tab.";
+            stateCopy.textContent = "The required manual step is complete. The resumed agent should continue from this exact tab instead of rebuilding the flow elsewhere.";
+            statusNote.textContent = "Same-tab success recorded. Reply to the HAG email if the agent is still waiting.";
+            completeButton.disabled = true;
+          }} else {{
+            stateBanner.textContent = "Blocked";
+            stateBanner.className = "state-banner blocked";
+            stateTitle.textContent = "Agent should stop here and request human approval.";
+            stateCopy.textContent = "This demo intentionally pauses progress. If the agent sees the blocked state, it should stop clicking, call the human approval gate, and wait for the human to finish the unblock step in this same tab.";
+            statusNote.textContent = "The browser is waiting for a human action. Do not open a new tab or navigate away.";
+            completeButton.disabled = false;
+          }}
+          updatedAt.textContent = "Last updated: " + value.updatedAt;
+        }}
+
+        function transitionToComplete() {{
+          renderState(saveState({{
+            version: 1,
+            status: "complete",
+            updatedAt: new Date().toISOString()
+          }}));
+        }}
+
+        function resetDemo() {{
+          renderState(saveState(makeBlockedState()));
+        }}
+
+        completeButton.addEventListener("click", transitionToComplete);
+        resetButton.addEventListener("click", resetDemo);
+        window.addEventListener("storage", function (event) {{
+          if (event.key === storageKey) {{
+            renderState(loadState());
+          }}
+        }});
+
+        const initialState = loadState();
+        if (!window.localStorage.getItem(storageKey)) {{
+          saveState(initialState);
+        }}
+        renderState(initialState);
+      }})();
+    </script>
+  </body>
+</html>"#
+    )
+}
+
 fn html_error(status: StatusCode, title: &str, message: &str) -> Response {
     let body = format!(
         r#"<!doctype html>
@@ -658,5 +1033,27 @@ mod tests {
         assert!(html.contains("iframe"));
         assert!(html.contains("https://page-a-full.example.com"));
         assert!(html.contains("https://example.com/login"));
+    }
+
+    #[test]
+    fn normalize_demo_run_id_defaults_and_sanitizes() {
+        assert_eq!(normalize_demo_run_id(""), "demo");
+        assert_eq!(
+            normalize_demo_run_id("  Browserbase handoff / run #42  "),
+            "Browserbase-handoff-run-42"
+        );
+        assert_eq!(normalize_demo_run_id("!!!"), "demo");
+    }
+
+    #[test]
+    fn render_browser_handoff_demo_html_bootstraps_same_tab_state() {
+        let html = render_browser_handoff_demo_html("demo-run-123");
+
+        assert!(html.contains("Browser handoff demo for run"));
+        assert!(html.contains("data-run-id=\"demo-run-123\""));
+        assert!(html.contains("dowhiz-browserbase-handoff-demo:"));
+        assert!(html.contains("Mark handoff complete in this tab"));
+        assert!(html.contains("Agent should stop here and request human approval."));
+        assert!(html.contains("localStorage"));
     }
 }

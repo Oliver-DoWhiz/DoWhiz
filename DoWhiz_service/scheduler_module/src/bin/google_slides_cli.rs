@@ -293,7 +293,8 @@ fn main() {
             cmd_search_image(&query, count, orientation.as_deref())
         }
         "create-presentation" => {
-            let title = parse_arg(&args, "--title").unwrap_or_else(|| "Untitled Presentation".to_string());
+            let title =
+                parse_arg(&args, "--title").unwrap_or_else(|| "Untitled Presentation".to_string());
             cmd_create_presentation(&title)
         }
         "share" => {
@@ -1312,7 +1313,8 @@ fn cmd_get_link(file_id: &str) -> Result<String, String> {
 
     if links.web_view_link.is_none() && links.web_content_link.is_none() {
         output.push_str("No links available. The file may not be shared yet.\n");
-        output.push_str("Use 'google-slides share <id> --email=\"...\"' to share the file first.\n");
+        output
+            .push_str("Use 'google-slides share <id> --email=\"...\"' to share the file first.\n");
     }
 
     Ok(output)
@@ -1335,8 +1337,14 @@ fn cmd_list_permissions(file_id: &str) -> Result<String, String> {
 
     for perm in permissions {
         let id = perm.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let perm_type = perm.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let role = perm.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let perm_type = perm
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let role = perm
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let email = perm
             .get("emailAddress")
             .and_then(|v| v.as_str())

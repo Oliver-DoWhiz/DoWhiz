@@ -131,8 +131,7 @@ pub(super) fn verify_notion(headers: &HeaderMap, body: &[u8]) -> Result<(), &'st
         return Err("invalid_signature_format");
     }
 
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| "bad_secret")?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| "bad_secret")?;
     mac.update(body);
     let expected = format!("v0={}", hex::encode(mac.finalize().into_bytes()));
 
@@ -221,7 +220,7 @@ pub(super) fn verify_wechat(
 /// Message format after decryption: random(16B) + msg_len(4B, big endian) + msg + receiveid
 fn decrypt_wechat_echostr(echostr: &str, encoding_aes_key: &str) -> Result<String, &'static str> {
     use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
-    use base64::engine::{GeneralPurpose, GeneralPurposeConfig, DecodePaddingMode};
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
     // Derive AESKey: Base64_Decode(EncodingAESKey + "=")
@@ -235,12 +234,10 @@ fn decrypt_wechat_echostr(echostr: &str, encoding_aes_key: &str) -> Result<Strin
             .with_decode_padding_mode(DecodePaddingMode::Indifferent)
             .with_decode_allow_trailing_bits(true),
     );
-    let aes_key = lenient_engine
-        .decode(&aes_key_b64)
-        .map_err(|e| {
-            tracing::error!("base64 decode error: {:?}", e);
-            "invalid_encoding_aes_key"
-        })?;
+    let aes_key = lenient_engine.decode(&aes_key_b64).map_err(|e| {
+        tracing::error!("base64 decode error: {:?}", e);
+        "invalid_encoding_aes_key"
+    })?;
 
     if aes_key.len() != 32 {
         return Err("invalid_aes_key_length");
@@ -543,7 +540,10 @@ mod tests {
         // Sorted: ["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]
         let mut parts = vec![token, timestamp, nonce, echostr];
         parts.sort();
-        assert_eq!(parts, vec!["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]);
+        assert_eq!(
+            parts,
+            vec!["aaa_timestamp", "bbb_echo", "mmm_nonce", "zzz_token"]
+        );
 
         let data = parts.join("");
         let mut hasher = Sha1::new();
@@ -684,11 +684,8 @@ mod tests {
     fn verify_whatsapp_subscription_validates_token() {
         std::env::set_var("WHATSAPP_VERIFY_TOKEN", "correct_token");
 
-        let result = verify_whatsapp_subscription(
-            Some("subscribe"),
-            Some("wrong_token"),
-            Some("challenge"),
-        );
+        let result =
+            verify_whatsapp_subscription(Some("subscribe"), Some("wrong_token"), Some("challenge"));
 
         std::env::remove_var("WHATSAPP_VERIFY_TOKEN");
 

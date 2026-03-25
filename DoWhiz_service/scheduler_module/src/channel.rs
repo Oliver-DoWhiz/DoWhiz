@@ -30,7 +30,7 @@ pub enum Channel {
     GoogleSlides,
     /// iMessage via BlueBubbles bridge
     BlueBubbles,
-/// Notion collaboration via API
+    /// Notion collaboration via API
     Notion,
     /// WeChat Work (企业微信) via qyapi
     WeChat,
@@ -57,7 +57,7 @@ impl std::fmt::Display for Channel {
             Channel::GoogleSheets => write!(f, "google_sheets"),
             Channel::GoogleSlides => write!(f, "google_slides"),
             Channel::BlueBubbles => write!(f, "bluebubbles"),
-Channel::Notion => write!(f, "notion"),
+            Channel::Notion => write!(f, "notion"),
             Channel::WeChat => write!(f, "wechat"),
             Channel::Lark => write!(f, "lark"),
         }
@@ -79,7 +79,7 @@ impl std::str::FromStr for Channel {
             "google_sheets" | "googlesheets" => Ok(Channel::GoogleSheets),
             "google_slides" | "googleslides" => Ok(Channel::GoogleSlides),
             "bluebubbles" | "imessage" => Ok(Channel::BlueBubbles),
-"notion" => Ok(Channel::Notion),
+            "notion" => Ok(Channel::Notion),
             "wechat" | "weixin" => Ok(Channel::WeChat),
             "lark" | "feishu" => Ok(Channel::Lark),
             _ => Err(format!("unknown channel: {}", s)),
@@ -191,7 +191,7 @@ pub struct ChannelMetadata {
     pub google_slides_owner_email: Option<String>,
     /// BlueBubbles-specific: Chat GUID (e.g., "iMessage;-;+1234567890")
     pub bluebubbles_chat_guid: Option<String>,
-/// Notion-specific: Workspace ID
+    /// Notion-specific: Workspace ID
     pub notion_workspace_id: Option<String>,
     /// Notion-specific: Workspace name
     pub notion_workspace_name: Option<String>,
@@ -368,11 +368,26 @@ mod tests {
         assert_eq!("sms".parse::<Channel>().unwrap(), Channel::Sms);
         assert_eq!("telegram".parse::<Channel>().unwrap(), Channel::Telegram);
         assert_eq!("whatsapp".parse::<Channel>().unwrap(), Channel::WhatsApp);
-        assert_eq!("google_docs".parse::<Channel>().unwrap(), Channel::GoogleDocs);
-        assert_eq!("googledocs".parse::<Channel>().unwrap(), Channel::GoogleDocs);
-        assert_eq!("google_sheets".parse::<Channel>().unwrap(), Channel::GoogleSheets);
-        assert_eq!("google_slides".parse::<Channel>().unwrap(), Channel::GoogleSlides);
-        assert_eq!("bluebubbles".parse::<Channel>().unwrap(), Channel::BlueBubbles);
+        assert_eq!(
+            "google_docs".parse::<Channel>().unwrap(),
+            Channel::GoogleDocs
+        );
+        assert_eq!(
+            "googledocs".parse::<Channel>().unwrap(),
+            Channel::GoogleDocs
+        );
+        assert_eq!(
+            "google_sheets".parse::<Channel>().unwrap(),
+            Channel::GoogleSheets
+        );
+        assert_eq!(
+            "google_slides".parse::<Channel>().unwrap(),
+            Channel::GoogleSlides
+        );
+        assert_eq!(
+            "bluebubbles".parse::<Channel>().unwrap(),
+            Channel::BlueBubbles
+        );
         assert_eq!("imessage".parse::<Channel>().unwrap(), Channel::BlueBubbles);
     }
 

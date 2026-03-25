@@ -52,6 +52,10 @@ pub struct AuthState {
     pub notion_client_id: Option<String>,
     pub notion_client_secret: Option<String>,
     pub notion_redirect_uri: Option<String>,
+    // Lark OAuth config
+    pub lark_client_id: Option<String>,
+    pub lark_client_secret: Option<String>,
+    pub lark_redirect_uri: Option<String>,
     // Frontend URL for redirects after OAuth
     pub frontend_url: String,
     // User store and paths for task lookups
@@ -3953,6 +3957,383 @@ pub async fn notion_oauth_callback(
 }
 
 // ============================================================================
+// Lark OAuth (User Authentication)
+// ============================================================================
+
+/// Query params for Lark OAuth callback
+#[derive(Debug, Deserialize)]
+pub struct LarkCallbackQuery {
+    pub code: String,
+    pub state: String,
+}
+
+/// Lark app access token response
+#[derive(Debug, Deserialize)]
+struct LarkAppTokenResponse {
+    code: i32,
+    msg: Option<String>,
+    app_access_token: Option<String>,
+}
+
+/// Lark user access token response
+#[derive(Debug, Deserialize)]
+struct LarkUserTokenResponse {
+    code: i32,
+    msg: Option<String>,
+    data: Option<LarkUserTokenData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LarkUserTokenData {
+    access_token: String,
+}
+
+/// Lark user info response
+#[derive(Debug, Deserialize)]
+struct LarkUserInfoResponse {
+    code: i32,
+    msg: Option<String>,
+    data: Option<LarkUserInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LarkUserInfo {
+    open_id: String,
+    name: Option<String>,
+}
+
+/// GET /auth/lark
+/// Initiates Lark OAuth flow - returns redirect URL to Lark's authorization page.
+pub async fn lark_oauth_start(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Check if Lark OAuth is configured
+    let (client_id, redirect_uri) = match (&state.lark_client_id, &state.lark_redirect_uri) {
+        (Some(id), Some(uri)) => (id.clone(), uri.clone()),
+        _ => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "Lark OAuth not configured"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Extract and validate Supabase token
+    let token = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Missing Authorization header"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate the token to ensure user is authenticated
+    if let Err((status, msg)) = validate_supabase_token(&state.supabase_url, &token).await {
+        return (status, Json(serde_json::json!({ "error": msg }))).into_response();
+    }
+
+    // Encode the Supabase token in state so we can identify the user on callback
+    let encoded_state = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
+
+    // Build Lark OAuth URL
+    let lark_auth_url = format!(
+        "https://open.feishu.cn/open-apis/authen/v1/authorize?app_id={}&redirect_uri={}&state={}",
+        client_id,
+        urlencoding::encode(&redirect_uri),
+        encoded_state
+    );
+
+    // Return the URL for the frontend to redirect to
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "redirect_url": lark_auth_url
+        })),
+    )
+        .into_response()
+}
+
+/// GET /auth/lark/callback
+/// Handles Lark OAuth callback - exchanges code for token, gets user info, links account.
+pub async fn lark_oauth_callback(
+    State(state): State<AuthState>,
+    Query(params): Query<LarkCallbackQuery>,
+) -> impl IntoResponse {
+    // Helper to build redirect URLs to the frontend
+    let frontend_url = state.frontend_url.clone();
+    let redirect_to = |path: &str| -> axum::response::Response {
+        Redirect::to(&format!("{}{}", frontend_url, path)).into_response()
+    };
+
+    // Check if Lark OAuth is configured
+    let (client_id, client_secret, _redirect_uri) = match (
+        &state.lark_client_id,
+        &state.lark_client_secret,
+        &state.lark_redirect_uri,
+    ) {
+        (Some(id), Some(secret), Some(uri)) => (id.clone(), secret.clone(), uri.clone()),
+        _ => {
+            return redirect_to("/auth/index.html?lark=error&reason=not_configured");
+        }
+    };
+
+    // Decode state to get the Supabase token
+    let token = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&params.state) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(t) => t,
+            Err(_) => {
+                return redirect_to("/auth/index.html?lark=error&reason=invalid_state");
+            }
+        },
+        Err(_) => {
+            return redirect_to("/auth/index.html?lark=error&reason=invalid_state");
+        }
+    };
+
+    // Validate Supabase token and get user
+    let auth_user_id = match validate_supabase_token(&state.supabase_url, &token).await {
+        Ok(user) => user.id,
+        Err(_) => {
+            return redirect_to("/auth/index.html?lark=error&reason=invalid_token");
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    // Step 1: Get app_access_token
+    let app_token_res = client
+        .post("https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal")
+        .json(&serde_json::json!({
+            "app_id": client_id,
+            "app_secret": client_secret,
+        }))
+        .send()
+        .await;
+
+    let app_access_token = match app_token_res {
+        Ok(res) if res.status().is_success() => {
+            match res.json::<LarkAppTokenResponse>().await {
+                Ok(t) if t.code == 0 => match t.app_access_token {
+                    Some(token) => token,
+                    None => {
+                        error!("Lark app token response missing token");
+                        return redirect_to("/auth/index.html?lark=error&reason=app_token_missing");
+                    }
+                },
+                Ok(t) => {
+                    error!("Lark app token error {}: {:?}", t.code, t.msg);
+                    return redirect_to("/auth/index.html?lark=error&reason=app_token_error");
+                }
+                Err(e) => {
+                    error!("Failed to parse Lark app token response: {}", e);
+                    return redirect_to("/auth/index.html?lark=error&reason=app_token_parse_error");
+                }
+            }
+        }
+        Ok(res) => {
+            error!("Lark app token request failed: {}", res.status());
+            return redirect_to("/auth/index.html?lark=error&reason=app_token_request_failed");
+        }
+        Err(e) => {
+            error!("Lark app token request failed: {}", e);
+            return redirect_to("/auth/index.html?lark=error&reason=app_token_request_failed");
+        }
+    };
+
+    // Step 2: Exchange code for user access token
+    let user_token_res = client
+        .post("https://open.feishu.cn/open-apis/authen/v1/oidc/access_token")
+        .header("Authorization", format!("Bearer {}", app_access_token))
+        .json(&serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": params.code,
+        }))
+        .send()
+        .await;
+
+    let user_access_token = match user_token_res {
+        Ok(res) if res.status().is_success() => {
+            match res.json::<LarkUserTokenResponse>().await {
+                Ok(t) if t.code == 0 => match t.data {
+                    Some(data) => data.access_token,
+                    None => {
+                        error!("Lark user token response missing data");
+                        return redirect_to("/auth/index.html?lark=error&reason=user_token_missing");
+                    }
+                },
+                Ok(t) => {
+                    error!("Lark user token error {}: {:?}", t.code, t.msg);
+                    return redirect_to("/auth/index.html?lark=error&reason=user_token_error");
+                }
+                Err(e) => {
+                    error!("Failed to parse Lark user token response: {}", e);
+                    return redirect_to("/auth/index.html?lark=error&reason=user_token_parse_error");
+                }
+            }
+        }
+        Ok(res) => {
+            error!("Lark user token exchange failed: {}", res.status());
+            return redirect_to("/auth/index.html?lark=error&reason=token_exchange_failed");
+        }
+        Err(e) => {
+            error!("Lark user token request failed: {}", e);
+            return redirect_to("/auth/index.html?lark=error&reason=token_request_failed");
+        }
+    };
+
+    // Step 3: Get user info
+    let user_res = client
+        .get("https://open.feishu.cn/open-apis/authen/v1/user_info")
+        .header("Authorization", format!("Bearer {}", user_access_token))
+        .send()
+        .await;
+
+    let lark_user = match user_res {
+        Ok(res) if res.status().is_success() => {
+            match res.json::<LarkUserInfoResponse>().await {
+                Ok(r) if r.code == 0 => match r.data {
+                    Some(user) => user,
+                    None => {
+                        error!("Lark user info response missing data");
+                        return redirect_to("/auth/index.html?lark=error&reason=user_info_missing");
+                    }
+                },
+                Ok(r) => {
+                    error!("Lark user info error {}: {:?}", r.code, r.msg);
+                    return redirect_to("/auth/index.html?lark=error&reason=user_info_error");
+                }
+                Err(e) => {
+                    error!("Failed to parse Lark user info response: {}", e);
+                    return redirect_to("/auth/index.html?lark=error&reason=user_parse_error");
+                }
+            }
+        }
+        Ok(res) => {
+            error!("Lark user info request failed: {}", res.status());
+            return redirect_to("/auth/index.html?lark=error&reason=user_request_failed");
+        }
+        Err(e) => {
+            error!("Lark user info request failed: {}", e);
+            return redirect_to("/auth/index.html?lark=error&reason=user_request_failed");
+        }
+    };
+
+    info!(
+        "Lark OAuth successful for user {} (Lark: {} / {})",
+        auth_user_id,
+        lark_user.name.as_deref().unwrap_or("unknown"),
+        lark_user.open_id
+    );
+
+    // Step 4: Get user's DoWhiz account
+    let store = state.account_store.clone();
+    let account_result =
+        task::spawn_blocking(move || store.get_account_by_auth_user(auth_user_id)).await;
+
+    let account = match account_result {
+        Ok(Ok(Some(acc))) => acc,
+        Ok(Ok(None)) => {
+            return redirect_to("/auth/index.html?lark=error&reason=account_not_found");
+        }
+        Ok(Err(e)) => {
+            error!("Failed to get account: {}", e);
+            return redirect_to("/auth/index.html?lark=error&reason=db_error");
+        }
+        Err(e) => {
+            error!("spawn_blocking panicked: {}", e);
+            return redirect_to("/auth/index.html?lark=error&reason=internal_error");
+        }
+    };
+
+    // Step 5: Link Lark open_id to account
+    let store = state.account_store.clone();
+    let lark_open_id = lark_user.open_id.clone();
+    let link_result = task::spawn_blocking(move || {
+        store.create_identifier(account.id, "lark", &lark_open_id)
+    })
+    .await;
+
+    match link_result {
+        Ok(Ok(_identifier)) => {
+            info!(
+                "Linked Lark {} to account {}",
+                lark_user.open_id, account.id
+            );
+            track_auth_event(
+                &state.account_store,
+                "channel_connect_succeeded",
+                Some(account.id),
+                Some(account.auth_user_id),
+                Some(format!(
+                    "channel_connect:{}:lark:{}",
+                    account.id, lark_user.open_id
+                )),
+                Some("/auth/lark/callback"),
+                serde_json::json!({
+                    "identifier_type": "lark",
+                    "identifier": lark_user.open_id,
+                    "provider": "lark",
+                    "user_name": lark_user.name,
+                }),
+            );
+            redirect_to("/auth/index.html?lark=success")
+        }
+        Ok(Err(AccountStoreError::IdentifierTaken)) => {
+            track_auth_event(
+                &state.account_store,
+                "channel_connect_failed",
+                Some(account.id),
+                Some(account.auth_user_id),
+                Some(format!(
+                    "channel_connect_failed:{}:lark:{}",
+                    account.id, lark_user.open_id
+                )),
+                Some("/auth/lark/callback"),
+                serde_json::json!({
+                    "identifier_type": "lark",
+                    "identifier": lark_user.open_id,
+                    "error_reason": "identifier_taken",
+                }),
+            );
+            redirect_to("/auth/index.html?lark=error&reason=already_linked")
+        }
+        Ok(Err(e)) => {
+            error!("Failed to link Lark: {}", e);
+            track_auth_event(
+                &state.account_store,
+                "channel_connect_failed",
+                Some(account.id),
+                Some(account.auth_user_id),
+                Some(format!(
+                    "channel_connect_failed:{}:lark:{}",
+                    account.id, lark_user.open_id
+                )),
+                Some("/auth/lark/callback"),
+                serde_json::json!({
+                    "identifier_type": "lark",
+                    "identifier": lark_user.open_id,
+                    "error_reason": "link_failed",
+                }),
+            );
+            redirect_to("/auth/index.html?lark=error&reason=link_failed")
+        }
+        Err(e) => {
+            error!("spawn_blocking panicked: {}", e);
+            redirect_to("/auth/index.html?lark=error&reason=internal_error")
+        }
+    }
+}
+
+// ============================================================================
 // Email Verification
 // ============================================================================
 
@@ -4374,6 +4755,8 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/github/callback", get(github_oauth_callback))
         .route("/auth/notion", get(notion_oauth_start))
         .route("/auth/notion/callback", get(notion_oauth_callback))
+        .route("/auth/lark", get(lark_oauth_start))
+        .route("/auth/lark/callback", get(lark_oauth_callback))
         .route(
             "/api/startup-workspace/intake-chat",
             post(startup_workspace_intake_chat),
@@ -4563,5 +4946,88 @@ mod tests {
 
         let token = extract_bearer_token(&headers);
         assert_eq!(token, None);
+    }
+
+    // ==================== Lark OAuth Tests ====================
+
+    #[test]
+    fn lark_callback_query_deserializes_correctly() {
+        let query = "code=abc123&state=encoded_token";
+        let parsed: LarkCallbackQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(parsed.code, "abc123");
+        assert_eq!(parsed.state, "encoded_token");
+    }
+
+    #[test]
+    fn lark_callback_query_handles_special_chars() {
+        let query = "code=abc%2B123%3D&state=token%2Fwith%2Fslashes";
+        let parsed: LarkCallbackQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(parsed.code, "abc+123=");
+        assert_eq!(parsed.state, "token/with/slashes");
+    }
+
+    #[test]
+    fn lark_app_token_response_deserializes_correctly() {
+        let json = r#"{"code":0,"msg":"success","app_access_token":"a-xxxxx"}"#;
+        let parsed: LarkAppTokenResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.code, 0);
+        assert_eq!(parsed.app_access_token, Some("a-xxxxx".to_string()));
+    }
+
+    #[test]
+    fn lark_app_token_response_handles_error() {
+        let json = r#"{"code":10003,"msg":"invalid app_id"}"#;
+        let parsed: LarkAppTokenResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.code, 10003);
+        assert_eq!(parsed.msg, Some("invalid app_id".to_string()));
+        assert_eq!(parsed.app_access_token, None);
+    }
+
+    #[test]
+    fn lark_user_token_response_deserializes_correctly() {
+        let json = r#"{"code":0,"msg":"success","data":{"access_token":"u-xxxxx"}}"#;
+        let parsed: LarkUserTokenResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.code, 0);
+        assert!(parsed.data.is_some());
+        assert_eq!(parsed.data.unwrap().access_token, "u-xxxxx");
+    }
+
+    #[test]
+    fn lark_user_info_response_deserializes_correctly() {
+        let json = r#"{"code":0,"msg":"success","data":{"open_id":"ou_abc123","name":"Test User"}}"#;
+        let parsed: LarkUserInfoResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.code, 0);
+        assert!(parsed.data.is_some());
+        let user = parsed.data.unwrap();
+        assert_eq!(user.open_id, "ou_abc123");
+        assert_eq!(user.name, Some("Test User".to_string()));
+    }
+
+    #[test]
+    fn lark_user_info_response_handles_minimal_data() {
+        let json = r#"{"code":0,"data":{"open_id":"ou_xyz789"}}"#;
+        let parsed: LarkUserInfoResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.code, 0);
+        let user = parsed.data.unwrap();
+        assert_eq!(user.open_id, "ou_xyz789");
+        assert_eq!(user.name, None);
+    }
+
+    #[test]
+    fn lark_oauth_url_format() {
+        let client_id = "cli_test123";
+        let redirect_uri = "https://api.dowhiz.com/auth/lark/callback";
+        let state = "encoded_state";
+
+        let url = format!(
+            "https://open.feishu.cn/open-apis/authen/v1/authorize?app_id={}&redirect_uri={}&state={}",
+            client_id,
+            urlencoding::encode(redirect_uri),
+            state
+        );
+
+        assert!(url.contains("app_id=cli_test123"));
+        assert!(url.contains("redirect_uri=https%3A%2F%2Fapi.dowhiz.com%2Fauth%2Flark%2Fcallback"));
+        assert!(url.contains("state=encoded_state"));
     }
 }

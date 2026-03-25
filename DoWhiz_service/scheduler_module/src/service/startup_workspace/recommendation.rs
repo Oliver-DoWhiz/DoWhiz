@@ -376,7 +376,9 @@ fn build_create_brief_candidate(
 fn build_create_plan_candidate(
     context: &WorkspaceRecommendationContext<'_>,
 ) -> Option<CandidateRecommendation> {
-    if !has_workspace_brief_task(context.recent_tasks) || has_workspace_plan_task(context.recent_tasks) {
+    if !has_workspace_brief_task(context.recent_tasks)
+        || has_workspace_plan_task(context.recent_tasks)
+    {
         return None;
     }
 
@@ -710,15 +712,20 @@ mod tests {
     fn recommends_create_plan_when_brief_exists_but_no_plan() {
         let blueprint = base_blueprint();
         let runtime = runtime();
-        let tasks = vec![
-            task("task-1", Some("success"), Some("Create workspace brief for Acme")),
-        ];
+        let tasks = vec![task(
+            "task-1",
+            Some("success"),
+            Some("Create workspace brief for Acme"),
+        )];
 
         let response =
             evaluate_workspace_recommendations(make_context(&blueprint, &runtime, &tasks, &[]));
 
         let recommendation = response.recommendation.expect("recommendation");
-        assert_eq!(recommendation.recommendation_key, "continuation_opportunity:create_plan");
+        assert_eq!(
+            recommendation.recommendation_key,
+            "continuation_opportunity:create_plan"
+        );
         assert!(matches!(
             recommendation.action,
             WorkspaceRecommendationAction::TriggerCreatePlan
@@ -736,7 +743,10 @@ mod tests {
 
         let recommendation = response.recommendation.expect("recommendation");
         // Should recommend create_brief, not create_plan
-        assert_eq!(recommendation.recommendation_key, "first_value_gap:create_brief");
+        assert_eq!(
+            recommendation.recommendation_key,
+            "first_value_gap:create_brief"
+        );
     }
 
     #[test]
@@ -744,7 +754,11 @@ mod tests {
         let blueprint = base_blueprint();
         let runtime = runtime();
         let tasks = vec![
-            task("task-1", Some("success"), Some("Create workspace brief for Acme")),
+            task(
+                "task-1",
+                Some("success"),
+                Some("Create workspace brief for Acme"),
+            ),
             task("task-2", Some("success"), Some("Create 90-day action plan")),
         ];
 
@@ -753,7 +767,9 @@ mod tests {
 
         // Should not recommend create_plan since it already exists
         assert!(
-            response.recommendation.as_ref()
+            response
+                .recommendation
+                .as_ref()
                 .map(|r| r.recommendation_key.as_str())
                 != Some("continuation_opportunity:create_plan")
         );
@@ -770,6 +786,9 @@ mod tests {
             evaluate_workspace_recommendations(make_context(&blueprint, &runtime, &[], &[]));
 
         let recommendation = response.recommendation.expect("recommendation");
-        assert_eq!(recommendation.recommendation_key, "first_value_gap:create_brief");
+        assert_eq!(
+            recommendation.recommendation_key,
+            "first_value_gap:create_brief"
+        );
     }
 }

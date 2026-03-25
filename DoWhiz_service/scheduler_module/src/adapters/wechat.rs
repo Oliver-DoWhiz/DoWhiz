@@ -144,8 +144,7 @@ impl WeChatOutboundAdapter {
             .ok_or_else(|| AdapterError::SendError("no access_token in response".to_string()))?;
 
         // Cache with 110 minute expiry (tokens last 2 hours, refresh early)
-        let expires_at =
-            std::time::Instant::now() + std::time::Duration::from_secs(110 * 60);
+        let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(110 * 60);
         {
             let mut cache = self.access_token_cache.write().unwrap();
             *cache = Some(CachedAccessToken {
@@ -177,9 +176,7 @@ impl OutboundAdapter for WeChatOutboundAdapter {
             touser: user_id.clone(),
             msgtype: "text".to_string(),
             agentid: self.agent_id.parse().unwrap_or(1),
-            text: WeChatTextContent {
-                content: text,
-            },
+            text: WeChatTextContent { content: text },
         };
 
         let url = format!(
@@ -279,15 +276,15 @@ fn parse_wechat_xml(xml: &str) -> Result<WeChatMessage, AdapterError> {
         Some(xml[start..end].trim().to_string())
     }
 
-    let to_user_name = extract_cdata(xml, "ToUserName")
-        .ok_or_else(|| AdapterError::MissingField("ToUserName"))?;
+    let to_user_name =
+        extract_cdata(xml, "ToUserName").ok_or_else(|| AdapterError::MissingField("ToUserName"))?;
     let from_user_name = extract_cdata(xml, "FromUserName")
         .ok_or_else(|| AdapterError::MissingField("FromUserName"))?;
     let create_time = extract_value(xml, "CreateTime")
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
-    let msg_type = extract_cdata(xml, "MsgType")
-        .ok_or_else(|| AdapterError::MissingField("MsgType"))?;
+    let msg_type =
+        extract_cdata(xml, "MsgType").ok_or_else(|| AdapterError::MissingField("MsgType"))?;
     let content = extract_cdata(xml, "Content").unwrap_or_default();
     let msg_id = extract_value(xml, "MsgId").unwrap_or_default();
     let agent_id = extract_value(xml, "AgentID")
@@ -365,8 +362,14 @@ mod tests {
         assert_eq!(message.channel, Channel::WeChat);
         assert_eq!(message.sender, "zhangsan");
         assert_eq!(message.text_body, Some("Hello from WeChat!".to_string()));
-        assert_eq!(message.metadata.wechat_corp_id, Some("ww1234567890".to_string()));
-        assert_eq!(message.metadata.wechat_user_id, Some("zhangsan".to_string()));
+        assert_eq!(
+            message.metadata.wechat_corp_id,
+            Some("ww1234567890".to_string())
+        );
+        assert_eq!(
+            message.metadata.wechat_user_id,
+            Some("zhangsan".to_string())
+        );
         assert_eq!(message.metadata.wechat_agent_id, Some("1".to_string()));
     }
 
@@ -406,7 +409,10 @@ mod tests {
         let adapter = WeChatInboundAdapter::new();
         let result = adapter.parse(xml.as_bytes());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unsupported message type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported message type"));
     }
 
     #[test]
@@ -455,7 +461,10 @@ mod tests {
 
         let adapter = WeChatInboundAdapter::new();
         let message = adapter.parse(xml.as_bytes()).unwrap();
-        assert_eq!(message.text_body, Some("你好，请帮我处理这个任务".to_string()));
+        assert_eq!(
+            message.text_body,
+            Some("你好，请帮我处理这个任务".to_string())
+        );
         assert_eq!(message.sender, "张三");
     }
 
@@ -563,9 +572,15 @@ Line 3]]></Content>
         let adapter = WeChatInboundAdapter::new();
         let message = adapter.parse(xml.as_bytes()).unwrap();
 
-        assert_eq!(message.metadata.wechat_corp_id, Some("ww9876543210".to_string()));
+        assert_eq!(
+            message.metadata.wechat_corp_id,
+            Some("ww9876543210".to_string())
+        );
         assert_eq!(message.metadata.wechat_user_id, Some("lisi".to_string()));
-        assert_eq!(message.metadata.wechat_agent_id, Some("1000005".to_string()));
+        assert_eq!(
+            message.metadata.wechat_agent_id,
+            Some("1000005".to_string())
+        );
     }
 
     #[test]

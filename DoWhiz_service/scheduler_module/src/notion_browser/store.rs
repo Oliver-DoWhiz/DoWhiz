@@ -176,7 +176,10 @@ impl MongoNotionProcessedStore {
     }
 
     /// Get all processed notification IDs for a specific workspace.
-    pub fn get_processed_for_workspace(&self, workspace_id: &str) -> Result<Vec<String>, NotionError> {
+    pub fn get_processed_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<String>, NotionError> {
         let collection = match &self.collection {
             Some(c) => c,
             None => return Ok(vec![]), // noop mode
