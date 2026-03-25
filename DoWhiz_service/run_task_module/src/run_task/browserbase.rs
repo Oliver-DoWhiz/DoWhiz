@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -208,21 +209,57 @@ fn resolve_session_manager_command() -> String {
         return path.to_string_lossy().into_owned();
     }
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_wrapper = manifest_dir
-        .parent()
-        .map(|path| path.join("bin").join("browserbase_session_manager"));
-    if let Some(path) = repo_wrapper.filter(|path| path.exists()) {
+    let mut start_dirs = Vec::new();
+    if let Ok(current_dir) = env::current_dir() {
+        start_dirs.push(current_dir);
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            start_dirs.push(parent.to_path_buf());
+        }
+    }
+    start_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+
+    if let Some(path) = find_existing_session_manager_candidate(&start_dirs) {
         return path.to_string_lossy().into_owned();
     }
 
     "browserbase_session_manager".to_string()
 }
 
+fn find_existing_session_manager_candidate(start_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let mut seen = HashSet::new();
+    for start_dir in start_dirs {
+        for ancestor in start_dir.ancestors() {
+            for candidate in session_manager_candidates_for_ancestor(ancestor) {
+                if !seen.insert(candidate.clone()) {
+                    continue;
+                }
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn session_manager_candidates_for_ancestor(ancestor: &Path) -> [PathBuf; 3] {
+    [
+        ancestor.join("browserbase_session_manager"),
+        ancestor.join("bin").join("browserbase_session_manager"),
+        ancestor
+            .join("DoWhiz_service")
+            .join("bin")
+            .join("browserbase_session_manager"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use tempfile::tempdir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -326,5 +363,43 @@ mod tests {
             derive_public_service_base_url("https://api.example.com/").as_deref(),
             Some("https://api.example.com/service")
         );
+    }
+
+    #[test]
+    fn find_existing_session_manager_candidate_finds_repo_wrapper_from_nested_dir() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let nested = repo_root.join("some").join("deep").join("place");
+        let wrapper = repo_root
+            .join("DoWhiz_service")
+            .join("bin")
+            .join("browserbase_session_manager");
+        std::fs::create_dir_all(wrapper.parent().expect("wrapper parent"))
+            .expect("create wrapper parent");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(&wrapper, "#!/usr/bin/env bash\n").expect("write wrapper");
+
+        let found =
+            find_existing_session_manager_candidate(&[nested]).expect("wrapper should be found");
+        assert_eq!(found, wrapper);
+    }
+
+    #[test]
+    fn find_existing_session_manager_candidate_finds_bin_wrapper_from_nested_dir() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let nested = repo_root
+            .join("run_task_module")
+            .join("target")
+            .join("debug");
+        let wrapper = repo_root.join("bin").join("browserbase_session_manager");
+        std::fs::create_dir_all(wrapper.parent().expect("wrapper parent"))
+            .expect("create wrapper parent");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(&wrapper, "#!/usr/bin/env bash\n").expect("write wrapper");
+
+        let found =
+            find_existing_session_manager_candidate(&[nested]).expect("wrapper should be found");
+        assert_eq!(found, wrapper);
     }
 }
