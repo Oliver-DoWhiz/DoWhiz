@@ -30,7 +30,10 @@ use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
-use super::utils::{run_command_with_timeout, run_task_timeout, tail_string};
+use super::utils::{
+    run_command_with_timeout, run_command_with_timeout_and_cancel, run_task_timeout, tail_string,
+    ThreadSupersedeMonitor,
+};
 use super::workspace::{canonicalize_dir, workspace_path_in_container};
 
 const PAYMENT_ENV_KEYS: &[&str] = &[
@@ -257,6 +260,10 @@ pub(super) fn run_codex_task(
 ) -> Result<RunTaskOutput, RunTaskError> {
     super::env::load_env_sources(request.workspace_dir)?;
     let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
+    let cancel_monitor = request
+        .thread_epoch
+        .zip(request.thread_state_path)
+        .map(|(epoch, path)| ThreadSupersedeMonitor::new(path, epoch));
     let backend = resolve_execution_backend();
     match backend {
         ExecutionBackend::AzureAci => {
@@ -270,7 +277,13 @@ pub(super) fn run_codex_task(
         }
     }
     if backend == ExecutionBackend::AzureAci {
-        return run_codex_task_azure_aci(request, runner, reply_html_path, reply_attachments_dir);
+        return run_codex_task_azure_aci(
+            request,
+            runner,
+            reply_html_path,
+            reply_attachments_dir,
+            cancel_monitor.as_ref(),
+        );
     }
     ensure_local_execution_allowed()?;
     let docker_image = read_env_trimmed("RUN_TASK_DOCKER_IMAGE");
@@ -569,7 +582,12 @@ pub(super) fn run_codex_task(
             .arg(DOCKER_WORKSPACE_DIR)
             .arg(prompt);
 
-        match run_command_with_timeout(cmd, timeout, "docker run") {
+        match run_command_with_timeout_and_cancel(
+            cmd,
+            timeout,
+            "docker run",
+            cancel_monitor.as_ref(),
+        ) {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
                 let failure = RunTaskError::DockerNotFound;
@@ -663,7 +681,7 @@ pub(super) fn run_codex_task(
             cmd.env("GIT_TERMINAL_PROMPT", "0");
         }
 
-        match run_command_with_timeout(cmd, timeout, "codex") {
+        match run_command_with_timeout_and_cancel(cmd, timeout, "codex", cancel_monitor.as_ref()) {
             Ok(output) => output,
             Err(RunTaskError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
                 let failure = RunTaskError::CodexNotFound;
@@ -818,6 +836,7 @@ fn run_codex_task_azure_aci(
     runner: &str,
     reply_html_path: PathBuf,
     reply_attachments_dir: PathBuf,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<RunTaskOutput, RunTaskError> {
     let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let config = load_azure_aci_config()?;
@@ -1028,6 +1047,7 @@ fn run_codex_task_azure_aci(
         bypass_sandbox,
         &env_overrides,
         timeout,
+        cancel_monitor,
     );
     eprintln!(
         "[run_task] azure_aci delete-request container={} resource_group={}",
@@ -1299,7 +1319,15 @@ fn run_azure_aci_execution(
     bypass_sandbox: bool,
     env_overrides: &[(String, String)],
     timeout: Duration,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<AzureAciExecutionArtifacts, RunTaskError> {
+    if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
+        return Err(RunTaskError::Canceled {
+            reason,
+            output: "superseded before Azure ACI execution started".to_string(),
+        });
+    }
+
     let workspace_sh = shell_quote(&container_workspace_dir.to_string_lossy());
     let output_file = shell_quote(
         &container_workspace_dir
@@ -1450,7 +1478,7 @@ exit \"$status\"\n",
         });
     }
     let poll_timeout = timeout.saturating_sub(elapsed_after_create);
-    let container_state = poll_aci_state(config, container_name, poll_timeout)?;
+    let container_state = poll_aci_state(config, container_name, poll_timeout, cancel_monitor)?;
     let logs = fetch_aci_logs(config, container_name).unwrap_or_default();
     let container_show_json = fetch_aci_show_json(config, container_name).ok();
     Ok(AzureAciExecutionArtifacts {
@@ -1464,9 +1492,24 @@ fn poll_aci_state(
     config: &AzureAciConfig,
     container_name: &str,
     timeout: Duration,
+    cancel_monitor: Option<&ThreadSupersedeMonitor>,
 ) -> Result<String, RunTaskError> {
     let start = Instant::now();
     loop {
+        if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
+            let cleanup_message = match delete_aci_container_with_retry(config, container_name) {
+                Ok(()) => "remote container deleted after supersede".to_string(),
+                Err(err) if is_aci_not_found_error(&err) => {
+                    "remote container already absent after supersede".to_string()
+                }
+                Err(err) => format!("failed to delete remote container after supersede: {}", err),
+            };
+            return Err(RunTaskError::Canceled {
+                reason,
+                output: cleanup_message,
+            });
+        }
+
         let elapsed = start.elapsed();
         if elapsed >= timeout {
             return Err(RunTaskError::CommandTimeout {

@@ -43,8 +43,8 @@ pub struct NotionStore {
 impl NotionStore {
     /// Create a new NotionStore.
     pub fn new() -> Result<Self, NotionStoreError> {
-        let client = create_client_from_env()
-            .map_err(|e| NotionStoreError::MongoConfig(e.to_string()))?;
+        let client =
+            create_client_from_env().map_err(|e| NotionStoreError::MongoConfig(e.to_string()))?;
         let db = database_from_env(&client);
         let credentials = db.collection::<Document>("notion_credentials");
 
@@ -76,19 +76,14 @@ impl NotionStore {
         // Index on bot_id for webhook lookups (bot_id == integration_id in webhooks)
         ensure_index_compatible(
             &self.credentials,
-            IndexModel::builder()
-                .keys(doc! { "bot_id": 1 })
-                .build(),
+            IndexModel::builder().keys(doc! { "bot_id": 1 }).build(),
         )?;
 
         Ok(())
     }
 
     /// Save or update a credential for an account/workspace.
-    pub fn upsert_credential(
-        &self,
-        credential: &NotionCredential,
-    ) -> Result<(), NotionStoreError> {
+    pub fn upsert_credential(&self, credential: &NotionCredential) -> Result<(), NotionStoreError> {
         let now = BsonDateTime::from_chrono(Utc::now());
 
         self.credentials.update_one(
@@ -170,19 +165,19 @@ impl NotionStore {
         let normalized_id = Self::normalize_workspace_id(workspace_id);
 
         // Try with normalized (dashed) format first
-        if let Some(doc) = self.credentials.find_one(
-            doc! { "workspace_id": &normalized_id },
-            None,
-        )? {
+        if let Some(doc) = self
+            .credentials
+            .find_one(doc! { "workspace_id": &normalized_id }, None)?
+        {
             return Self::doc_to_credential(doc);
         }
 
         // Try with original format as fallback
         if normalized_id != workspace_id {
-            if let Some(doc) = self.credentials.find_one(
-                doc! { "workspace_id": workspace_id },
-                None,
-            )? {
+            if let Some(doc) = self
+                .credentials
+                .find_one(doc! { "workspace_id": workspace_id }, None)?
+            {
                 return Self::doc_to_credential(doc);
             }
         }
@@ -190,10 +185,10 @@ impl NotionStore {
         // Try without dashes as last resort
         let no_dashes = workspace_id.replace('-', "");
         if no_dashes != workspace_id && no_dashes != normalized_id {
-            if let Some(doc) = self.credentials.find_one(
-                doc! { "workspace_id": &no_dashes },
-                None,
-            )? {
+            if let Some(doc) = self
+                .credentials
+                .find_one(doc! { "workspace_id": &no_dashes }, None)?
+            {
                 return Self::doc_to_credential(doc);
             }
         }

@@ -10,10 +10,10 @@ pub mod google_docs;
 pub mod google_sheets;
 pub mod google_slides;
 pub mod image_search;
+pub mod lark;
 pub mod postmark;
 pub mod slack;
 pub mod telegram;
-pub mod lark;
 pub mod wechat;
 pub mod whatsapp;
 
@@ -30,6 +30,7 @@ pub use google_docs::{
 pub use google_sheets::{GoogleSheetsInboundAdapter, GoogleSheetsOutboundAdapter};
 pub use google_slides::{GoogleSlidesInboundAdapter, GoogleSlidesOutboundAdapter};
 pub use image_search::{ImageResult, ImageUrls, SearchResponse, UnsplashClient};
+pub use lark::{LarkInboundAdapter, LarkOutboundAdapter, LarkWebhookPayload};
 pub use postmark::{PostmarkInboundAdapter, PostmarkOutboundAdapter};
 pub use slack::{
     is_url_verification, SlackChallengeResponse, SlackEventWrapper, SlackInboundAdapter,
@@ -38,7 +39,6 @@ pub use slack::{
 pub use telegram::{
     send_quick_telegram_response, TelegramInboundAdapter, TelegramOutboundAdapter, TelegramUpdate,
 };
-pub use lark::{LarkInboundAdapter, LarkOutboundAdapter, LarkWebhookPayload};
 pub use wechat::{WeChatInboundAdapter, WeChatOutboundAdapter};
 pub use whatsapp::{
     send_quick_whatsapp_response, WhatsAppInboundAdapter, WhatsAppOutboundAdapter, WhatsAppWebhook,

@@ -263,12 +263,18 @@ impl<E: TaskExecutor> Scheduler<E> {
                         task_id, err
                     );
                 }
+                let terminal_status = if execution.superseded {
+                    "superseded"
+                } else {
+                    "success"
+                };
+                let terminal_note = execution.terminal_note.clone();
                 self.store.record_execution_finish(
                     task_id,
                     execution_id,
                     executed_at,
-                    "success",
-                    None,
+                    terminal_status,
+                    terminal_note.as_deref(),
                 )?;
                 self.tasks[index].last_run = Some(executed_at);
                 match &mut self.tasks[index].schedule {
@@ -284,6 +290,42 @@ impl<E: TaskExecutor> Scheduler<E> {
                 }
                 let updated_task = self.tasks[index].clone();
                 self.store.update_task(&updated_task)?;
+                if execution.superseded {
+                    if let TaskKind::RunTask(task) = &task_kind {
+                        sync_task_status_to_user_storage(
+                            task_id,
+                            task,
+                            executed_at,
+                            terminal_status,
+                            terminal_note.as_deref(),
+                        );
+                    }
+                    if let Some(session) = archive_session.take() {
+                        match session.finalize(
+                            &task_before_snapshot,
+                            &self.tasks[index],
+                            executed_at,
+                            terminal_status,
+                            terminal_note.as_deref(),
+                        ) {
+                            Ok(record) => {
+                                if let Err(err) = self.store.record_task_debug_archive(&record) {
+                                    warn!(
+                                        "failed to record task debug archive for task {} execution {}: {}",
+                                        record.task_id, record.execution_id, err
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "failed to finalize task debug archive for task {}: {}",
+                                    task_id, err
+                                );
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
                 if let TaskKind::RunTask(task) = &task_kind {
                     if let Some(err) = execution.follow_up_error.as_deref() {
                         warn!("scheduled tasks parse error: {}", err);

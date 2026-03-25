@@ -347,47 +347,19 @@ pub(super) fn write_thread_history(
     incoming_email: &Path,
     incoming_attachments: &Path,
 ) -> Result<(), BoxError> {
-    let entries_email = incoming_email.join("entries");
-    if !entries_email.exists() {
+    let entries = collect_thread_entries(incoming_email, incoming_attachments)?;
+    if entries.is_empty() {
         return Ok(());
     }
-
-    let mut entry_dirs: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(&entries_email)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            entry_dirs.push(entry.path());
-        }
-    }
-    entry_dirs.sort_by_key(|path| {
-        path.file_name()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_default()
-    });
 
     let mut output = String::new();
     output.push_str("# Thread history (inbound)\n");
     output.push_str("Auto-generated from incoming_email/entries. Latest entry is last.\n\n");
 
-    for entry_dir in entry_dirs {
-        let entry_name = entry_dir
-            .file_name()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_else(|| "entry".to_string());
-        let payload_path = entry_dir.join("postmark_payload.json");
-        let summary = load_payload_summary(&payload_path);
-        let attachments_dir = incoming_attachments.join("entries").join(&entry_name);
-        let attachments = list_attachment_names(&attachments_dir).unwrap_or_default();
-        let email_file = if entry_dir.join("email.html").exists() {
-            "email.html"
-        } else if entry_dir.join("email.txt").exists() {
-            "email.txt"
-        } else {
-            "email.html"
-        };
-
+    for entry in entries {
+        let entry_name = entry.entry_name;
         output.push_str(&format!("## {entry_name}\n"));
-        if let Some(summary) = summary {
+        if let Some(summary) = entry.summary {
             output.push_str(&format!("Subject: {}\n", summary.subject));
             output.push_str(&format!("From: {}\n", summary.from));
             output.push_str(&format!("To: {}\n", summary.to));
@@ -413,15 +385,16 @@ pub(super) fn write_thread_history(
 
         output.push_str("Files:\n");
         output.push_str(&format!(
-            "- incoming_email/entries/{entry_name}/{email_file}\n"
+            "- incoming_email/entries/{entry_name}/{}\n",
+            entry.email_file
         ));
         output.push_str(&format!(
             "- incoming_email/entries/{entry_name}/postmark_payload.json\n"
         ));
-        if !attachments.is_empty() {
+        if !entry.attachments.is_empty() {
             output.push_str(&format!(
                 "- incoming_attachments/entries/{entry_name}/ ({})\n",
-                attachments.join(", ")
+                entry.attachments.join(", ")
             ));
         } else {
             output.push_str("- incoming_attachments/entries/(none)\n");
@@ -433,7 +406,327 @@ pub(super) fn write_thread_history(
     Ok(())
 }
 
-#[derive(Default)]
+pub(super) fn refresh_thread_input_snapshot(
+    incoming_email: &Path,
+    incoming_attachments: &Path,
+) -> Result<(), BoxError> {
+    let manifest = rebuild_thread_attachment_view(incoming_attachments)?;
+    write_thread_history(incoming_email, incoming_attachments)?;
+    write_thread_request(incoming_email, incoming_attachments, &manifest)?;
+    Ok(())
+}
+
+fn write_thread_request(
+    incoming_email: &Path,
+    incoming_attachments: &Path,
+    manifest: &[MergedAttachmentManifestEntry],
+) -> Result<(), BoxError> {
+    let entries = collect_thread_entries(incoming_email, incoming_attachments)?;
+    let Some(latest) = entries.last() else {
+        return Ok(());
+    };
+
+    let latest_preview = latest
+        .summary
+        .as_ref()
+        .and_then(build_preview)
+        .unwrap_or_else(|| "(no preview)".to_string());
+
+    let mut output = String::new();
+    output.push_str("# Canonical thread request\n");
+    output.push_str("Auto-generated merged view for reruns after follow-up messages.\n\n");
+    output.push_str("Rules:\n");
+    output.push_str("- Treat the latest inbound message as the newest instruction.\n");
+    output.push_str(
+        "- Earlier messages remain active context unless the latest message overrides them.\n",
+    );
+    output.push_str(
+        "- Use `incoming_attachments/` as the merged attachment view for the whole thread.\n",
+    );
+    output.push_str("- Raw per-message artifacts remain under `incoming_email/entries/` and `incoming_attachments/entries/`.\n\n");
+    output.push_str("## Latest inbound message\n");
+    if let Some(summary) = latest.summary.as_ref() {
+        output.push_str(&format!("Entry: {}\n", latest.entry_name));
+        output.push_str(&format!("Subject: {}\n", summary.subject));
+        output.push_str(&format!("From: {}\n", summary.from));
+        if let Some(date) = summary.date.as_deref() {
+            output.push_str(&format!("Date: {}\n", date));
+        }
+        output.push_str("Preview:\n```text\n");
+        output.push_str(&latest_preview);
+        output.push_str("\n```\n\n");
+    } else {
+        output.push_str(&format!("Entry: {}\n\n", latest.entry_name));
+    }
+
+    output.push_str("## Thread timeline\n");
+    for (index, entry) in entries.iter().enumerate() {
+        output.push_str(&format!("{}. {}", index + 1, entry.entry_name));
+        if let Some(summary) = entry.summary.as_ref() {
+            if !summary.subject.trim().is_empty() {
+                output.push_str(&format!(" | Subject: {}", summary.subject));
+            }
+            if let Some(date) = summary.date.as_deref() {
+                output.push_str(&format!(" | Date: {}", date));
+            }
+            output.push('\n');
+            if let Some(preview) = build_preview(summary) {
+                output.push_str("   Preview:\n");
+                output.push_str("   ```text\n");
+                output.push_str(&preview);
+                output.push_str("\n   ```\n");
+            }
+        } else {
+            output.push('\n');
+        }
+        if !entry.attachments.is_empty() {
+            output.push_str(&format!(
+                "   Attachments: {}\n",
+                entry.attachments.join(", ")
+            ));
+        }
+    }
+    output.push('\n');
+
+    output.push_str("## Merged attachments for this rerun\n");
+    if manifest.is_empty() {
+        output.push_str("- `(none)`\n");
+    } else {
+        output.push_str(
+            "- `incoming_attachments/` contains every attachment needed for the rerun.\n",
+        );
+        output.push_str("- If the same filename appeared multiple times, the newest copy keeps the original name and older copies are prefixed with the entry id.\n");
+        for item in manifest {
+            output.push_str(&format!(
+                "- `{}` from `{}` (source: `incoming_attachments/entries/{}/{}`)\n",
+                item.display_name, item.original_name, item.source_entry, item.source_file
+            ));
+        }
+    }
+    output.push('\n');
+    output
+        .push_str("See `thread_history.md` for a file-by-file map of the raw inbound artifacts.\n");
+
+    std::fs::write(incoming_email.join("thread_request.md"), output)?;
+    Ok(())
+}
+
+fn rebuild_thread_attachment_view(
+    incoming_attachments: &Path,
+) -> Result<Vec<MergedAttachmentManifestEntry>, BoxError> {
+    let entries_root = incoming_attachments.join("entries");
+    clear_dir_except(incoming_attachments, &entries_root)?;
+    if !entries_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let attachment_sources = collect_attachment_sources(&entries_root)?;
+    let mut last_index_by_name = std::collections::HashMap::new();
+    let mut counts_by_name = std::collections::HashMap::new();
+    for (index, source) in attachment_sources.iter().enumerate() {
+        last_index_by_name.insert(source.file_name.clone(), index);
+        *counts_by_name
+            .entry(source.file_name.clone())
+            .or_insert(0usize) += 1;
+    }
+
+    let mut used_display_names = std::collections::HashSet::new();
+    let mut manifest = Vec::with_capacity(attachment_sources.len());
+    for (index, source) in attachment_sources.into_iter().enumerate() {
+        let duplicate_count = counts_by_name.get(&source.file_name).copied().unwrap_or(1);
+        let preferred_name = if duplicate_count > 1
+            && last_index_by_name.get(&source.file_name).copied() != Some(index)
+        {
+            format!("{}__{}", source.entry_name, source.file_name)
+        } else {
+            source.file_name.clone()
+        };
+        let display_name = make_unique_attachment_name(&preferred_name, &mut used_display_names);
+        copy_file_with_fallback(&source.path, &incoming_attachments.join(&display_name))?;
+        manifest.push(MergedAttachmentManifestEntry {
+            display_name,
+            original_name: source.file_name,
+            source_entry: source.entry_name,
+            source_file: source.source_file,
+        });
+    }
+
+    std::fs::write(
+        incoming_attachments.join("thread_manifest.json"),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
+    Ok(manifest)
+}
+
+fn clear_dir_except(root: &Path, keep: &Path) -> Result<(), std::io::Error> {
+    if !root.exists() {
+        std::fs::create_dir_all(root)?;
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)?;
+        } else {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MergedAttachmentManifestEntry {
+    display_name: String,
+    original_name: String,
+    source_entry: String,
+    source_file: String,
+}
+
+#[derive(Debug, Clone)]
+struct AttachmentSource {
+    entry_name: String,
+    file_name: String,
+    source_file: String,
+    path: PathBuf,
+}
+
+fn collect_attachment_sources(entries_root: &Path) -> Result<Vec<AttachmentSource>, BoxError> {
+    let mut entry_dirs = Vec::new();
+    for entry in std::fs::read_dir(entries_root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            entry_dirs.push(entry.path());
+        }
+    }
+    entry_dirs.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+
+    let mut sources = Vec::new();
+    for entry_dir in entry_dirs {
+        let entry_name = entry_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "entry".to_string());
+        let mut files = Vec::new();
+        for file_entry in std::fs::read_dir(&entry_dir)? {
+            let file_entry = file_entry?;
+            if file_entry.file_type()?.is_file() {
+                files.push(file_entry.path());
+            }
+        }
+        files.sort_by_key(|path| {
+            path.file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+        for path in files {
+            let file_name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| "attachment".to_string());
+            sources.push(AttachmentSource {
+                entry_name: entry_name.clone(),
+                source_file: file_name.clone(),
+                file_name,
+                path,
+            });
+        }
+    }
+
+    Ok(sources)
+}
+
+fn make_unique_attachment_name(
+    preferred_name: &str,
+    used_display_names: &mut std::collections::HashSet<String>,
+) -> String {
+    if used_display_names.insert(preferred_name.to_string()) {
+        return preferred_name.to_string();
+    }
+
+    let path = Path::new(preferred_name);
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| preferred_name.to_string());
+    let extension = path
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    for suffix in 2..1000 {
+        let candidate = format!("{stem}_{suffix}{extension}");
+        if used_display_names.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    preferred_name.to_string()
+}
+
+#[derive(Debug, Clone)]
+struct InboundThreadEntry {
+    entry_name: String,
+    email_file: String,
+    summary: Option<PayloadSummary>,
+    attachments: Vec<String>,
+}
+
+fn collect_thread_entries(
+    incoming_email: &Path,
+    incoming_attachments: &Path,
+) -> Result<Vec<InboundThreadEntry>, BoxError> {
+    let entries_email = incoming_email.join("entries");
+    if !entries_email.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entry_dirs: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&entries_email)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            entry_dirs.push(entry.path());
+        }
+    }
+    entry_dirs.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+
+    let mut entries = Vec::with_capacity(entry_dirs.len());
+    for entry_dir in entry_dirs {
+        let entry_name = entry_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "entry".to_string());
+        let payload_path = entry_dir.join("postmark_payload.json");
+        let summary = load_payload_summary(&payload_path);
+        let attachments_dir = incoming_attachments.join("entries").join(&entry_name);
+        let attachments = list_attachment_names(&attachments_dir).unwrap_or_default();
+        let email_file = if entry_dir.join("email.html").exists() {
+            "email.html".to_string()
+        } else if entry_dir.join("email.txt").exists() {
+            "email.txt".to_string()
+        } else {
+            "email.html".to_string()
+        };
+        entries.push(InboundThreadEntry {
+            entry_name,
+            email_file,
+            summary,
+            attachments,
+        });
+    }
+    Ok(entries)
+}
+
+#[derive(Debug, Default, Clone)]
 struct PayloadSummary {
     subject: String,
     from: String,
@@ -533,6 +826,8 @@ pub(super) fn create_unique_dir(root: &Path, base: &str) -> Result<PathBuf, std:
 mod tests {
     use super::*;
     use crate::domain::workspace_blueprint::StartupWorkspaceBlueprint;
+    use serde_json::json;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -576,5 +871,70 @@ mod tests {
         let resources_json = std::fs::read_to_string(startup_workspace_dir.join("resources.json"))
             .expect("resources.json should exist");
         assert!(resources_json.contains("manual_next_step"));
+    }
+
+    #[test]
+    fn refresh_thread_input_snapshot_builds_merged_request_and_attachments() {
+        let temp = tempdir().expect("tempdir");
+        let incoming_email = temp.path().join("incoming_email");
+        let incoming_attachments = temp.path().join("incoming_attachments");
+        let entry_1 = incoming_email.join("entries").join("00001_hello_1");
+        let entry_2 = incoming_email.join("entries").join("00002_hello_2");
+        let attach_1 = incoming_attachments.join("entries").join("00001_hello_1");
+        let attach_2 = incoming_attachments.join("entries").join("00002_hello_2");
+        fs::create_dir_all(&entry_1).expect("entry 1");
+        fs::create_dir_all(&entry_2).expect("entry 2");
+        fs::create_dir_all(&attach_1).expect("attach 1");
+        fs::create_dir_all(&attach_2).expect("attach 2");
+
+        fs::write(
+            entry_1.join("postmark_payload.json"),
+            serde_json::to_string_pretty(&json!({
+                "Subject": "Hello 1",
+                "From": "Alice <alice@example.com>",
+                "To": "Service <service@example.com>",
+                "TextBody": "First message",
+                "Date": "2026-03-25T00:00:00Z",
+                "MessageID": "msg-1@example.com"
+            }))
+            .expect("payload 1"),
+        )
+        .expect("write payload 1");
+        fs::write(entry_1.join("email.html"), "<p>First message</p>").expect("email 1");
+        fs::write(attach_1.join("brief_v1.txt"), "v1").expect("attach file 1");
+
+        fs::write(
+            entry_2.join("postmark_payload.json"),
+            serde_json::to_string_pretty(&json!({
+                "Subject": "Hello 2",
+                "From": "Alice <alice@example.com>",
+                "To": "Service <service@example.com>",
+                "TextBody": "Second message",
+                "Date": "2026-03-25T00:01:00Z",
+                "MessageID": "msg-2@example.com"
+            }))
+            .expect("payload 2"),
+        )
+        .expect("write payload 2");
+        fs::write(entry_2.join("email.html"), "<p>Second message</p>").expect("email 2");
+        fs::write(attach_2.join("brief_v2.txt"), "v2").expect("attach file 2");
+
+        refresh_thread_input_snapshot(&incoming_email, &incoming_attachments)
+            .expect("refresh thread snapshot");
+
+        let thread_request =
+            fs::read_to_string(incoming_email.join("thread_request.md")).expect("thread_request");
+        assert!(thread_request.contains("First message"));
+        assert!(thread_request.contains("Second message"));
+        assert!(thread_request.contains("Latest inbound message"));
+
+        let thread_history =
+            fs::read_to_string(incoming_email.join("thread_history.md")).expect("thread_history");
+        assert!(thread_history.contains("00001_hello_1"));
+        assert!(thread_history.contains("00002_hello_2"));
+
+        assert!(incoming_attachments.join("brief_v1.txt").exists());
+        assert!(incoming_attachments.join("brief_v2.txt").exists());
+        assert!(incoming_attachments.join("thread_manifest.json").exists());
     }
 }

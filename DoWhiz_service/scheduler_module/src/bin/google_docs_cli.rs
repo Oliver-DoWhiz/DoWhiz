@@ -371,7 +371,8 @@ fn main() {
             cmd_search_image(&query, count, orientation.as_deref())
         }
         "create-document" => {
-            let title = parse_arg(&args, "--title").unwrap_or_else(|| "Untitled Document".to_string());
+            let title =
+                parse_arg(&args, "--title").unwrap_or_else(|| "Untitled Document".to_string());
             cmd_create_document(&title)
         }
         "share" => {
@@ -912,7 +913,9 @@ fn cmd_create_document(title: &str) -> Result<String, String> {
         document_id
     ));
     output.push_str("\nNext steps:\n");
-    output.push_str("  - Add content: google-docs insert-text <id> --after=\"\" --text=\"Your content\"\n");
+    output.push_str(
+        "  - Add content: google-docs insert-text <id> --after=\"\" --text=\"Your content\"\n",
+    );
     output.push_str("  - Share with user: google-docs share <id> --email=\"user@example.com\" --role=\"writer\"\n");
     output.push_str("  - Get shareable link: google-docs get-link <id>\n");
 
@@ -992,8 +995,14 @@ fn cmd_list_permissions(file_id: &str) -> Result<String, String> {
         output.push_str("No permissions found.\n");
     } else {
         for perm in &permissions {
-            let perm_type = perm.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
-            let role = perm.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+            let perm_type = perm
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+            let role = perm
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("unknown");
             let id = perm.get("id").and_then(|i| i.as_str()).unwrap_or("unknown");
             let email = perm
                 .get("emailAddress")

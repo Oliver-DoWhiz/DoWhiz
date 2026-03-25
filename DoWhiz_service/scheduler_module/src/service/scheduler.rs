@@ -32,6 +32,8 @@ const WATCHDOG_INTERVAL_SECS: u64 = 30;
 const BUSY_LOG_THROTTLE_SECS: u64 = 10;
 /// Delay before retrying a run_task when the workspace thread is still busy
 const THREAD_BUSY_DEFER_SECS: i64 = 15;
+/// When a newer follow-up supersedes the currently running thread epoch, retry quickly.
+const THREAD_SUPERSEDE_DEFER_SECS: i64 = 1;
 
 fn parse_timeout_secs_env(key: &str) -> Option<u64> {
     std::env::var(key)
@@ -50,13 +52,28 @@ fn resolve_watchdog_task_timeout_secs() -> u64 {
     DEFAULT_TASK_TIMEOUT_SECS.max(run_task_timeout.saturating_add(WATCHDOG_TIMEOUT_HEADROOM_SECS))
 }
 
+#[derive(Clone, Copy)]
+struct RunningThreadState {
+    thread_epoch: u64,
+}
+
 struct RunningThreadGuard {
-    running_threads: Arc<Mutex<HashSet<String>>>,
+    running_threads: Arc<Mutex<HashMap<String, RunningThreadState>>>,
     key: String,
 }
 
+struct ThreadExecutionClaim {
+    guard: Option<RunningThreadGuard>,
+    deferred: Option<ThreadDefer>,
+}
+
+struct ThreadDefer {
+    workspace_dir_display: String,
+    defer_secs: i64,
+}
+
 impl RunningThreadGuard {
-    fn new(running_threads: Arc<Mutex<HashSet<String>>>, key: String) -> Self {
+    fn new(running_threads: Arc<Mutex<HashMap<String, RunningThreadState>>>, key: String) -> Self {
         Self {
             running_threads,
             key,
@@ -87,6 +104,66 @@ fn should_log_busy(key: &str) -> bool {
     should_log
 }
 
+fn thread_busy_defer_secs(task_epoch: u64, running_epoch: u64) -> i64 {
+    if task_epoch > running_epoch {
+        THREAD_SUPERSEDE_DEFER_SECS
+    } else {
+        THREAD_BUSY_DEFER_SECS
+    }
+}
+
+fn claim_thread_execution_slot<E: crate::TaskExecutor>(
+    scheduler: &mut Scheduler<E>,
+    task_id: Uuid,
+    running_threads: &Arc<Mutex<HashMap<String, RunningThreadState>>>,
+) -> Result<ThreadExecutionClaim, SchedulerError> {
+    let Some((key, workspace_dir_display, task_epoch)) = scheduler
+        .tasks()
+        .iter()
+        .find(|task| task.id == task_id)
+        .and_then(|task| match &task.kind {
+            TaskKind::RunTask(run) => Some((
+                run.workspace_dir.to_string_lossy().into_owned(),
+                run.workspace_dir.display().to_string(),
+                run.thread_epoch.unwrap_or(0),
+            )),
+            _ => None,
+        })
+    else {
+        return Ok(ThreadExecutionClaim {
+            guard: None,
+            deferred: None,
+        });
+    };
+
+    let mut running = running_threads
+        .lock()
+        .expect("running thread lock poisoned");
+    if let Some(running_state) = running.get(&key).copied() {
+        drop(running);
+        let defer_secs = thread_busy_defer_secs(task_epoch, running_state.thread_epoch);
+        scheduler.defer_one_shot_task_by_id(task_id, chrono::Duration::seconds(defer_secs))?;
+        return Ok(ThreadExecutionClaim {
+            guard: None,
+            deferred: Some(ThreadDefer {
+                workspace_dir_display,
+                defer_secs,
+            }),
+        });
+    }
+
+    running.insert(
+        key.clone(),
+        RunningThreadState {
+            thread_epoch: task_epoch,
+        },
+    );
+    Ok(ThreadExecutionClaim {
+        guard: Some(RunningThreadGuard::new(running_threads.clone(), key)),
+        deferred: None,
+    })
+}
+
 pub(super) struct SchedulerControl {
     stop: Arc<AtomicBool>,
     handles: Vec<thread::JoinHandle<()>>,
@@ -115,7 +192,7 @@ pub(super) fn start_scheduler_threads(
     let scheduler_max_concurrency = config.scheduler_max_concurrency;
     let scheduler_user_max_concurrency = config.scheduler_user_max_concurrency;
     let claims = Arc::new(Mutex::new(SchedulerClaims::default()));
-    let running_threads = Arc::new(Mutex::new(HashSet::new()));
+    let running_threads = Arc::new(Mutex::new(HashMap::new()));
     let limiter = Arc::new(ConcurrencyLimiter::new(scheduler_max_concurrency));
 
     let mut handles = Vec::with_capacity(2);
@@ -443,7 +520,7 @@ fn execute_due_task(
     user_store: &UserStore,
     index_store: &IndexStore,
     task_ref: &TaskRef,
-    running_threads: &Arc<Mutex<HashSet<String>>>,
+    running_threads: &Arc<Mutex<HashMap<String, RunningThreadState>>>,
 ) -> Result<(), BoxError> {
     let task_id = Uuid::parse_str(&task_ref.task_id)?;
 
@@ -476,42 +553,26 @@ fn execute_due_task(
         "scheduler executing task_id={} user_id={} kind={} status={}",
         task_ref.task_id, task_ref.user_id, kind_label, status_label
     );
-    let mut thread_guard: Option<RunningThreadGuard> = None;
-    if let Some((key, workspace_dir_display)) = scheduler
-        .tasks()
-        .iter()
-        .find(|task| task.id == task_id)
-        .and_then(|task| match &task.kind {
-            TaskKind::RunTask(run) => Some((
-                run.workspace_dir.to_string_lossy().into_owned(),
-                run.workspace_dir.display().to_string(),
-            )),
-            _ => None,
-        })
-    {
-        let mut running = running_threads
-            .lock()
-            .expect("running thread lock poisoned");
-        if running.contains(&key) {
-            drop(running);
-            let defer_result = scheduler.defer_one_shot_task_by_id(
-                task_id,
-                chrono::Duration::seconds(THREAD_BUSY_DEFER_SECS),
-            );
+    let thread_claim = claim_thread_execution_slot(&mut scheduler, task_id, running_threads);
+    let thread_guard = match thread_claim {
+        Ok(ThreadExecutionClaim {
+            guard: _,
+            deferred: Some(deferred),
+        }) => {
             let log_key = format!("thread_busy:{}@{}", task_ref.task_id, task_ref.user_id);
             if should_log_busy(&log_key) {
+                let reason = if deferred.defer_secs == THREAD_SUPERSEDE_DEFER_SECS {
+                    "waiting for superseded run to exit"
+                } else {
+                    "thread busy"
+                };
                 info!(
-                    "scheduler deferred run_task task_id={} user_id={} workspace_dir={} (thread busy, next_attempt_in={}s)",
+                    "scheduler deferred run_task task_id={} user_id={} workspace_dir={} (reason={}, next_attempt_in={}s)",
                     task_ref.task_id,
                     task_ref.user_id,
-                    workspace_dir_display,
-                    THREAD_BUSY_DEFER_SECS
-                );
-            }
-            if let Err(err) = defer_result {
-                warn!(
-                    "failed to defer busy run_task task_id={} user_id={}: {}",
-                    task_ref.task_id, task_ref.user_id, err
+                    deferred.workspace_dir_display,
+                    reason,
+                    deferred.defer_secs
                 );
             }
             if let Err(err) = index_store.sync_user_tasks(&task_ref.user_id, scheduler.tasks()) {
@@ -522,9 +583,18 @@ fn execute_due_task(
             }
             return Ok(());
         }
-        running.insert(key.clone());
-        thread_guard = Some(RunningThreadGuard::new(running_threads.clone(), key));
-    }
+        Ok(ThreadExecutionClaim {
+            guard,
+            deferred: None,
+        }) => guard,
+        Err(err) => {
+            warn!(
+                "failed to defer busy run_task task_id={} user_id={}: {}",
+                task_ref.task_id, task_ref.user_id, err
+            );
+            return Err(Box::new(err));
+        }
+    };
 
     let executed = scheduler.execute_task_by_id(task_id);
 
@@ -853,6 +923,25 @@ mod tests {
             whatsapp_phone_number_id: None,
             whatsapp_verify_token: None,
         })
+    }
+
+    #[test]
+    fn execute_due_task_quickly_defers_newer_epoch_when_workspace_is_busy() {
+        assert_eq!(
+            thread_busy_defer_secs(2, 1),
+            THREAD_SUPERSEDE_DEFER_SECS,
+            "newer thread epochs should retry quickly so the merged rerun can start soon"
+        );
+        assert_eq!(
+            thread_busy_defer_secs(1, 1),
+            THREAD_BUSY_DEFER_SECS,
+            "same epoch should use the normal thread-busy backoff"
+        );
+        assert_eq!(
+            thread_busy_defer_secs(0, 1),
+            THREAD_BUSY_DEFER_SECS,
+            "older epochs should not take the supersede fast path"
+        );
     }
 
     #[test]

@@ -71,10 +71,7 @@ impl InboundAdapter for LarkInboundAdapter {
                 )
             })?;
             let decrypted = Self::decrypt_payload(&encrypted, &encrypt_key)?;
-            info!(
-                "lark payload decrypted, len={}",
-                decrypted.len()
-            );
+            info!("lark payload decrypted, len={}", decrypted.len());
             serde_json::from_slice::<LarkWebhookPayload>(&decrypted)
                 .map_err(|e| AdapterError::ParseError(format!("invalid decrypted JSON: {}", e)))?
         } else {
@@ -87,9 +84,9 @@ impl InboundAdapter for LarkInboundAdapter {
             .ok_or(AdapterError::ParseError("not a message event".to_string()))?;
 
         // Only handle message events for now
-        let message = event.message.ok_or(AdapterError::ParseError(
-            "not a message event".to_string(),
-        ))?;
+        let message = event
+            .message
+            .ok_or(AdapterError::ParseError("not a message event".to_string()))?;
 
         // Extract text content from JSON string
         let content: LarkMessageContent = serde_json::from_str(&message.content)
@@ -284,10 +281,7 @@ impl OutboundAdapter for LarkOutboundAdapter {
             });
         }
 
-        let message_id = response
-            .data
-            .and_then(|d| d.message_id)
-            .unwrap_or_default();
+        let message_id = response.data.and_then(|d| d.message_id).unwrap_or_default();
 
         info!("sent Lark message to {}", receive_id);
 
@@ -473,8 +467,14 @@ mod tests {
         let message = adapter.parse(json.as_bytes()).unwrap();
 
         assert_eq!(message.metadata.lark_app_id, Some("cli_app123".to_string()));
-        assert_eq!(message.metadata.lark_tenant_key, Some("tenant_key456".to_string()));
-        assert_eq!(message.metadata.lark_message_id, Some("msg_id_789".to_string()));
+        assert_eq!(
+            message.metadata.lark_tenant_key,
+            Some("tenant_key456".to_string())
+        );
+        assert_eq!(
+            message.metadata.lark_message_id,
+            Some("msg_id_789".to_string())
+        );
         assert_eq!(message.sender_name, Some("Test User".to_string()));
     }
 
@@ -720,7 +720,10 @@ mod tests {
         assert_eq!(message.channel, Channel::Lark);
         assert_eq!(message.sender, "ou_e2e_user");
         assert_eq!(message.text_body, Some("End to end encrypted!".to_string()));
-        assert_eq!(message.metadata.lark_chat_id, Some("oc_e2e_chat".to_string()));
+        assert_eq!(
+            message.metadata.lark_chat_id,
+            Some("oc_e2e_chat".to_string())
+        );
         assert_eq!(message.sender_name, Some("E2E Test User".to_string()));
 
         // Clean up env var
@@ -757,19 +760,13 @@ mod tests {
 
     #[test]
     fn outbound_adapter_channel_is_lark() {
-        let adapter = LarkOutboundAdapter::new(
-            "app123".to_string(),
-            "secret".to_string(),
-        );
+        let adapter = LarkOutboundAdapter::new("app123".to_string(), "secret".to_string());
         assert_eq!(adapter.channel(), Channel::Lark);
     }
 
     #[test]
     fn outbound_adapter_caches_token() {
-        let adapter = LarkOutboundAdapter::new(
-            "app123".to_string(),
-            "secret".to_string(),
-        );
+        let adapter = LarkOutboundAdapter::new("app123".to_string(), "secret".to_string());
         // Initially no cached token
         {
             let cache = adapter.tenant_access_token_cache.read().unwrap();

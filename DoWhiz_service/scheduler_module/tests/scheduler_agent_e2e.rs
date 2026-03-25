@@ -57,6 +57,8 @@ impl TaskExecutor for RecordingExecutor {
                         scheduler_module::load_google_access_token_from_service_env(),
                     has_unified_account: false,
                     user_identities: Default::default(),
+                    thread_epoch: run.thread_epoch,
+                    thread_state_path: run.thread_state_path.clone(),
                 };
                 let output = run_task_module::run_task(&params)
                     .map_err(|err| SchedulerError::TaskFailed(err.to_string()))?;
@@ -66,6 +68,8 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions: output.scheduler_actions,
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
+                    superseded: false,
+                    terminal_note: None,
                 })
             }
             TaskKind::SendReply(send) => {

@@ -1104,8 +1104,14 @@ impl GoogleDocsOutboundAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            error!("Failed to create document '{}': {} - {}", title, status, body);
-            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+            error!(
+                "Failed to create document '{}': {} - {}",
+                title, status, body
+            );
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
         }
 
         let json: serde_json::Value = response

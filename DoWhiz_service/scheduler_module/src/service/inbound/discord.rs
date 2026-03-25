@@ -14,7 +14,7 @@ use super::super::bump_thread_state;
 use super::super::config::ServiceConfig;
 use super::super::default_thread_state_path;
 use super::super::scheduler::cancel_pending_thread_tasks;
-use super::super::workspace::ensure_thread_workspace;
+use super::super::workspace::{ensure_thread_workspace, refresh_thread_input_snapshot};
 use super::super::write_discord_chat_history_scope_file;
 use super::super::BoxError;
 use super::discord_context::{
@@ -398,6 +398,16 @@ pub(crate) fn hydrate_discord_attachments(
             saved,
             seq,
             incoming_attachments.display()
+        );
+    }
+
+    if let Err(err) =
+        refresh_thread_input_snapshot(&workspace.join("incoming_email"), &incoming_attachments)
+    {
+        warn!(
+            "failed to refresh Discord thread input snapshot for {}: {}",
+            workspace.display(),
+            err
         );
     }
 

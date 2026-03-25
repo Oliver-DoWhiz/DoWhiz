@@ -60,11 +60,7 @@ pub enum NotionNotificationType {
 }
 
 /// Sender domains that indicate a Notion notification email.
-const NOTION_SENDER_DOMAINS: &[&str] = &[
-    "mail.notion.so",
-    "notion.so",
-    "makenotion.com",
-];
+const NOTION_SENDER_DOMAINS: &[&str] = &["mail.notion.so", "notion.so", "makenotion.com"];
 
 /// Regex patterns for extracting Notion information from emails.
 /// Matches page URLs like:
@@ -75,8 +71,7 @@ static NOTION_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     // Match page URLs with UUID suffix (32 hex chars)
     // The UUID is required to distinguish pages from static assets
     // Note: We'll filter out non-page paths in the extraction function
-    Regex::new(r"https://(?:www\.)?notion\.so/([a-zA-Z0-9_/-]+[a-f0-9]{32})")
-        .expect("valid regex")
+    Regex::new(r"https://(?:www\.)?notion\.so/([a-zA-Z0-9_/-]+[a-f0-9]{32})").expect("valid regex")
 });
 
 /// Non-page paths to filter out (static assets, API, etc.)
@@ -89,8 +84,7 @@ static NOTION_SITE_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Pattern to detect comment URLs with discussion parameter
 static NOTION_COMMENT_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https://(?:www\.)?notion\.so/[^\s]*[?&]d=([a-f0-9-]+)")
-        .expect("valid regex")
+    Regex::new(r"https://(?:www\.)?notion\.so/[^\s]*[?&]d=([a-f0-9-]+)").expect("valid regex")
 });
 
 /// Pattern to detect Notion tracking URLs (e.g., https://mg.mail.notion.so/c/eJx...)
@@ -122,7 +116,9 @@ static PAGE_TITLE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// Check if an email sender is from Notion.
 pub fn is_notion_sender(sender: &str) -> bool {
     let sender_lower = sender.to_lowercase();
-    NOTION_SENDER_DOMAINS.iter().any(|domain| sender_lower.contains(domain))
+    NOTION_SENDER_DOMAINS
+        .iter()
+        .any(|domain| sender_lower.contains(domain))
 }
 
 /// Detect if an email is a Notion notification and parse its contents.
@@ -181,7 +177,10 @@ pub fn detect_notion_email(
     // Extract workspace_id from tracking URL metadata (most reliable method)
     let workspace_id = decode_tracking_url_workspace_id(&combined_text);
     if workspace_id.is_some() {
-        debug!("Extracted workspace_id from tracking URL: {:?}", workspace_id);
+        debug!(
+            "Extracted workspace_id from tracking URL: {:?}",
+            workspace_id
+        );
     }
 
     // Extract comment URL if present
@@ -359,7 +358,8 @@ fn detect_notification_type(subject: &str, subject_lower: &str) -> NotionNotific
     if subject.contains("发表了评论") || subject.contains("评论了") {
         return NotionNotificationType::PageComment;
     }
-    if subject.contains("提及了您") || subject.contains("@了您") || subject.contains("提到了你") {
+    if subject.contains("提及了您") || subject.contains("@了您") || subject.contains("提到了你")
+    {
         // Check if it's in a comment context
         if subject.contains("评论") {
             return NotionNotificationType::CommentMention;
@@ -417,11 +417,14 @@ fn decode_tracking_url_workspace_id(text: &str) -> Option<String> {
 /// Decode a single tracking URL payload and extract space_id.
 fn decode_single_tracking_url(encoded: &str) -> Option<String> {
     // Convert base64url to standard base64
-    let encoded_std: String = encoded.chars().map(|c| match c {
-        '-' => '+',
-        '_' => '/',
-        c => c,
-    }).collect();
+    let encoded_std: String = encoded
+        .chars()
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .collect();
 
     // Add padding if needed
     let padding_needed = (4 - encoded_std.len() % 4) % 4;
@@ -458,12 +461,15 @@ fn decode_single_tracking_url(encoded: &str) -> Option<String> {
     for param in decompressed.split('&') {
         if param.starts_with("metadata=") {
             let metadata_encoded = &param[9..]; // Skip "metadata="
-            // URL decode the metadata JSON
+                                                // URL decode the metadata JSON
             if let Ok(metadata_json) = urlencoding::decode(metadata_encoded) {
                 // Parse JSON to extract space_id
                 if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&metadata_json) {
                     if let Some(space_id) = metadata.get("space_id").and_then(|v| v.as_str()) {
-                        debug!("Extracted workspace_id (space_id) from tracking URL: {}", space_id);
+                        debug!(
+                            "Extracted workspace_id (space_id) from tracking URL: {}",
+                            space_id
+                        );
                         return Some(space_id.to_string());
                     }
                 }
@@ -490,23 +496,24 @@ pub fn decode_tracking_url_page_url(text: &str) -> Option<String> {
 /// Decode a single tracking URL payload and extract the actual page URL.
 fn decode_single_tracking_url_page(encoded: &str) -> Option<String> {
     // Convert base64url to standard base64
-    let encoded_std: String = encoded.chars().map(|c| match c {
-        '-' => '+',
-        '_' => '/',
-        c => c,
-    }).collect();
+    let encoded_std: String = encoded
+        .chars()
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .collect();
 
     let padding_needed = (4 - encoded_std.len() % 4) % 4;
     let encoded_padded = format!("{}{}", encoded_std, "=".repeat(padding_needed));
 
     let decoded_bytes = match URL_SAFE_NO_PAD.decode(&encoded_std) {
         Ok(bytes) => bytes,
-        Err(_) => {
-            match base64::engine::general_purpose::STANDARD.decode(&encoded_padded) {
-                Ok(bytes) => bytes,
-                Err(_) => return None,
-            }
-        }
+        Err(_) => match base64::engine::general_purpose::STANDARD.decode(&encoded_padded) {
+            Ok(bytes) => bytes,
+            Err(_) => return None,
+        },
     };
 
     let mut decoder = ZlibDecoder::new(&decoded_bytes[..]);
@@ -662,7 +669,10 @@ mod tests {
         let text = format!("https://mg.mail.notion.so/c/{}", encoded);
         let workspace_id = decode_tracking_url_workspace_id(&text);
 
-        assert!(workspace_id.is_some(), "Should decode workspace_id from tracking URL");
+        assert!(
+            workspace_id.is_some(),
+            "Should decode workspace_id from tracking URL"
+        );
         assert_eq!(workspace_id.unwrap(), "2be6a52cd8a0812a86840003b0ffbf46");
     }
 
@@ -674,10 +684,19 @@ mod tests {
         let text = format!("https://mg.mail.notion.so/c/{}", encoded);
         let page_url = decode_tracking_url_page_url(&text);
 
-        assert!(page_url.is_some(), "Should decode page URL from tracking URL");
+        assert!(
+            page_url.is_some(),
+            "Should decode page URL from tracking URL"
+        );
         let url = page_url.unwrap();
-        assert!(url.contains("notion.so"), "Page URL should be a notion.so URL");
-        assert!(url.contains("Dowhiz-testing"), "Page URL should contain page title");
+        assert!(
+            url.contains("notion.so"),
+            "Page URL should be a notion.so URL"
+        );
+        assert!(
+            url.contains("Dowhiz-testing"),
+            "Page URL should contain page title"
+        );
     }
 
     #[test]
@@ -712,7 +731,10 @@ mod tests {
         let n = notification.unwrap();
 
         // Should have extracted workspace_id from tracking URL
-        assert_eq!(n.workspace_id, Some("2be6a52cd8a0812a86840003b0ffbf46".to_string()));
+        assert_eq!(
+            n.workspace_id,
+            Some("2be6a52cd8a0812a86840003b0ffbf46".to_string())
+        );
 
         // Should also have decoded the page URL
         assert!(n.page_url.is_some());

@@ -154,9 +154,12 @@ You main goal is
 {reply_instruction}
 
 Inputs (relative to workspace root):
-- Incoming email dir: {input_email} (email.html, postmark_payload.json, thread_history.md, entries/)
+- Incoming email dir: {input_email} (latest raw payload plus `thread_request.md`, `thread_history.md`, and `entries/`)
+- `incoming_email/thread_request.md` is the canonical merged request for reruns after follow-up messages. Latest follow-up wins if it conflicts with older instructions.
+- `incoming_email/thread_history.md` maps the full thread history and raw source files.
 - For incoming email, all previous emails in current thread: /incoming_email/entries/
 - Incoming attachments dir: {input_attachments}
+- `incoming_attachments/` is the merged attachment view across the whole active thread. Historical per-message copies remain under `incoming_attachments/entries/`.
 - Memory dir (memory about the current user): {memory}
 - Reference dir (contain all past emails with the current user): {reference}
 
