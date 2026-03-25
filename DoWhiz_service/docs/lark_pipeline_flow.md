@@ -579,7 +579,147 @@ use handlers::ingest_lark;
 
 ---
 
-## 7. Service Processor - scheduler_module/src/service/inbound/lark.rs (NEW FILE)
+## 7. Upstream Classifier (Quick Response) - scheduler_module/src/service/inbound/quick_responses.rs
+
+Before messages hit the full AI pipeline (Claude/Codex in Azure ACI), they pass through an **upstream classifier** powered by GPT-5.4. This allows simple queries (greetings, casual chat, basic questions) to be handled instantly (~1-2 seconds as we send a message back directly via Lark's OutboundAdapter) without having to go through the entire pipeline (creating a full ACI container, running Codex, etc.)
+
+### 7a. Message Router - scheduler_module/src/message_router.rs
+
+The `MessageRouter` classifies incoming messages:
+
+```rust
+pub enum RouterDecision {
+    /// Message was handled by local LLM, contains the response
+    Simple { response: String, memory_update: Option<String> },
+    /// Message should be forwarded to full pipeline (Claude/Codex)
+    Complex,
+    /// Router is disabled or encountered an error, forward to pipeline
+    Passthrough,
+}
+```
+
+Configuration:
+- `ROUTER_MODEL`: Model to use (default: `gpt-5.4`)
+- `ROUTER_ENABLED`: Set to "false" to disable routing (default: enabled)
+- Messages over 300 chars automatically go to full pipeline
+
+### 7b. Quick Response Function - quick_responses.rs
+
+```rust
+/// Try to handle a Lark message with the upstream classifier.
+/// Returns Ok(true) if the message was handled, Ok(false) if it should go to the full pipeline.
+pub(crate) fn try_quick_response_lark(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message_router: &MessageRouter,
+    runtime: &tokio::runtime::Handle,
+    message: &crate::channel::InboundMessage,
+) -> Result<bool, BoxError> {
+    let Some(text) = message.text_body.as_deref() else {
+        return Ok(false);
+    };
+
+    // Lark user ID is the sender (open_id)
+    let open_id = &message.sender;
+
+    // Look up unified account first, fall back to legacy user_store
+    let account_id = lookup_account_by_channel(&Channel::Lark, open_id);
+    let user = user_store.get_or_create_user("lark", open_id)?;
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    let memory = read_user_memo(runtime, account_id, &user_paths.memory_dir);
+
+    let employee_name = config.employee_profile.display_name.as_deref();
+    let decision = runtime.block_on(message_router.classify(
+        text,
+        memory.as_deref(),
+        employee_name,
+        None,
+    ));
+
+    match decision {
+        RouterDecision::Simple { response, memory_update } => {
+            // Write memory update if present
+            if let Some(update) = memory_update {
+                write_memory_update(account_id, &user.user_id, &user_paths.memory_dir, &update)?;
+            }
+
+            // Send quick response via Lark API
+            if send_quick_lark_response(open_id, &response).is_ok() {
+                info!("lark quick response sent: open_id={}", open_id);
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        RouterDecision::Complex | RouterDecision::Passthrough => Ok(false),
+    }
+}
+
+/// Send a quick response to a Lark user.
+fn send_quick_lark_response(open_id: &str, response: &str) -> Result<(), BoxError> {
+    let adapter = LarkOutboundAdapter::from_env()?;
+    let message = OutboundMessage {
+        channel: Channel::Lark,
+        to: vec![open_id.to_string()],
+        text_body: response.to_string(),
+        // ... other fields default ...
+    };
+    adapter.send(&message)?; //Send the Lark Message via Lark's Outbound Adapter
+    Ok(())
+}
+```
+
+### 7c. Integration in ingestion.rs
+
+The quick response check runs before the full pipeline:
+
+```rust
+Channel::Lark => {
+    let message = envelope.to_inbound_message();
+
+    // Try quick response first (GPT-5.4 classifier)
+    if try_quick_response_lark(config, user_store, message_router, runtime, &message)? {
+        info!("lark quick response succeeded");
+        return Ok(());  // Done - no need for full pipeline
+    }
+
+    // Complex query - proceed to full Claude/Codex pipeline
+    let raw_payload = envelope.raw_payload_bytes();
+    process_lark_event(config, user_store, index_store, &message, &raw_payload)
+}
+```
+
+### 7d. Flow Diagram
+
+```
+Lark Message
+     │
+     ▼
+┌─────────────────────────────┐
+│  try_quick_response_lark()  │
+│  ┌───────────────────────┐  │
+│  │  MessageRouter.classify│  │
+│  │  (GPT-5.4)            │  │
+│  └───────────────────────┘  │
+└─────────────────────────────┘
+     │
+     ├── Simple? ──▶ send_quick_lark_response() ──▶ Done (~1-2s)
+     │
+     └── Complex? ──▶ process_lark_event() ──▶ Azure ACI ──▶ Claude (~30-60s)
+```
+
+### 7e. Export in inbound/mod.rs
+
+```rust
+pub(super) use quick_responses::{
+    try_quick_response_bluebubbles, try_quick_response_discord,
+    try_quick_response_google_workspace, try_quick_response_lark, try_quick_response_slack,
+    try_quick_response_telegram, try_quick_response_wechat, try_quick_response_whatsapp,
+};
+```
+
+---
+
+## 8. Service Processor - scheduler_module/src/service/inbound/lark.rs (NEW FILE)
 
 For additional context, global scheduler pattern matches `process_lark_event`:
 
@@ -762,7 +902,7 @@ pub(super) fn append_lark_message(
 
 ---
 
-## 8. Export in scheduler_module/src/service/inbound/mod.rs
+## 9. Export in scheduler_module/src/service/inbound/mod.rs
 
 ```rust
 // Add:
@@ -773,7 +913,7 @@ pub(super) use lark::process_lark_event;
 
 ---
 
-## 9. UserIdentities - run_task_module/src/run_task/types.rs
+## 10. UserIdentities - run_task_module/src/run_task/types.rs
 
 ```rust
 pub struct UserIdentities {
@@ -791,9 +931,9 @@ pub struct UserIdentities {
 
 ---
 
-## 10. Prompt Updates - run_task_module/src/run_task/prompt.rs
+## 11. Prompt Updates - run_task_module/src/run_task/prompt.rs
 
-### 10a. Reply Instruction (add after "wechat" case, ~line 70):
+### 11a. Reply Instruction (add after "wechat" case, ~line 70):
 
 ```rust
             "lark" | "feishu" => {
@@ -801,7 +941,7 @@ pub struct UserIdentities {
             }
 ```
 
-### 10b. Cross-Channel Routing Schema (update ~line 360):
+### 11b. Cross-Channel Routing Schema (update ~line 360):
 
 ```rust
 // Update the channel enum in the JSON schema:
@@ -816,7 +956,7 @@ pub struct UserIdentities {
 - wechat target: reply_message.txt (plain text)
 ```
 
-### 10c. User Identities Display (add in build_user_identities_section, ~line 345):
+### 11c. User Identities Display (add in build_user_identities_section, ~line 345):
 
 ```rust
 //identities.lark_user_id populated via Lark OAuth (separate flow)
@@ -837,7 +977,7 @@ if !identities.wechat_user_ids.is_empty() {
 
 ---
 
-## 11. schedule_auto_reply in actions.rs
+## 12. schedule_auto_reply in actions.rs
 
 ```rust
 pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
@@ -891,7 +1031,7 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
 
 ---
 
-## 12. executor.rs pattern-matches Channel::Lark to execute_lark_send in outbound.rs
+## 13. executor.rs pattern-matches Channel::Lark to execute_lark_send in outbound.rs
 
 ```rust
 // In execute_send_reply or similar
@@ -909,7 +1049,7 @@ fn execute_send_reply(task: &SendReplyTask) -> Result<(), SchedulerError> {
 
 ---
 
-## 13. Execute SendReplyTask in outbound.rs
+## 14. Execute SendReplyTask in outbound.rs
 
 ```rust
 /// Execute a SendReplyTask via Lark (飞书).
@@ -948,7 +1088,7 @@ pub(crate) fn execute_lark_send(task: &SendReplyTask) -> Result<(), SchedulerErr
     };
 
     let result = adapter
-        .send(&message)
+        .send(&message) //Send via Lark's OutboundAdapter
         .map_err(|err| SchedulerError::TaskFailed(format!("Lark send failed: {}", err)))?;
 
     if !result.success {
@@ -969,7 +1109,7 @@ pub(crate) fn execute_lark_send(task: &SendReplyTask) -> Result<(), SchedulerErr
 
 ---
 
-## 14. Gateway Config - gateway.toml
+## 15. Gateway Config - gateway.toml
 
 ```toml
 # Lark (Feishu) routing
@@ -982,7 +1122,7 @@ tenant_id = "default"
 
 ---
 
-## 15. Environment Variables
+## 16. Environment Variables
 
 ```bash
 # Lark Open Platform credentials
