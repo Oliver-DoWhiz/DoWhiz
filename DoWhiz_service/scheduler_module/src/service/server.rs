@@ -177,6 +177,11 @@ pub async fn run_server(
     let notion_client_secret = std::env::var("NOTION_CLIENT_SECRET").ok();
     let notion_redirect_uri = std::env::var("NOTION_REDIRECT_URI").ok();
 
+    // Lark OAuth config (optional)
+    let lark_client_id = std::env::var("LARK_APP_ID").ok();
+    let lark_client_secret = std::env::var("LARK_APP_SECRET").ok();
+    let lark_redirect_uri = std::env::var("LARK_REDIRECT_URI").ok();
+
     // Frontend URL for OAuth redirects
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
@@ -203,6 +208,9 @@ pub async fn run_server(
         notion_client_id,
         notion_client_secret,
         notion_redirect_uri,
+        lark_client_id,
+        lark_client_secret,
+        lark_redirect_uri,
         frontend_url,
         user_store: Some(user_store.clone()),
         users_root: Some(config.users_root.clone()),
