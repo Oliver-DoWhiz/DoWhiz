@@ -95,9 +95,19 @@ class HumanApprovalGateTests(unittest.TestCase):
 
             self.assertEqual(state["challenge_type"], "two_factor")
             self.assertEqual(state["page_state"], "waiting_for_code_input")
-            self.assertIn("Verification method: SMS code to phone ending in 9315", rendered["text_body"])
-            self.assertIn("waiting for a verification code to be typed", rendered["text_body"])
-            self.assertIn("screen.png", rendered["text_body"])
+            self.assertIn(
+                "Blocked on: 2FA for Oliver Google account (SMS code to phone ending in 9315)",
+                rendered["text_body"],
+            )
+            self.assertIn(
+                "Please do: Reply with the required SMS code to phone ending in 9315.",
+                rendered["text_body"],
+            )
+            self.assertIn(
+                "Current page: Browser is waiting for a verification code to be typed",
+                rendered["text_body"],
+            )
+            self.assertIn("Screenshot attached: screen.png", rendered["text_body"])
             self.assertEqual(rendered["attachments"][0]["Name"], "screen.png")
             self.assertEqual(state["request_attachments"][0]["content_type"], "image/png")
 
@@ -121,9 +131,14 @@ class HumanApprovalGateTests(unittest.TestCase):
             state = MODULE.build_request_state(args)
             rendered = state["_rendered_email"]
 
-            self.assertIn("Password env key checked: GOOGLE_PASSWORD", rendered["text_body"])
-            self.assertIn("Checked workspace .env for GOOGLE_PASSWORD; no value was present.", rendered["text_body"])
-            self.assertIn("Password needed", state["subject"])
+            self.assertIn("Blocked on: Password entry for Oliver Google account", rendered["text_body"])
+            self.assertIn(
+                "Please do: Reply with the password for Oliver Google account.",
+                rendered["text_body"],
+            )
+            self.assertNotIn("Password env key checked", rendered["text_body"])
+            self.assertNotIn("Checked workspace .env", rendered["text_body"])
+            self.assertIn("Provide password", state["subject"])
 
     def test_record_send_event_writes_attachment_details(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -169,7 +184,10 @@ class HumanApprovalGateTests(unittest.TestCase):
             state = MODULE.build_request_state(args)
             rendered = state["_rendered_email"]
 
-            self.assertIn("Current browser state: Browser is currently blocked on a CAPTCHA challenge", rendered["text_body"])
+            self.assertIn(
+                "Current page: Browser is currently blocked on a CAPTCHA challenge",
+                rendered["text_body"],
+            )
             self.assertNotIn("attempted one built-in visual solve", rendered["text_body"])
 
     def test_browser_handoff_link_is_included_when_active_session_exists(self):
@@ -218,8 +236,13 @@ class HumanApprovalGateTests(unittest.TestCase):
             claims = self.decode_token_claims(token)
             self.assertEqual(claims["session_id"], "sess_live_123")
             self.assertEqual(claims["page_id"], "page_live_456")
-            self.assertIn("Live browser handoff:", state["_rendered_email"]["text_body"])
-            self.assertIn("Open live browser handoff", state["_rendered_email"]["html_body"])
+            self.assertIn("Open the real browser page:", state["_rendered_email"]["text_body"])
+            self.assertIn("This opens the exact page where the agent is stuck.", state["_rendered_email"]["text_body"])
+            self.assertIn("Open the real browser page", state["_rendered_email"]["html_body"])
+            self.assertLess(
+                state["_rendered_email"]["html_body"].index("Open the real browser page"),
+                state["_rendered_email"]["html_body"].index("Blocked on:"),
+            )
 
     def test_browser_handoff_refreshes_single_live_page_id_when_missing_from_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:

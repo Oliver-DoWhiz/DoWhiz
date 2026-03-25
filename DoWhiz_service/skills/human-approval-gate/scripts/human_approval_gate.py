@@ -627,9 +627,9 @@ def http_json_request(
 def build_subject(challenge_id: str, account_label: str, challenge_type: str) -> str:
     token = f"[{SUBJECT_TOKEN_PREFIX}:{challenge_id}]"
     subject_prefix = {
-        "captcha": "CAPTCHA help needed",
-        "password": "Password needed",
-        "two_factor": "2FA approval needed",
+        "captcha": "Solve CAPTCHA",
+        "password": "Provide password",
+        "two_factor": "Approve 2FA",
     }[challenge_type]
     if account_label.strip():
         return f"{token} {subject_prefix} for {account_label.strip()}"
@@ -692,6 +692,55 @@ def build_default_action_text(
     return f"Please reply with the {method_description} that is currently required on the attached screen."
 
 
+def summarize_blocked_step(
+    challenge_type: str,
+    account_label: str,
+    two_factor_method: str,
+    verification_destination: str,
+) -> str:
+    label = account_label.strip() or "the target account"
+    if challenge_type == "captcha":
+        return f"CAPTCHA on {label}"
+    if challenge_type == "password":
+        return f"Password entry for {label}"
+    method_description = describe_two_factor_method(two_factor_method, verification_destination)
+    if method_description:
+        return f"2FA for {label} ({method_description})"
+    return f"2FA for {label}"
+
+
+def summarize_required_help(
+    challenge_type: str,
+    account_label: str,
+    two_factor_method: str,
+    verification_destination: str,
+    page_state: str,
+    browser_handoff_url: str,
+) -> str:
+    label = account_label.strip() or "the target account"
+    method_description = describe_two_factor_method(two_factor_method, verification_destination)
+    live_browser_available = bool(browser_handoff_url.strip())
+
+    if challenge_type == "captcha":
+        if live_browser_available:
+            return "Open the real browser page and solve the CAPTCHA. If needed, reply with the text you see."
+        return "Reply with the CAPTCHA text or instructions to enter."
+
+    if challenge_type == "password":
+        if live_browser_available:
+            return f"Open the real browser page and enter the password for {label}, or reply with it here."
+        return f"Reply with the password for {label}."
+
+    if page_state == "waiting_for_device_approval":
+        if live_browser_available:
+            return f"Open the real browser page, complete the {method_description} approval, then reply \"done\"."
+        return f"Complete the {method_description} approval, then reply \"done\"."
+
+    if live_browser_available:
+        return f"Open the real browser page and enter the required {method_description}, or reply with it here."
+    return f"Reply with the required {method_description}."
+
+
 def build_text_body(state: Dict[str, Any]) -> str:
     challenge_id = str(state["challenge_id"])
     account_label = str(state.get("account_label", ""))
@@ -703,31 +752,39 @@ def build_text_body(state: Dict[str, Any]) -> str:
     page_state = str(state.get("page_state", ""))
     two_factor_method = str(state.get("two_factor_method", ""))
     verification_destination = str(state.get("verification_destination", ""))
-    password_env_key = str(state.get("password_env_key", ""))
-    password_lookup_status = str(state.get("password_lookup_status", ""))
     screenshots = state.get("request_attachments") or []
     browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
+    blocked_on = summarize_blocked_step(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+    )
+    required_help = summarize_required_help(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+        page_state,
+        browser_handoff_url,
+    )
 
     lines = [
-        "DoWhiz agent needs your help to continue a blocked authentication step.",
+        "DoWhiz is paused and needs a quick sign-in assist.",
         "",
-        f"Challenge ID: {challenge_id}",
-        f"Challenge type: {humanize_challenge_type(challenge_type)}",
-        f"Scope: {scope}",
     ]
-    if account_label.strip():
-        lines.append(f"Account context: {account_label.strip()}")
-    if page_state:
-        lines.append(f"Current browser state: {humanize_page_state(page_state)}")
-    if challenge_type == "two_factor":
-        lines.append(
-            f"Verification method: {describe_two_factor_method(two_factor_method, verification_destination)}"
+    if browser_handoff_url:
+        lines.extend(
+            [
+                f"Open the real browser page: {browser_handoff_url}",
+                "This opens the exact page where the agent is stuck.",
+                "",
+            ]
         )
-    if challenge_type == "password":
-        if password_env_key:
-            lines.append(f"Password env key checked: {password_env_key}")
-        if password_lookup_status:
-            lines.append(f"Password lookup status: {password_lookup_status}")
+    lines.append(f"Blocked on: {blocked_on}")
+    lines.append(f"Please do: {required_help}")
+    if page_state:
+        lines.append(f"Current page: {humanize_page_state(page_state)}")
     if screenshots:
         screenshot_names = ", ".join(
             str(item.get("name", "")).strip()
@@ -735,23 +792,20 @@ def build_text_body(state: Dict[str, Any]) -> str:
             if str(item.get("name", "")).strip()
         )
         lines.append(
-            f"Attached screenshot(s): {screenshot_names or f'{len(screenshots)} file(s)'}"
+            f"Screenshot attached: {screenshot_names or f'{len(screenshots)} file(s)'}"
         )
-    if browser_handoff_url:
-        lines.append(f"Live browser handoff: {browser_handoff_url}")
-    if action_text.strip():
-        lines.append(f"Action needed: {action_text.strip()}")
     if context.strip():
         lines.extend(["", "Additional context:", context.strip()])
     lines.extend(
         [
             "",
-            "Please reply in this same email thread with the exact information",
-            "the current browser screen needs so the agent can continue.",
-            "If you complete the blocked step in the live browser handoff, reply here when it is done.",
-            "",
-            f"The agent will wait for up to {timeout_minutes} minutes.",
-            "It will not continue until a reply is received.",
+            (
+                "After you finish in the real browser page, reply \"done\" in this email thread so the agent can continue."
+                if browser_handoff_url
+                else "Reply in this email thread with the exact code, password, or instructions the agent needs."
+            ),
+            f"Wait window: up to {timeout_minutes} minutes.",
+            f"Reference: {challenge_id}",
         ]
     )
     return "\n".join(lines)
@@ -759,20 +813,95 @@ def build_text_body(state: Dict[str, Any]) -> str:
 
 def build_html_body(state: Dict[str, Any], text_body: str) -> str:
     browser_handoff_url = str(state.get("browser_handoff_url", "")).strip()
-    escaped = escape(text_body).replace("\n", "<br>")
+    challenge_id = str(state["challenge_id"])
+    account_label = str(state.get("account_label", ""))
+    timeout_minutes = int(state.get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES))
+    context = str(state.get("context", "")).strip()
+    challenge_type = str(state.get("challenge_type", ""))
+    page_state = str(state.get("page_state", ""))
+    two_factor_method = str(state.get("two_factor_method", ""))
+    verification_destination = str(state.get("verification_destination", ""))
+    screenshots = state.get("request_attachments") or []
+    blocked_on = summarize_blocked_step(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+    )
+    required_help = summarize_required_help(
+        challenge_type,
+        account_label,
+        two_factor_method,
+        verification_destination,
+        page_state,
+        browser_handoff_url,
+    )
     button_html = ""
     if browser_handoff_url:
         button_html = (
-            '<p>'
+            '<p style="margin:0 0 12px 0;">'
             f'<a href="{escape(browser_handoff_url, quote=True)}" '
             'style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;'
             'text-decoration:none;border-radius:8px;font-weight:600;">'
-            "Open live browser handoff"
+            "Open the real browser page"
             "</a>"
             "</p>"
-            "<p>If you complete the blocked step inside the live browser, reply to this email thread so the agent can continue.</p>"
+            '<p style="margin:0 0 16px 0;color:#4b5563;">This opens the exact browser page where the agent is stuck.</p>'
         )
-    return f"<html><body>{button_html}<p>{escaped}</p></body></html>"
+    details: List[str] = []
+    if page_state:
+        details.append(
+            f'<p style="margin:0 0 8px 0;"><strong>Current page:</strong> {escape(humanize_page_state(page_state))}</p>'
+        )
+    if screenshots:
+        screenshot_names = ", ".join(
+            str(item.get("name", "")).strip()
+            for item in screenshots
+            if str(item.get("name", "")).strip()
+        )
+        details.append(
+            f'<p style="margin:0;"><strong>Screenshot attached:</strong> {escape(screenshot_names or f"{len(screenshots)} file(s)")}</p>'
+        )
+    details_html = ""
+    if details:
+        details_html = (
+            '<div style="margin:0 0 16px 0;padding:14px 16px;border:1px solid #e5e7eb;'
+            'border-radius:12px;background:#ffffff;">'
+            + "".join(details)
+            + "</div>"
+        )
+    context_html = ""
+    if context:
+        context_html = (
+            '<div style="margin:0 0 16px 0;padding:14px 16px;border:1px solid #e5e7eb;'
+            'border-radius:12px;background:#ffffff;">'
+            '<p style="margin:0 0 8px 0;"><strong>Additional context:</strong></p>'
+            f'<p style="margin:0;color:#374151;white-space:pre-line;">{escape(context)}</p>'
+            "</div>"
+        )
+    reply_instruction = (
+        'After you finish in the real browser page, reply "done" in this email thread so the agent can continue.'
+        if browser_handoff_url
+        else "Reply in this email thread with the exact code, password, or instructions the agent needs."
+    )
+    return (
+        "<html><body style=\"margin:0;padding:24px;font-family:Arial,sans-serif;color:#111827;"
+        "line-height:1.5;background:#f3f4f6;\">"
+        "<div style=\"max-width:640px;margin:0 auto;background:#ffffff;border-radius:16px;"
+        "padding:24px;border:1px solid #e5e7eb;\">"
+        f"{button_html}"
+        "<p style=\"margin:0 0 16px 0;font-size:18px;font-weight:600;\">DoWhiz is paused and needs a quick sign-in assist.</p>"
+        '<div style="margin:0 0 16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">'
+        f'<p style="margin:0 0 8px 0;"><strong>Blocked on:</strong> {escape(blocked_on)}</p>'
+        f'<p style="margin:0;"><strong>Please do:</strong> {escape(required_help)}</p>'
+        "</div>"
+        f"{details_html}"
+        f"{context_html}"
+        f'<p style="margin:0 0 8px 0;color:#374151;">{escape(reply_instruction)}</p>'
+        f'<p style="margin:0 0 4px 0;color:#374151;"><strong>Wait window:</strong> up to {timeout_minutes} minutes.</p>'
+        f'<p style="margin:0;color:#6b7280;font-size:12px;">Reference: {escape(challenge_id)}</p>'
+        "</div></body></html>"
+    )
 
 
 def send_approval_email(
