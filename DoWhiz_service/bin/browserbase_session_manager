@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo '{"status":"error","error":"python interpreter not found"}'
+  exit 1
+fi
+
+candidates=(
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/browserbase-handoff/scripts/browserbase_session_manager.py"
+  "${PWD}/DoWhiz_service/skills/browserbase-handoff/scripts/browserbase_session_manager.py"
+  "${PWD}/.agents/skills/browserbase-handoff/scripts/browserbase_session_manager.py"
+  "/app/DoWhiz_service/skills/browserbase-handoff/scripts/browserbase_session_manager.py"
+  "${HOME:-}/.dowhiz/DoWhiz/skills/browserbase-handoff/scripts/browserbase_session_manager.py"
+)
+
+for script_path in "${candidates[@]}"; do
+  if [[ -n "${script_path}" && -f "${script_path}" ]]; then
+    exec "${PYTHON_BIN}" "${script_path}" "$@"
+  fi
+done
+
+echo '{"status":"error","error":"browserbase_session_manager.py not found in expected locations"}'
+exit 1

@@ -27,6 +27,7 @@ use scheduler_module::channel::{Channel, ChannelMetadata, InboundAdapter, Inboun
 use scheduler_module::ingestion::{IngestionEnvelope, IngestionPayload};
 use scheduler_module::ingestion_queue::IngestionQueue;
 use scheduler_module::raw_payload_store::{self, RawPayloadStoreError};
+use scheduler_module::service::derive_inbound_email_text;
 use scheduler_module::slack_store::resolve_slack_bot_user_id_for_runtime;
 use scheduler_module::user_store::extract_emails;
 
@@ -774,6 +775,8 @@ const NO_REPLY_MARKERS: [&str; 5] = [
     "mailer-daemon",
     "postmaster",
 ];
+const EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES: usize = 16 * 1024;
+const EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX: &str = "\n\n[truncated for queue delivery]";
 
 fn payload_contains_no_reply_marker(payload: &PostmarkInboundPayload) -> bool {
     let candidates = [payload.from.as_deref(), payload.reply_to.as_deref()];
@@ -799,17 +802,65 @@ fn contains_no_reply_marker(value: &str) -> bool {
 fn build_queue_payload(channel: Channel, message: &InboundMessage) -> IngestionPayload {
     let mut payload = IngestionPayload::from_inbound(message);
     if channel == Channel::Email {
-        // Keep queue envelopes small; email attachment bytes are loaded from raw payload/blob.
+        // Keep queue envelopes small; the worker loads the authoritative email payload from blob.
         payload.attachments.clear();
-        // Strip html_body for Notion emails to avoid PayloadTooLarge errors.
-        // payload.text_body contains the actual comment plaintext needed for processing.
-        // Note: this removes full comment history from payload.
-        let sender_lower = message.sender.to_lowercase();
-        if sender_lower.contains("notion.so") || sender_lower.contains("notion.com") {
-            payload.html_body = None;
-        }
+        payload.text_body = payload
+            .text_body
+            .as_deref()
+            .and_then(compact_email_text_for_queue)
+            .or_else(|| {
+                payload
+                    .html_body
+                    .as_deref()
+                    .and_then(compact_email_html_for_queue)
+            });
+        payload.html_body = None;
     }
     payload
+}
+
+fn compact_email_text_for_queue(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_for_queue(
+        trimmed,
+        EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES,
+        EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX,
+    ))
+}
+
+fn compact_email_html_for_queue(html: &str) -> Option<String> {
+    derive_inbound_email_text(None, None, Some(html))
+        .and_then(|text| compact_email_text_for_queue(&text))
+}
+
+fn truncate_for_queue(input: &str, max_bytes: usize, suffix: &str) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    if suffix.len() >= max_bytes {
+        return truncate_utf8_for_queue(input, max_bytes);
+    }
+
+    let mut end = max_bytes - suffix.len();
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut output = input[..end].to_string();
+    output.push_str(suffix);
+    output
+}
+
+fn truncate_utf8_for_queue(input: &str, max_bytes: usize) -> String {
+    let mut end = input.len().min(max_bytes);
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    input[..end].to_string()
 }
 
 async fn rewrite_email_payload_attachments_to_blob_refs(
@@ -1026,6 +1077,17 @@ pub(super) async fn build_envelope(
     };
     let raw_payload_ref = if raw_payload.is_empty() {
         None
+    } else if channel == Channel::Email {
+        // Email queue payloads are intentionally compact, so the archived raw payload
+        // becomes the authoritative source for full body reconstruction and attachments.
+        Some(
+            raw_payload_store::upload_raw_payload_azure(
+                envelope_id,
+                received_at,
+                &stored_payload_bytes,
+            )
+            .await?,
+        )
     } else {
         match raw_payload_store::upload_raw_payload_azure(
             envelope_id,
@@ -1759,7 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn build_queue_payload_keeps_html_body_for_non_notion_email() {
+    fn build_queue_payload_strips_html_body_for_non_notion_email() {
         let message = InboundMessage {
             channel: Channel::Email,
             sender: "user@gmail.com".to_string(),
@@ -1776,7 +1838,81 @@ mod tests {
             metadata: ChannelMetadata::default(),
         };
         let payload = build_queue_payload(Channel::Email, &message);
-        assert!(payload.html_body.is_some());
+        assert!(payload.html_body.is_none());
+        assert_eq!(payload.text_body.as_deref(), Some("Text content"));
+    }
+
+    #[test]
+    fn build_queue_payload_uses_html_preview_when_text_missing() {
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: None,
+            html_body: Some("<html><body><p>Hello from html</p></body></html>".to_string()),
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        assert!(payload.html_body.is_none());
+        assert_eq!(payload.text_body.as_deref(), Some("Hello from html"));
+    }
+
+    #[test]
+    fn build_queue_payload_preserves_html_links_when_text_missing() {
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: None,
+            html_body: Some(
+                "<html><body><p>Open <a href=\"https://learning.edx.org/course/123\">the course</a></p><img src=\"data:image/png;base64,AAAA\"></body></html>"
+                    .to_string(),
+            ),
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        let text = payload.text_body.expect("text preview");
+        assert!(payload.html_body.is_none());
+        assert!(text.contains("the course (https://learning.edx.org/course/123)"));
+        assert!(!text.contains("data:image"));
+    }
+
+    #[test]
+    fn build_queue_payload_truncates_large_email_text() {
+        let long_text = "a".repeat(EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES + 512);
+        let message = InboundMessage {
+            channel: Channel::Email,
+            sender: "user@gmail.com".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "oliver@dowhiz.com".to_string(),
+            subject: Some("Hello".to_string()),
+            text_body: Some(long_text),
+            html_body: None,
+            thread_id: "thread-1".to_string(),
+            message_id: Some("m1".to_string()),
+            attachments: vec![],
+            reply_to: vec![],
+            raw_payload: br#"{}"#.to_vec(),
+            metadata: ChannelMetadata::default(),
+        };
+        let payload = build_queue_payload(Channel::Email, &message);
+        let text = payload.text_body.expect("text preview");
+        assert!(text.ends_with(EMAIL_QUEUE_TEXT_TRUNCATED_SUFFIX));
+        assert!(text.len() <= EMAIL_QUEUE_TEXT_PREVIEW_MAX_BYTES);
     }
 
     #[test]

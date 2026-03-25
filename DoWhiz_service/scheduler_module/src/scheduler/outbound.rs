@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::channel::Channel;
 use crate::employee_config;
 use crate::service;
-use crate::slack_store::resolve_slack_bot_token_for_runtime;
+use crate::slack_store::{emit_slack_channel_not_found_alert, resolve_slack_bot_token_for_runtime};
 
 use super::types::{SchedulerError, SendReplyTask};
 
@@ -56,8 +56,9 @@ pub(crate) fn execute_email_send(task: &SendReplyTask) -> Result<(), SchedulerEr
 }
 
 fn resolve_slack_bot_token_for_send(task: &SendReplyTask) -> Result<String, SchedulerError> {
+    let metadata = task.normalized_channel_metadata();
     resolve_slack_bot_token_for_runtime(
-        task.channel_metadata.slack_team_id.as_deref(),
+        metadata.slack_team_id.as_deref(),
         task.employee_id.as_deref(),
     )
     .ok_or_else(|| {
@@ -74,6 +75,7 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
 
     dotenvy::dotenv().ok();
     let bot_token = resolve_slack_bot_token_for_send(task)?;
+    let metadata = task.normalized_channel_metadata();
 
     let adapter = SlackOutboundAdapter::new(bot_token);
 
@@ -98,8 +100,12 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
         thread_id: task.in_reply_to.clone(), // Use in_reply_to as thread_ts for Slack
         metadata: ChannelMetadata {
             // For Slack, reply_to[0] = user_id, reply_to[1] = channel_id
-            slack_channel_id: task.to.get(1).cloned(),
-            slack_team_id: task.channel_metadata.slack_team_id.clone(),
+            slack_channel_id: metadata
+                .slack_channel_id
+                .clone()
+                .or_else(|| task.to.get(1).cloned())
+                .or_else(|| task.to.first().cloned()),
+            slack_team_id: metadata.slack_team_id.clone(),
             ..Default::default()
         },
     };
@@ -109,6 +115,14 @@ pub(crate) fn execute_slack_send(task: &SendReplyTask) -> Result<(), SchedulerEr
         .map_err(|err| SchedulerError::TaskFailed(format!("Slack send failed: {}", err)))?;
 
     if !result.success {
+        if result.error.as_deref() == Some("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "send_reply",
+                task.employee_id.as_deref(),
+                metadata.slack_team_id.as_deref(),
+                message.metadata.slack_channel_id.as_deref(),
+            );
+        }
         return Err(SchedulerError::TaskFailed(format!(
             "Slack API error: {}",
             result.error.unwrap_or_default()

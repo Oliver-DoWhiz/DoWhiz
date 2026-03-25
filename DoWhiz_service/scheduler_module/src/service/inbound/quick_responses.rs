@@ -17,7 +17,9 @@ use crate::google_auth::{GoogleAuth, GoogleAuthConfig};
 use crate::memory_diff::{MemoryDiff, SectionChange};
 use crate::memory_queue::{global_memory_queue, MemoryWriteRequest};
 use crate::message_router::{MessageRouter, RouterDecision};
-use crate::slack_store::SlackStore;
+use crate::slack_store::{
+    emit_slack_channel_not_found_alert, SlackRuntimeCredentialSource, SlackStore,
+};
 use crate::user_store::UserStore;
 use uuid::Uuid;
 
@@ -425,7 +427,12 @@ pub(crate) fn try_quick_response_slack(
                 let thread_ts = Some(message.thread_id.as_str());
                 if runtime
                     .block_on(send_quick_slack_response(
-                        &token, channel_id, thread_ts, &response,
+                        &token,
+                        channel_id,
+                        message.metadata.slack_team_id.as_deref(),
+                        Some(&config.employee_profile.id),
+                        thread_ts,
+                        &response,
                     ))
                     .is_ok()
                 {
@@ -457,29 +464,28 @@ fn resolve_slack_bot_token(
     slack_store: &SlackStore,
     team_id: Option<&str>,
 ) -> Option<String> {
-    if let Some(installation) =
-        slack_store.resolve_installation_for_runtime(team_id, Some(&config.employee_profile.id))
+    if let Some(resolved) = slack_store
+        .resolve_installation_for_runtime_details(team_id, Some(&config.employee_profile.id))
     {
-        if !installation.bot_token.trim().is_empty() {
-            if installation.team_id.trim().is_empty() {
-                info!(
-                    "quick response using env Slack credentials for employee {}",
-                    config.employee_profile.id
-                );
-            } else {
-                info!(
+        if !resolved.installation.bot_token.trim().is_empty() {
+            match resolved.source {
+                SlackRuntimeCredentialSource::StoredInstallation => info!(
                     "quick response using Slack installation for employee {} team {}",
-                    config.employee_profile.id, installation.team_id
-                );
+                    config.employee_profile.id, resolved.installation.team_id
+                ),
+                SlackRuntimeCredentialSource::EmployeeEnv => info!(
+                    "quick response using employee Slack env credentials for employee {} team {}",
+                    config.employee_profile.id, resolved.installation.team_id
+                ),
+                SlackRuntimeCredentialSource::GlobalEnv => info!(
+                    "quick response using global Slack env credentials for employee {}",
+                    config.employee_profile.id
+                ),
             }
-            return Some(installation.bot_token);
+            return Some(resolved.installation.bot_token);
         }
     }
-
-    config
-        .slack_bot_token
-        .clone()
-        .filter(|value| !value.trim().is_empty())
+    None
 }
 
 fn resolve_discord_bot_token(config: &ServiceConfig) -> Option<String> {
@@ -741,6 +747,8 @@ pub(crate) fn try_quick_response_telegram(
 async fn send_quick_slack_response(
     bot_token: &str,
     channel: &str,
+    team_id: Option<&str>,
+    employee_id: Option<&str>,
     thread_ts: Option<&str>,
     response_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -771,6 +779,14 @@ async fn send_quick_slack_response(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if body.contains("channel_not_found") {
+            emit_slack_channel_not_found_alert(
+                "quick_response_http",
+                employee_id,
+                team_id,
+                Some(channel),
+            );
+        }
         return Err(format!("Slack API returned {}: {}", status, body).into());
     }
 
@@ -784,6 +800,14 @@ async fn send_quick_slack_response(
             .get("error")
             .and_then(|e| e.as_str())
             .unwrap_or("unknown error");
+        if error == "channel_not_found" {
+            emit_slack_channel_not_found_alert(
+                "quick_response_api",
+                employee_id,
+                team_id,
+                Some(channel),
+            );
+        }
         return Err(format!("Slack API error: {}", error).into());
     }
 

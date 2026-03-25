@@ -9,6 +9,8 @@ description: "Use when the task requires automating a real browser from the term
 Drive a real browser from the terminal using `playwright-cli`. Prefer the bundled wrapper script so the CLI works even when it is not globally installed.
 Treat this skill as CLI-first automation. Do not pivot to `@playwright/test` unless the user explicitly asks for test files.
 
+When `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` are configured, the wrapper automatically creates or reuses a Browserbase-backed remote browser session and restores auth state from `.secrets/browserbase/`. During login, MFA, or CAPTCHA blockers, keep the flow in a single tab so a live browser handoff can reopen the same stuck page for the human.
+
 ## Prerequisite check (required)
 
 Before proposing commands, check whether `npx` is available (the wrapper depends on it):

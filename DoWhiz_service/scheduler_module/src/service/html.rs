@@ -1,32 +1,46 @@
+use std::collections::HashSet;
+
 use kuchiki::traits::*;
 use kuchiki::NodeRef;
 
 use super::postmark::PostmarkInbound;
 
-pub(super) fn render_email_html(payload: &PostmarkInbound) -> String {
-    if let Some(html) = payload
-        .html_body
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
+pub fn derive_inbound_email_text(
+    text_body: Option<&str>,
+    stripped_text_reply: Option<&str>,
+    html_body: Option<&str>,
+) -> Option<String> {
+    if let Some(text) = normalize_plain_text_option(text_body)
+        .or_else(|| normalize_plain_text_option(stripped_text_reply))
     {
-        let cleaned = clean_inbound_html(html);
-        if !cleaned.trim().is_empty() {
-            return cleaned;
+        return Some(append_missing_html_links(text, html_body));
+    }
+
+    if let Some(html) = html_body.filter(|value| !value.trim().is_empty()) {
+        let text = clean_inbound_html_to_text(html);
+        if !text.trim().is_empty() {
+            return Some(text);
         }
     }
 
-    let text_body = payload
-        .text_body
-        .as_deref()
-        .or(payload.stripped_text_reply.as_deref())
-        .unwrap_or("");
-    if text_body.trim().is_empty() {
-        return "<pre>(no content)</pre>".to_string();
-    }
-    wrap_text_as_html(text_body)
+    None
 }
 
-fn clean_inbound_html(html: &str) -> String {
+pub fn render_plain_text_as_html(input: &str) -> String {
+    wrap_text_as_html(input)
+}
+
+pub(super) fn render_email_html(payload: &PostmarkInbound) -> String {
+    derive_inbound_email_text(
+        payload.text_body.as_deref(),
+        payload.stripped_text_reply.as_deref(),
+        payload.html_body.as_deref(),
+    )
+    .map(|text| render_plain_text_as_html(&text))
+    .unwrap_or_else(|| render_plain_text_as_html("(no content)"))
+}
+
+fn sanitize_inbound_html_document(html: &str) -> NodeRef {
     let document = kuchiki::parse_html().one(html);
     remove_html_comments(&document);
     remove_elements_by_selector(
@@ -37,7 +51,72 @@ fn clean_inbound_html(html: &str) -> String {
     remove_tracking_pixels(&document);
     remove_footer_blocks(&document);
     sanitize_allowed_elements(&document);
-    extract_body_html(&document)
+    document
+}
+
+fn clean_inbound_html_to_text(html: &str) -> String {
+    let document = sanitize_inbound_html_document(html);
+    let mut out = String::new();
+    render_document_text(&document, &mut out);
+    normalize_rendered_html_text(&out)
+}
+
+fn append_missing_html_links(text: String, html_body: Option<&str>) -> String {
+    let Some(html) = html_body.filter(|value| !value.trim().is_empty()) else {
+        return text;
+    };
+    let links = extract_html_links(html);
+    if links.is_empty() {
+        return text;
+    }
+
+    let mut missing = Vec::new();
+    let lower_text = text.to_ascii_lowercase();
+    for link in links {
+        if !lower_text.contains(&link.to_ascii_lowercase()) {
+            missing.push(link);
+        }
+    }
+    if missing.is_empty() {
+        return text;
+    }
+
+    let mut out = text;
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+    out.push_str("Links:\n");
+    for link in missing {
+        out.push_str("- ");
+        out.push_str(&link);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+fn normalize_plain_text_option(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let normalized = normalize_plain_text(value);
+    if normalized.trim().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn normalize_plain_text(input: &str) -> String {
+    input
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn remove_html_comments(document: &NodeRef) {
@@ -121,21 +200,230 @@ fn sanitize_allowed_elements(document: &NodeRef) {
             unwrap_node(&node);
             continue;
         }
+        if tag == "img" {
+            node.detach();
+            continue;
+        }
         prune_attributes(tag, element);
     }
 }
 
-fn extract_body_html(document: &NodeRef) -> String {
+fn render_document_text(document: &NodeRef, out: &mut String) {
     if let Ok(mut bodies) = document.select("body") {
         if let Some(body) = bodies.next() {
-            let mut out = String::new();
             for child in body.as_node().children() {
-                out.push_str(&child.to_string());
+                render_node_text(&child, out, false);
             }
-            return out;
+            return;
         }
     }
-    document.to_string()
+    for child in document.children() {
+        render_node_text(&child, out, false);
+    }
+}
+
+fn render_node_text(node: &NodeRef, out: &mut String, preserve_whitespace: bool) {
+    if let Some(text) = node.as_text() {
+        append_text(out, &text.borrow(), preserve_whitespace);
+        return;
+    }
+
+    let Some(element) = node.as_element() else {
+        for child in node.children() {
+            render_node_text(&child, out, preserve_whitespace);
+        }
+        return;
+    };
+
+    let tag = element.name.local.as_ref();
+    match tag {
+        "br" => push_line_break(out),
+        "p" | "div" | "section" | "article" | "header" | "footer" | "blockquote" | "h1" | "h2"
+        | "h3" | "h4" | "h5" | "h6" => {
+            push_block_break(out);
+            for child in node.children() {
+                render_node_text(&child, out, preserve_whitespace);
+            }
+            push_block_break(out);
+        }
+        "ul" | "ol" | "table" | "thead" | "tbody" => {
+            push_block_break(out);
+            for child in node.children() {
+                render_node_text(&child, out, preserve_whitespace);
+            }
+            push_block_break(out);
+        }
+        "li" => {
+            push_list_break(out);
+            out.push_str("- ");
+            for child in node.children() {
+                render_node_text(&child, out, preserve_whitespace);
+            }
+            push_line_break(out);
+        }
+        "tr" => {
+            push_list_break(out);
+            let mut first_cell = true;
+            for child in node.children() {
+                if is_table_cell(&child) {
+                    if !first_cell {
+                        trim_trailing_inline_whitespace(out);
+                        out.push_str(" | ");
+                    }
+                    first_cell = false;
+                }
+                render_node_text(&child, out, preserve_whitespace);
+            }
+            push_line_break(out);
+        }
+        "pre" => {
+            push_block_break(out);
+            for child in node.children() {
+                render_node_text(&child, out, true);
+            }
+            push_block_break(out);
+        }
+        "a" => {
+            let href = element
+                .attributes
+                .borrow()
+                .get("href")
+                .filter(|value| is_safe_link(value))
+                .map(|value| value.trim().to_string());
+            let start_len = out.len();
+            for child in node.children() {
+                render_node_text(&child, out, preserve_whitespace);
+            }
+            if let Some(href) = href {
+                let rendered = out[start_len..].trim().to_string();
+                if rendered.is_empty() {
+                    append_text(out, &href, false);
+                } else if !rendered.contains(&href) {
+                    out.push_str(" (");
+                    out.push_str(&href);
+                    out.push(')');
+                }
+            }
+        }
+        _ => {
+            for child in node.children() {
+                render_node_text(&child, out, preserve_whitespace);
+            }
+        }
+    }
+}
+
+fn append_text(out: &mut String, text: &str, preserve_whitespace: bool) {
+    if preserve_whitespace {
+        out.push_str(text);
+        return;
+    }
+
+    let mut pending_space = out
+        .chars()
+        .last()
+        .map(|ch| ch.is_whitespace())
+        .unwrap_or(false);
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !pending_space {
+                out.push(' ');
+                pending_space = true;
+            }
+        } else {
+            out.push(ch);
+            pending_space = false;
+        }
+    }
+}
+
+fn push_block_break(out: &mut String) {
+    trim_trailing_inline_whitespace(out);
+    if out.is_empty() {
+        return;
+    }
+    if out.ends_with("\n\n") {
+        return;
+    }
+    if out.ends_with('\n') {
+        out.push('\n');
+    } else {
+        out.push_str("\n\n");
+    }
+}
+
+fn push_list_break(out: &mut String) {
+    trim_trailing_inline_whitespace(out);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+fn push_line_break(out: &mut String) {
+    trim_trailing_inline_whitespace(out);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+fn trim_trailing_inline_whitespace(out: &mut String) {
+    while matches!(out.chars().last(), Some(' ' | '\t')) {
+        out.pop();
+    }
+}
+
+fn is_table_cell(node: &NodeRef) -> bool {
+    node.as_element()
+        .map(|element| matches!(element.name.local.as_ref(), "td" | "th"))
+        .unwrap_or(false)
+}
+
+fn extract_html_links(html: &str) -> Vec<String> {
+    let document = sanitize_inbound_html_document(html);
+    let mut seen = HashSet::new();
+    let mut links = Vec::new();
+    if let Ok(nodes) = document.select("a[href]") {
+        for node in nodes {
+            let attrs = node.attributes.borrow();
+            let Some(href) = attrs.get("href").map(str::trim) else {
+                continue;
+            };
+            if href.is_empty() || !is_safe_link(href) {
+                continue;
+            }
+            let normalized = href.to_string();
+            if seen.insert(normalized.clone()) {
+                links.push(normalized);
+            }
+        }
+    }
+    links
+}
+
+fn normalize_rendered_html_text(input: &str) -> String {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !previous_blank {
+                lines.push(String::new());
+            }
+            previous_blank = true;
+            continue;
+        }
+        lines.push(trimmed.to_string());
+        previous_blank = false;
+    }
+
+    while matches!(lines.first(), Some(value) if value.is_empty()) {
+        lines.remove(0);
+    }
+    while matches!(lines.last(), Some(value) if value.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 fn unwrap_node(node: &NodeRef) {
@@ -159,7 +447,6 @@ fn is_allowed_tag(tag: &str) -> bool {
             | "div"
             | "span"
             | "a"
-            | "img"
             | "ul"
             | "ol"
             | "li"
@@ -423,4 +710,78 @@ pub(super) fn truncate_preview(input: &str, max_len: usize) -> String {
         end -= 1;
     }
     format!("{}...", &input[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_inbound_email_text_prefers_text_body_and_appends_missing_links() {
+        let text = derive_inbound_email_text(
+            Some("Please finish this course for me."),
+            None,
+            Some(
+                r#"<p>Please finish this course for me.</p><p><a href="https://learning.edx.org/course/123">Open course</a></p>"#,
+            ),
+        )
+        .expect("text");
+
+        assert!(text.contains("Please finish this course for me."));
+        assert!(text.contains("https://learning.edx.org/course/123"));
+    }
+
+    #[test]
+    fn derive_inbound_email_text_prefers_stripped_reply_when_text_body_missing() {
+        let text = derive_inbound_email_text(
+            None,
+            Some("Reply body"),
+            Some(r#"<p>Reply body</p><p><a href="https://example.com/doc">Open doc</a></p>"#),
+        )
+        .expect("text");
+
+        assert!(text.starts_with("Reply body"));
+        assert!(text.contains("Links:\n- https://example.com/doc"));
+    }
+
+    #[test]
+    fn derive_inbound_email_text_from_html_preserves_visible_text_and_links() {
+        let text = derive_inbound_email_text(
+            None,
+            None,
+            Some(r#"<div>Hello</div><p>See <a href="https://example.com/doc">the doc</a>.</p>"#),
+        )
+        .expect("text");
+
+        assert!(text.contains("Hello"));
+        assert!(text.contains("the doc (https://example.com/doc)"));
+    }
+
+    #[test]
+    fn render_email_html_ignores_inline_data_images() {
+        let payload = PostmarkInbound {
+            from: Some("wjke@uchicago.edu".to_string()),
+            to: Some("oliver@dowhiz.com".to_string()),
+            cc: None,
+            bcc: None,
+            to_full: None,
+            cc_full: None,
+            bcc_full: None,
+            reply_to: None,
+            subject: Some("Re:".to_string()),
+            text_body: Some("Main text".to_string()),
+            stripped_text_reply: None,
+            html_body: Some(
+                r#"<p>Main text</p><img src="data:image/png;base64,AAAA" alt="image.png">"#
+                    .to_string(),
+            ),
+            message_id: Some("msg-1".to_string()),
+            headers: None,
+            attachments: None,
+        };
+
+        let html = render_email_html(&payload);
+        assert_eq!(html, "<pre>Main text</pre>");
+        assert!(!html.contains("data:image"));
+    }
 }
