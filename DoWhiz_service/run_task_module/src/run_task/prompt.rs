@@ -269,6 +269,7 @@ fn build_web_auth_capabilities_section() -> &'static str {
 - For plain HTTP fetches of public content, prefer `curl` or similar over browser automation.
 - Complete sign-in only through the active browser session when needed.
 - If Browserbase-backed browser sessions are configured, `playwright-cli` may reconnect to a persistent remote browser context from `.secrets/browserbase`. Still verify the actual page before assuming you are already signed in.
+- Once a browser session is already open, prefer `playwright-cli goto <url>` for same-tab navigation. Avoid calling `playwright-cli open <url>` again inside the same login flow, especially after a human handoff, because reopening may replace the current browser session instead of continuing the live tab.
 - During login, MFA, CAPTCHA, or other approval blockers, keep the flow in a single browser tab whenever possible so a live browser handoff can reopen the same stuck page. Avoid opening extra tabs until authentication is complete.
 - If browser launch fails before sign-in:
   - If error says Chrome is missing, retry with:
