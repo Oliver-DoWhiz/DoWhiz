@@ -7,6 +7,7 @@
 - After the SQLite to MongoDB migration, there is no actual "user store". The "user store" are just different documents in MongoDB, queried by the legacy user_path.
 - Everything is locally scoped in the user's store. The only synchronization is through the lightweight global `task_index`, which just tells the service (more specifically the **global worker loop**) when a task is due
 - The global worker loop reads from the `task_index` and schedules the task to a worker thread
+- **Dual-write pattern**: For channels with account linking (Discord, Google Workspace, Lark), tasks must be written twice - once with `legacy_user_id` (for worker execution) and once with `account_id` (for frontend visibility). See "Dual-Write Pattern for Linked Accounts" section below.
 
 ---
 
@@ -107,6 +108,102 @@ Redaction policy:
   "enabled": true
 }
 ```
+
+---
+
+## Dual-Write Pattern for Linked Accounts (Discord, Google Workspace, Lark)
+
+### The Problem: Two Different Owner Scopes
+
+When a message arrives, the system creates a task. But there are **two different IDs** involved:
+
+1. **`legacy_user_id`** - Created by `user_store.get_or_create_user("discord", sender)`. This is used by the **worker** to execute tasks.
+2. **`account_id`** - The unified account ID from `account_store`. This is used by the **frontend** to query tasks.
+
+The MongoDB `tasks` collection uses `owner_scope.id` to scope queries. The `owner_scope.id` is derived from the file path:
+
+```rust
+// store/mongo.rs:474-504
+fn resolve_owner_scope(path: &Path) -> (String, String) {
+    // If path is: /users/{owner_id}/state/tasks.db
+    // Returns: ("user", owner_id)
+}
+```
+
+So:
+- `Scheduler::load(&user_paths.tasks_db_path)` → `owner_scope.id = legacy_user_id`
+- `Scheduler::load(&$USERS_ROOT/{account_id}/state/tasks.db)` → `owner_scope.id = account_id`
+
+### The Solution: Dual-Write
+
+For the frontend to see tasks, channels with account linking (Discord, Google Workspace, Lark) must write the task **twice**, once for the legacy user id and once more for the Supabase account_id:
+
+1. **Legacy storage** (for worker execution): `add_one_shot_in()` generates a new `task_id`
+2. **Account storage** (for frontend visibility): `add_one_shot_in_with_id()` uses the same `task_id`
+
+```rust
+// Example from discord.rs:228-294
+
+// 1. Clone task before consuming
+let run_task_for_account = run_task.clone();
+
+// 2. Write to legacy storage (worker will execute from here)
+let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ...)?;
+let task_id = scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
+
+// 3. Write to account storage (frontend will query from here)
+if let Ok(Some(account)) = account_store.get_account_by_identifier("discord", &message.sender) {
+    let user_tasks_db_path = config.users_root
+        .join(account.id.to_string())
+        .join("state")
+        .join("tasks.db");
+    let mut user_scheduler = Scheduler::load(&user_tasks_db_path, ...)?;
+    user_scheduler.add_one_shot_in_with_id(
+        task_id,  // Same task_id!
+        Duration::from_secs(0),
+        TaskKind::RunTask(run_task_for_account),
+    )?;
+}
+```
+
+### Why Same Task ID?
+
+Both entries must have the **same `task_id`** so that `sync_task_status_to_user_storage()` can update the correct task in account storage after execution:
+
+```rust
+// core.rs - after task execution
+store.record_execution_start(task_id, ...);   // Updates by task_id
+store.record_execution_finish(task_id, ...);  // Updates by task_id
+```
+
+### `add_one_shot_in` vs `add_one_shot_in_with_id`
+
+| Method | Task ID | `owner_scope.id` | Purpose |
+|--------|---------|------------------|---------|
+| `add_one_shot_in` | Generates new `Uuid::new_v4()` | `legacy_user_id` | Worker execution |
+| `add_one_shot_in_with_id` | Uses provided `Uuid` | `account_id` | Frontend visibility |
+
+### Why Do We Still Need the Legacy User ID?
+
+The **worker** uses the legacy user ID to find and execute tasks. The global worker loop does:
+
+```rust
+// task_index stores user_id = legacy_user_id
+let task_ref = index_store.due_task_refs(...);  // { user_id: "legacy_user_id", task_id: "..." }
+
+// Worker loads scheduler using legacy_user_id
+let tasks_db_path = user_store.user_paths(&config.users_root, &task_ref.user_id).tasks_db_path;
+let scheduler = Scheduler::load(&tasks_db_path, ...)?;
+scheduler.execute_task_by_id(task_id);
+```
+
+So:
+- **Legacy write** (`owner_scope.id = legacy_user_id`) → worker can find and execute the task
+- **Account write** (`owner_scope.id = account_id`) → frontend can display the task
+
+If we only wrote to account storage, the worker wouldn't find the task to execute because `task_index` references the legacy user ID.
+
+**Note:** Slack uses a workaround where `get_account_tasks` also fetches from legacy storage. This is less clean than the dual-write pattern.
 
 ---
 
@@ -457,20 +554,24 @@ pub(crate) fn update_task(&self, task: &ScheduledTask) -> Result<(), SchedulerEr
 ### Step 15a: `sync_task_status_to_user_storage()` -> User's account MongoDB
 - core.rs:424-535
 
+**Important:** This function only **updates execution status** - it does NOT create the task. For the frontend to see the task, it must have been created at ingestion time via the dual-write pattern (see "Dual-Write Pattern for Linked Accounts" above).
+
 ```rust
 fn sync_task_status_to_user_storage(task_id, task, executed_at, status, error_message) {
-    // Look up account_id
+    // Look up account_id from linked identifier
     let account_id = lookup_account_by_channel(&task.channel, identifier)?;
 
     // Path: $USERS_ROOT/{account_id}/state/tasks.db
     let user_tasks_db_path = users_root.join(account_id).join("state").join("tasks.db");
 
-    // Open user's scheduler store (connects to MongoDB with user scope)
+    // Open user's scheduler store (connects to MongoDB with owner_scope.id = account_id)
     let store = SchedulerStore::new(user_tasks_db_path)?;
 
-    // Record execution to user's executions collection
+    // Record execution status to user's executions collection
+    // NOTE: This updates status for an EXISTING task - if the task wasn't
+    // created with dual-write at ingestion, this won't make it visible to frontend
     let execution_id = store.record_execution_start(task_id, executed_at)?;
-    store.record_execution_finish(task_id, execution_id, executed_at, status, error_message)?; //updates user store
+    store.record_execution_finish(task_id, execution_id, executed_at, status, error_message)?;
 }
 ```
 

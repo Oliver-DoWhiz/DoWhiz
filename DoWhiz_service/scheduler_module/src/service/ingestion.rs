@@ -308,7 +308,7 @@ Channel::Notion => {
                 return Ok(());
             }
             let raw_payload = envelope.raw_payload_bytes();
-            process_lark_event(config, user_store, index_store, &message, &raw_payload)
+            process_lark_event(config, user_store, index_store, account_store, &message, &raw_payload)
         }
     }
 }
