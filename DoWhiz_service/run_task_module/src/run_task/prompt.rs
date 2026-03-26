@@ -90,6 +90,9 @@ The incoming_email may have empty/minimal content due to API timing. You MUST fe
 
 If there are multiple comments, each ACI handles ONE specific comment_id. Only execute the task from YOUR comment_id.
 
+DUPLICATE REPLY CHECK (recommended but optional):
+Before posting a reply, review the existing comments from get-comments output. If you already replied to this task (your previous message is visible), you may skip posting again. However, if you have genuinely new information to share or the situation warrants additional communication, feel free to post.
+
 To reply after completing the task:
 1. Post your reply: `notion_api_cli create-comment <page_id> "Your message"`
 2. Create the marker: `touch .notion_api_replied`
