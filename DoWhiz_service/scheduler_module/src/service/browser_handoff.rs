@@ -203,7 +203,7 @@ fn select_debug_url(
         if let Some(url) = payload
             .pages
             .iter()
-            .find(|page| page.id == page_id)
+            .find(|page| page.id == page_id && page_looks_live(page))
             .and_then(page_debug_url)
         {
             return Some(url);
@@ -973,6 +973,45 @@ mod tests {
                     id: "page-live".to_string(),
                     url: "https://example.com/login".to_string(),
                     title: "Login".to_string(),
+                    debugger_url: Some("https://page-live.example.com".to_string()),
+                    debugger_fullscreen_url: Some("https://page-live-full.example.com".to_string()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            select_debug_url(&claims, &payload).as_deref(),
+            Some("https://page-live-full.example.com")
+        );
+    }
+
+    #[test]
+    fn select_debug_url_ignores_blank_specific_page_and_falls_back_to_live_page() {
+        let claims = BrowserHandoffGrant {
+            version: 1,
+            challenge_id: "hag-123".to_string(),
+            session_id: "sess-123".to_string(),
+            page_id: Some("page-blank".to_string()),
+            iat: 1,
+            exp: usize::MAX,
+        };
+        let payload = BrowserbaseDebugUrls {
+            debugger_url: Some("https://session.example.com".to_string()),
+            debugger_fullscreen_url: Some("https://session-full.example.com".to_string()),
+            pages: vec![
+                BrowserbaseDebugPage {
+                    id: "page-blank".to_string(),
+                    url: "about:blank".to_string(),
+                    title: "about:blank".to_string(),
+                    debugger_url: Some("https://page-blank.example.com".to_string()),
+                    debugger_fullscreen_url: Some(
+                        "https://page-blank-full.example.com".to_string(),
+                    ),
+                },
+                BrowserbaseDebugPage {
+                    id: "page-live".to_string(),
+                    url: "https://accounts.google.com/signin/v2/challenge/ipp".to_string(),
+                    title: "2-Step Verification".to_string(),
                     debugger_url: Some("https://page-live.example.com".to_string()),
                     debugger_fullscreen_url: Some("https://page-live-full.example.com".to_string()),
                 },

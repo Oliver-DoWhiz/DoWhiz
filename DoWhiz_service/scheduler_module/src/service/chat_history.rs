@@ -29,6 +29,7 @@ const RUN_TASK_EXECUTION_BACKEND_ENV: &str = "RUN_TASK_EXECUTION_BACKEND";
 const CHAT_HISTORY_SCOPE_TTL_MINUTES_ENV: &str = "CHAT_HISTORY_SCOPE_TTL_MINUTES";
 const CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES_ENV: &str = "CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES";
 const CHAT_HISTORY_SLACK_MAX_THREAD_PAGES_ENV: &str = "CHAT_HISTORY_SLACK_MAX_THREAD_PAGES";
+const CHAT_HISTORY_SLACK_MAX_CHANNELS_ENV: &str = "CHAT_HISTORY_SLACK_MAX_CHANNELS";
 const CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL_ENV: &str =
     "CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL";
 const CHAT_HISTORY_DISCORD_MAX_CHANNELS_ENV: &str = "CHAT_HISTORY_DISCORD_MAX_CHANNELS";
@@ -42,6 +43,7 @@ const MAX_SEARCH_RESULT_LIMIT: usize = 100;
 const MAX_QUERY_CHARS: usize = 240;
 const DEFAULT_SLACK_MAX_HISTORY_PAGES: usize = 100;
 const DEFAULT_SLACK_MAX_THREAD_PAGES: usize = 20;
+const DEFAULT_SLACK_MAX_CHANNELS: usize = 200;
 const DISCORD_OFFICIAL_SEARCH_PAGE_LIMIT: usize = 25;
 const DEFAULT_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL: usize = 40;
 const DEFAULT_DISCORD_MAX_CHANNELS: usize = 200;
@@ -61,6 +63,7 @@ enum ChatHistoryPlatform {
 #[serde(rename_all = "snake_case")]
 enum ChatHistoryScopeMode {
     CurrentConversation,
+    CurrentWorkspace,
     CurrentGuild,
     DirectMessage,
 }
@@ -204,6 +207,17 @@ struct SlackHistoryResponse {
     response_metadata: Option<SlackResponseMetadata>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SlackConversationListResponse {
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    channels: Vec<SlackConversation>,
+    #[serde(default)]
+    response_metadata: Option<SlackResponseMetadata>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct SlackHistoryMessage {
     #[serde(default)]
@@ -219,6 +233,31 @@ struct SlackHistoryMessage {
     reply_count: Option<u64>,
     #[serde(default)]
     files: Vec<SlackHistoryFile>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct SlackConversation {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    is_private: bool,
+    #[serde(default)]
+    is_im: bool,
+    #[serde(default)]
+    is_mpim: bool,
+}
+
+impl SlackConversation {
+    fn synthetic(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: None,
+            is_private: false,
+            is_im: false,
+            is_mpim: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -328,6 +367,13 @@ struct DiscordSearchOutcome {
     results: Vec<ChatHistoryMatch>,
 }
 
+#[derive(Debug)]
+struct SlackSearchOutcome {
+    searched_channels: usize,
+    warnings: Vec<String>,
+    results: Vec<ChatHistoryMatch>,
+}
+
 pub(crate) fn write_slack_chat_history_scope_file(
     config: &ServiceConfig,
     workspace: &Path,
@@ -346,7 +392,7 @@ pub(crate) fn write_slack_chat_history_scope_file(
     let claims = build_scope_grant(
         config,
         ChatHistoryPlatform::Slack,
-        ChatHistoryScopeMode::CurrentConversation,
+        ChatHistoryScopeMode::CurrentWorkspace,
         Some(SlackScopeGrant {
             team_id: team_id.clone(),
             channel_id: channel_id.clone(),
@@ -355,7 +401,7 @@ pub(crate) fn write_slack_chat_history_scope_file(
         None,
     )?;
     let description = format!(
-        "History search is limited to this Slack conversation ({channel_id}) and its threads. Cross-channel and cross-workspace access is blocked.",
+        "History search is limited to the current Slack workspace/team ({team_id}). It can scan readable Slack conversations in this workspace, including the origin conversation ({channel_id}). Cross-workspace access is blocked.",
     );
     let scope = WorkspaceChatHistoryScope {
         version: claims.version,
@@ -521,14 +567,6 @@ fn execute_chat_history_search(
                     "slack chat history grant is missing slack scope",
                 )
             })?;
-            if let Some(request_channel_id) = request.channel_id.as_deref() {
-                if request_channel_id.trim() != slack.channel_id {
-                    return Err(ChatHistoryRequestError::new(
-                        StatusCode::FORBIDDEN,
-                        "slack history search cannot access other channels",
-                    ));
-                }
-            }
             let installation = slack_store
                 .get_installation_or_env(&slack.team_id)
                 .map_err(|err| {
@@ -537,18 +575,13 @@ fn execute_chat_history_search(
                         format!("failed to resolve Slack installation: {err}"),
                     )
                 })?;
-            let results = search_slack_channel_history(
+            let outcome = search_slack_history(
                 &installation.bot_token,
-                &slack.channel_id,
+                &slack,
+                request.channel_id.as_deref(),
                 query,
                 limit,
-            )
-            .map_err(|err| {
-                ChatHistoryRequestError::new(
-                    StatusCode::BAD_GATEWAY,
-                    format!("Slack history search failed: {err}"),
-                )
-            })?;
+            )?;
             Ok(ChatHistorySearchResponse {
                 platform: ChatHistoryPlatform::Slack,
                 scope_mode: claims.scope_mode,
@@ -556,9 +589,9 @@ fn execute_chat_history_search(
                 limit,
                 engine: ChatHistorySearchEngine::SlackConversationsApi,
                 fallback_used: false,
-                searched_channels: 1,
-                warnings: Vec::new(),
-                results,
+                searched_channels: outcome.searched_channels,
+                warnings: outcome.warnings,
+                results: outcome.results,
             })
         }
         ChatHistoryPlatform::Discord => {
@@ -836,6 +869,13 @@ fn slack_max_thread_pages() -> usize {
         .unwrap_or(DEFAULT_SLACK_MAX_THREAD_PAGES)
 }
 
+fn slack_max_channels() -> usize {
+    env_trimmed(CHAT_HISTORY_SLACK_MAX_CHANNELS_ENV)
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_SLACK_MAX_CHANNELS)
+}
+
 fn discord_max_history_pages_per_channel() -> usize {
     env_trimmed(CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL_ENV)
         .and_then(|value| value.parse::<usize>().ok())
@@ -863,6 +903,261 @@ fn discord_rate_limit_fallback_delay() -> StdDuration {
     StdDuration::from_millis(millis)
 }
 
+fn push_optional_warning(warnings: &mut Option<&mut Vec<String>>, message: impl Into<String>) {
+    if let Some(warnings) = warnings.as_mut() {
+        warnings.push(message.into());
+    }
+}
+
+fn slack_partial_or_error<T>(
+    warnings: &mut Option<&mut Vec<String>>,
+    partial: T,
+    warning: String,
+    error: String,
+) -> Result<T, BoxError> {
+    if warnings.is_some() {
+        push_optional_warning(warnings, warning);
+        Ok(partial)
+    } else {
+        Err(error.into())
+    }
+}
+
+fn slack_conversation_name(conversation: &SlackConversation) -> Option<String> {
+    let explicit_name = conversation
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if explicit_name.is_some() {
+        return explicit_name;
+    }
+    if conversation.is_im {
+        return Some(format!("dm-{}", conversation.id));
+    }
+    if conversation.is_mpim {
+        return Some(format!("mpim-{}", conversation.id));
+    }
+    if conversation.is_private {
+        return Some(format!("private-{}", conversation.id));
+    }
+    None
+}
+
+fn slack_conversation_label(channel_id: &str, channel_name: Option<&str>) -> String {
+    channel_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{value} ({channel_id})"))
+        .unwrap_or_else(|| channel_id.to_string())
+}
+
+fn search_slack_history(
+    bot_token: &str,
+    scope: &SlackScopeGrant,
+    requested_channel_id: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Result<SlackSearchOutcome, ChatHistoryRequestError> {
+    let api_base =
+        env_trimmed("SLACK_API_BASE_URL").unwrap_or_else(|| "https://slack.com/api".to_string());
+    let client = history_client().map_err(|err| {
+        ChatHistoryRequestError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("failed to build Slack history client: {err}"),
+        )
+    })?;
+    let query_norm = query.to_ascii_lowercase();
+    let mut warnings = Vec::new();
+    let requested_channel_id = requested_channel_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let channels = match resolve_slack_search_channels(
+        &client,
+        api_base.as_str(),
+        bot_token,
+        scope,
+        requested_channel_id.as_deref(),
+        &mut warnings,
+    ) {
+        Ok(channels) => channels,
+        Err(err) if err.status == StatusCode::BAD_GATEWAY => {
+            let fallback_channel_id = requested_channel_id
+                .clone()
+                .unwrap_or_else(|| scope.channel_id.clone());
+            let fallback_label = if fallback_channel_id == scope.channel_id {
+                "the origin Slack conversation"
+            } else {
+                "the requested Slack conversation"
+            };
+            warnings.push(format!(
+                "{} Falling back to {fallback_label} ({fallback_channel_id}) only.",
+                err.message
+            ));
+            vec![SlackConversation::synthetic(fallback_channel_id)]
+        }
+        Err(err) => return Err(err),
+    };
+    let searched_channels = channels.len();
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    for channel in channels {
+        let channel_name = slack_conversation_name(&channel);
+        let mut warning_sink = Some(&mut warnings);
+        let channel_matches = search_slack_channel_history_with_client(
+            &client,
+            api_base.as_str(),
+            bot_token,
+            &channel.id,
+            channel_name.as_deref(),
+            &query_norm,
+            limit,
+            &mut warning_sink,
+        )
+        .map_err(|err| {
+            ChatHistoryRequestError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("Slack history search failed: {err}"),
+            )
+        })?;
+        for entry in channel_matches {
+            let key = format!("{}:{}", entry.channel_id, entry.message_id);
+            if seen.insert(key) {
+                results.push(entry);
+            }
+        }
+    }
+
+    sort_matches_desc(&mut results);
+    results.truncate(limit);
+    Ok(SlackSearchOutcome {
+        searched_channels,
+        warnings,
+        results,
+    })
+}
+
+fn resolve_slack_search_channels(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    scope: &SlackScopeGrant,
+    requested_channel_id: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<SlackConversation>, ChatHistoryRequestError> {
+    let requested = requested_channel_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut channels = fetch_slack_searchable_conversations(
+        client,
+        api_base,
+        bot_token,
+        &scope.team_id,
+        requested.as_deref().or(Some(scope.channel_id.as_str())),
+    )
+    .map_err(|err| {
+        ChatHistoryRequestError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("failed to enumerate readable Slack conversations: {err}"),
+        )
+    })?;
+
+    let origin = channels
+        .iter()
+        .position(|channel| channel.id == scope.channel_id)
+        .map(|index| channels.remove(index))
+        .unwrap_or_else(|| SlackConversation::synthetic(scope.channel_id.clone()));
+
+    if let Some(requested) = requested {
+        if requested == origin.id {
+            return Ok(vec![origin]);
+        }
+        let selected = channels
+            .into_iter()
+            .find(|channel| channel.id == requested)
+            .ok_or_else(|| {
+                ChatHistoryRequestError::new(
+                    StatusCode::FORBIDDEN,
+                    format!(
+                        "requested Slack conversation {requested} is outside the readable workspace scope"
+                    ),
+                )
+            })?;
+        return Ok(vec![selected]);
+    }
+
+    channels.insert(0, origin);
+    if channels.len() > slack_max_channels() {
+        warnings.push(format!(
+            "Slack workspace has {} readable conversations; only the first {} were scanned, with the origin conversation kept in scope.",
+            channels.len(),
+            slack_max_channels()
+        ));
+        channels.truncate(slack_max_channels());
+    }
+    Ok(channels)
+}
+
+fn fetch_slack_searchable_conversations(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    team_id: &str,
+    priority_channel_id: Option<&str>,
+) -> Result<Vec<SlackConversation>, BoxError> {
+    let mut channels = Vec::new();
+    let mut cursor: Option<String> = None;
+    let types = "public_channel,private_channel,mpim,im";
+
+    loop {
+        let mut request = client
+            .get(format!(
+                "{}/conversations.list",
+                api_base.trim_end_matches('/')
+            ))
+            .bearer_auth(bot_token)
+            .query(&[("limit", "200"), ("types", types)]);
+        if !team_id.trim().is_empty() {
+            request = request.query(&[("team_id", team_id)]);
+        }
+        if let Some(cursor_value) = cursor.as_deref() {
+            request = request.query(&[("cursor", cursor_value)]);
+        }
+
+        let response = request.send()?;
+        if !response.status().is_success() {
+            return Err(format!("slack conversations.list returned {}", response.status()).into());
+        }
+        let payload: SlackConversationListResponse = response.json()?;
+        if !payload.ok {
+            return Err(format!(
+                "slack conversations.list returned error {}",
+                payload.error.unwrap_or_else(|| "unknown_error".to_string())
+            )
+            .into());
+        }
+        channels.extend(payload.channels);
+        cursor = payload
+            .response_metadata
+            .and_then(|meta| meta.next_cursor)
+            .filter(|value| !value.trim().is_empty());
+
+        let reached_priority = priority_channel_id
+            .map(|priority| channels.iter().any(|channel| channel.id == priority))
+            .unwrap_or(true);
+        if cursor.is_none() || (channels.len() >= slack_max_channels() && reached_priority) {
+            break;
+        }
+    }
+
+    Ok(channels)
+}
+
+#[cfg(test)]
 fn search_slack_channel_history(
     bot_token: &str,
     channel_id: &str,
@@ -873,6 +1168,32 @@ fn search_slack_channel_history(
         env_trimmed("SLACK_API_BASE_URL").unwrap_or_else(|| "https://slack.com/api".to_string());
     let client = history_client()?;
     let query_norm = query.to_ascii_lowercase();
+    let mut warning_sink: Option<&mut Vec<String>> = None;
+    let mut results = search_slack_channel_history_with_client(
+        &client,
+        api_base.as_str(),
+        bot_token,
+        channel_id,
+        None,
+        &query_norm,
+        limit,
+        &mut warning_sink,
+    )?;
+    results.truncate(limit);
+    Ok(results)
+}
+
+fn search_slack_channel_history_with_client(
+    client: &Client,
+    api_base: &str,
+    bot_token: &str,
+    channel_id: &str,
+    channel_name: Option<&str>,
+    query_norm: &str,
+    limit: usize,
+    warnings: &mut Option<&mut Vec<String>>,
+) -> Result<Vec<ChatHistoryMatch>, BoxError> {
+    let label = slack_conversation_label(channel_id, channel_name);
     let mut results = Vec::new();
     let mut seen = HashSet::new();
     let mut cursor: Option<String> = None;
@@ -888,14 +1209,53 @@ fn search_slack_channel_history(
         if let Some(cursor_value) = cursor.as_deref() {
             request = request.query(&[("cursor", cursor_value)]);
         }
-        let response = request.send()?;
-        let payload: SlackHistoryResponse = response.json()?;
+        let response = match request.send() {
+            Ok(response) => response,
+            Err(err) => {
+                return slack_partial_or_error(
+                    warnings,
+                    results,
+                    format!(
+                        "Slack history scan for {label} stopped early because the request failed ({err})."
+                    ),
+                    format!("slack conversations.history request failed: {err}"),
+                );
+            }
+        };
+        if !response.status().is_success() {
+            return slack_partial_or_error(
+                warnings,
+                results,
+                format!(
+                    "Slack history scan for {label} stopped early because Slack returned {}.",
+                    response.status()
+                ),
+                format!("slack conversations.history returned {}", response.status()),
+            );
+        }
+        let payload: SlackHistoryResponse = match response.json() {
+            Ok(payload) => payload,
+            Err(err) => {
+                return slack_partial_or_error(
+                    warnings,
+                    results,
+                    format!(
+                        "Slack history scan for {label} stopped early because the response payload was unreadable ({err})."
+                    ),
+                    format!("slack conversations.history returned an unreadable payload: {err}"),
+                );
+            }
+        };
         if !payload.ok {
-            return Err(format!(
-                "slack conversations.history returned error {}",
-                payload.error.unwrap_or_else(|| "unknown_error".to_string())
-            )
-            .into());
+            let error = payload.error.unwrap_or_else(|| "unknown_error".to_string());
+            return slack_partial_or_error(
+                warnings,
+                results,
+                format!(
+                    "Slack history scan for {label} stopped early because Slack returned error {error}."
+                ),
+                format!("slack conversations.history returned error {error}"),
+            );
         }
 
         for message in payload.messages {
@@ -903,27 +1263,25 @@ fn search_slack_channel_history(
                 &mut results,
                 &mut seen,
                 channel_id,
+                channel_name,
                 None,
                 &message,
-                &query_norm,
+                query_norm,
             );
             if message.reply_count.unwrap_or(0) > 0 {
                 let thread_ts = message.thread_ts.as_deref().unwrap_or(&message.ts);
                 let replies = fetch_slack_thread_replies(
-                    &client,
-                    api_base.as_str(),
-                    bot_token,
-                    channel_id,
-                    thread_ts,
+                    client, api_base, bot_token, channel_id, thread_ts, &label, warnings,
                 )?;
                 for reply in replies {
                     maybe_push_slack_match(
                         &mut results,
                         &mut seen,
                         channel_id,
+                        channel_name,
                         Some(thread_ts),
                         &reply,
-                        &query_norm,
+                        query_norm,
                     );
                 }
             }
@@ -943,7 +1301,6 @@ fn search_slack_channel_history(
         }
     }
 
-    results.truncate(limit);
     Ok(results)
 }
 
@@ -953,6 +1310,8 @@ fn fetch_slack_thread_replies(
     bot_token: &str,
     channel_id: &str,
     thread_ts: &str,
+    label: &str,
+    warnings: &mut Option<&mut Vec<String>>,
 ) -> Result<Vec<SlackHistoryMessage>, BoxError> {
     let mut replies = Vec::new();
     let mut cursor: Option<String> = None;
@@ -967,14 +1326,53 @@ fn fetch_slack_thread_replies(
         if let Some(cursor_value) = cursor.as_deref() {
             request = request.query(&[("cursor", cursor_value)]);
         }
-        let response = request.send()?;
-        let payload: SlackHistoryResponse = response.json()?;
+        let response = match request.send() {
+            Ok(response) => response,
+            Err(err) => {
+                return slack_partial_or_error(
+                    warnings,
+                    replies,
+                    format!(
+                        "Slack thread reply scan for {label} in thread {thread_ts} stopped early because the request failed ({err})."
+                    ),
+                    format!("slack conversations.replies request failed: {err}"),
+                );
+            }
+        };
+        if !response.status().is_success() {
+            return slack_partial_or_error(
+                warnings,
+                replies,
+                format!(
+                    "Slack thread reply scan for {label} in thread {thread_ts} stopped early because Slack returned {}.",
+                    response.status()
+                ),
+                format!("slack conversations.replies returned {}", response.status()),
+            );
+        }
+        let payload: SlackHistoryResponse = match response.json() {
+            Ok(payload) => payload,
+            Err(err) => {
+                return slack_partial_or_error(
+                    warnings,
+                    replies,
+                    format!(
+                        "Slack thread reply scan for {label} in thread {thread_ts} stopped early because the response payload was unreadable ({err})."
+                    ),
+                    format!("slack conversations.replies returned an unreadable payload: {err}"),
+                );
+            }
+        };
         if !payload.ok {
-            return Err(format!(
-                "slack conversations.replies returned error {}",
-                payload.error.unwrap_or_else(|| "unknown_error".to_string())
-            )
-            .into());
+            let error = payload.error.unwrap_or_else(|| "unknown_error".to_string());
+            return slack_partial_or_error(
+                warnings,
+                replies,
+                format!(
+                    "Slack thread reply scan for {label} in thread {thread_ts} stopped early because Slack returned error {error}."
+                ),
+                format!("slack conversations.replies returned error {error}"),
+            );
         }
         replies.extend(
             payload
@@ -997,6 +1395,7 @@ fn maybe_push_slack_match(
     results: &mut Vec<ChatHistoryMatch>,
     seen: &mut HashSet<String>,
     channel_id: &str,
+    channel_name: Option<&str>,
     thread_id: Option<&str>,
     message: &SlackHistoryMessage,
     query_norm: &str,
@@ -1011,7 +1410,7 @@ fn maybe_push_slack_match(
     }
     results.push(ChatHistoryMatch {
         channel_id: channel_id.to_string(),
-        channel_name: None,
+        channel_name: channel_name.map(|value| value.to_string()),
         message_id: message.ts.clone(),
         thread_id: thread_id
             .map(|value| value.to_string())
@@ -1773,7 +2172,7 @@ mod tests {
         let claims = build_scope_grant(
             &config,
             ChatHistoryPlatform::Slack,
-            ChatHistoryScopeMode::CurrentConversation,
+            ChatHistoryScopeMode::CurrentWorkspace,
             Some(SlackScopeGrant {
                 team_id: "T123".to_string(),
                 channel_id: "C123".to_string(),
@@ -1785,13 +2184,45 @@ mod tests {
         let token = encode_scope_grant(&config, &claims).expect("encode");
         let decoded = decode_scope_grant(&config, &token).expect("decode");
         assert_eq!(decoded.platform, ChatHistoryPlatform::Slack);
-        assert_eq!(
-            decoded.scope_mode,
-            ChatHistoryScopeMode::CurrentConversation
-        );
+        assert_eq!(decoded.scope_mode, ChatHistoryScopeMode::CurrentWorkspace);
         let slack = decoded.slack.expect("slack scope");
         assert_eq!(slack.team_id, "T123");
         assert_eq!(slack.channel_id, "C123");
+    }
+
+    #[test]
+    fn write_slack_scope_file_uses_workspace_scope() {
+        let _lock = env_lock();
+        let _secret = EnvGuard::set(CHAT_HISTORY_SCOPE_SIGNING_SECRET_ENV, "scope-secret");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let config = test_config();
+        let message = crate::channel::InboundMessage {
+            channel: crate::channel::Channel::Slack,
+            sender: "U123".to_string(),
+            sender_name: Some("User".to_string()),
+            recipient: "C123".to_string(),
+            subject: None,
+            text_body: Some("hello".to_string()),
+            html_body: None,
+            thread_id: "1700.1".to_string(),
+            message_id: Some("1700.2".to_string()),
+            attachments: Vec::new(),
+            reply_to: vec!["U123".to_string(), "C123".to_string()],
+            raw_payload: Vec::new(),
+            metadata: crate::channel::ChannelMetadata {
+                slack_team_id: Some("T123".to_string()),
+                slack_channel_id: Some("C123".to_string()),
+                ..crate::channel::ChannelMetadata::default()
+            },
+        };
+        write_slack_chat_history_scope_file(&config, workspace.path(), &message)
+            .expect("write scope");
+        let payload = std::fs::read_to_string(workspace.path().join(CHAT_HISTORY_SCOPE_FILE_NAME))
+            .expect("scope file");
+        assert!(payload.contains("\"scope_mode\": \"current_workspace\""));
+        assert!(payload.contains("\"team_id\": \"T123\""));
+        assert!(payload.contains("\"channel_id\": \"C123\""));
+        assert!(payload.contains("current Slack workspace/team"));
     }
 
     #[test]
@@ -1952,6 +2383,249 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].thread_id.as_deref(), Some("1700000001.000100"));
         assert!(results[0].text.contains("Needle"));
+    }
+
+    #[test]
+    fn slack_workspace_search_scans_multiple_conversations() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("SLACK_API_BASE_URL", &server.url());
+
+        let list_mock = server
+            .mock("GET", "/conversations.list")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+                mockito::Matcher::UrlEncoded(
+                    "types".into(),
+                    "public_channel,private_channel,mpim,im".into(),
+                ),
+                mockito::Matcher::UrlEncoded("team_id".into(), "T123".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"channels":[{"id":"C999","name":"launch"},{"id":"C123","name":"general"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+        let general_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C123".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000001.000100","text":"General update"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+        let launch_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C999".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000002.000100","text":"Launch root","reply_count":1}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+        let launch_replies = server
+            .mock("GET", "/conversations.replies")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C999".into()),
+                mockito::Matcher::UrlEncoded("ts".into(), "1700000002.000100".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000002.000100","text":"Launch root"},{"ts":"1700000002.000200","text":"Needle in launch thread"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+
+        let scope = SlackScopeGrant {
+            team_id: "T123".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700.1".to_string()),
+        };
+        let outcome =
+            search_slack_history("xoxb-secret", &scope, None, "needle", 10).expect("search");
+
+        list_mock.assert();
+        general_history.assert();
+        launch_history.assert();
+        launch_replies.assert();
+        assert_eq!(outcome.searched_channels, 2);
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].channel_id, "C999");
+        assert_eq!(outcome.results[0].channel_name.as_deref(), Some("launch"));
+        assert_eq!(
+            outcome.results[0].thread_id.as_deref(),
+            Some("1700000002.000100")
+        );
+    }
+
+    #[test]
+    fn slack_workspace_search_allows_requested_conversation() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("SLACK_API_BASE_URL", &server.url());
+
+        let list_mock = server
+            .mock("GET", "/conversations.list")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+                mockito::Matcher::UrlEncoded(
+                    "types".into(),
+                    "public_channel,private_channel,mpim,im".into(),
+                ),
+                mockito::Matcher::UrlEncoded("team_id".into(), "T123".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"channels":[{"id":"C999","name":"launch"},{"id":"C123","name":"general"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+        let requested_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C999".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000003.000100","text":"Needle from requested channel"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .expect(1)
+            .create();
+
+        let scope = SlackScopeGrant {
+            team_id: "T123".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700.1".to_string()),
+        };
+        let outcome = search_slack_history("xoxb-secret", &scope, Some("C999"), "needle", 10)
+            .expect("search");
+
+        list_mock.assert();
+        requested_history.assert();
+        assert_eq!(outcome.searched_channels, 1);
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].channel_id, "C999");
+        assert_eq!(outcome.results[0].channel_name.as_deref(), Some("launch"));
+    }
+
+    #[test]
+    fn slack_workspace_search_keeps_origin_conversation_when_capped() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("SLACK_API_BASE_URL", &server.url());
+        let _max_channels = EnvGuard::set(CHAT_HISTORY_SLACK_MAX_CHANNELS_ENV, "1");
+
+        let list_mock = server
+            .mock("GET", "/conversations.list")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+                mockito::Matcher::UrlEncoded(
+                    "types".into(),
+                    "public_channel,private_channel,mpim,im".into(),
+                ),
+                mockito::Matcher::UrlEncoded("team_id".into(), "T123".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"channels":[{"id":"C999","name":"launch"},{"id":"C123","name":"general"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+        let origin_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C123".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000004.000100","text":"Needle from origin"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+
+        let scope = SlackScopeGrant {
+            team_id: "T123".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700.1".to_string()),
+        };
+        let outcome =
+            search_slack_history("xoxb-secret", &scope, None, "needle", 10).expect("search");
+
+        list_mock.assert();
+        origin_history.assert();
+        assert_eq!(outcome.searched_channels, 1);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].channel_id, "C123");
+        assert!(outcome.warnings.iter().any(|warning| {
+            warning.contains("only the first 1 were scanned")
+                && warning.contains("origin conversation kept in scope")
+        }));
+    }
+
+    #[test]
+    fn slack_workspace_search_falls_back_when_conversation_list_is_unavailable() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("SLACK_API_BASE_URL", &server.url());
+
+        let list_mock = server
+            .mock("GET", "/conversations.list")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+                mockito::Matcher::UrlEncoded(
+                    "types".into(),
+                    "public_channel,private_channel,mpim,im".into(),
+                ),
+                mockito::Matcher::UrlEncoded("team_id".into(), "T123".into()),
+            ]))
+            .with_status(200)
+            .with_body(r#"{"ok":false,"error":"missing_scope"}"#)
+            .create();
+        let origin_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C123".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000005.000100","text":"Needle from fallback origin"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+
+        let scope = SlackScopeGrant {
+            team_id: "T123".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700.1".to_string()),
+        };
+        let outcome =
+            search_slack_history("xoxb-secret", &scope, None, "needle", 10).expect("search");
+
+        list_mock.assert();
+        origin_history.assert();
+        assert_eq!(outcome.searched_channels, 1);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].channel_id, "C123");
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Falling back to the origin Slack conversation")));
     }
 
     #[test]

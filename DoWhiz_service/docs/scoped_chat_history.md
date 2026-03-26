@@ -19,10 +19,11 @@ This keeps the safety boundary in backend code rather than in prompt text alone.
 
 ## Isolation Model
 
-- Slack: scoped to the **current conversation** only.
-  - Current channel, DM, or MPIM.
-  - Thread replies inside that same conversation are included.
-  - Cross-channel and cross-workspace access is blocked.
+- Slack: scoped to the **current workspace/team** only.
+  - Search can span readable public channels, private channels, DMs, and MPIMs in the same workspace.
+  - The current origin conversation is always kept in scope.
+  - Thread replies inside scanned conversations are included.
+  - Cross-workspace access is blocked.
 - Discord guild message: scoped to the **current guild/server** only.
   - Cross-server access is blocked.
 - Discord DM: scoped to the **current DM channel** only.
@@ -73,6 +74,7 @@ Optional:
 - `CHAT_HISTORY_SCOPE_TTL_MINUTES`
 - `CHAT_HISTORY_SLACK_MAX_HISTORY_PAGES`
 - `CHAT_HISTORY_SLACK_MAX_THREAD_PAGES`
+- `CHAT_HISTORY_SLACK_MAX_CHANNELS`
 - `CHAT_HISTORY_DISCORD_MAX_HISTORY_PAGES_PER_CHANNEL`
 - `CHAT_HISTORY_DISCORD_MAX_CHANNELS`
 
@@ -85,6 +87,20 @@ Fallback order:
 5. Local bind host and port
 
 The Azure ACI fallback avoids writing `127.0.0.1` into the workspace scope file when the agent runs in a separate container.
+
+## Current Slack Coverage
+
+Slack workspace search now enumerates readable conversations through `conversations.list`, then scans scoped history with `conversations.history` plus `conversations.replies`.
+
+Current Slack scan coverage includes:
+
+- readable public channels
+- readable private channels
+- readable DMs and MPIMs
+- thread replies inside scanned conversations
+
+If conversation enumeration is unavailable, the backend falls back to the origin Slack conversation and returns a warning instead of breaking history search entirely.
+If Slack cannot read a specific conversation or thread-reply page during a workspace scan, the backend keeps any partial matches it already found and reports the skip as a warning.
 
 ## Current Discord Coverage
 

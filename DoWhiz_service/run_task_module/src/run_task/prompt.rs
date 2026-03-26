@@ -238,8 +238,8 @@ fn build_chat_history_capabilities_section(workspace_dir: &Path, channel: &str) 
         "slack" => {
             r#"Scoped chat history search:
 - When the user asks about earlier Slack discussion that is not already in the prompt or workspace files, use `.agents/skills/slack-history-search/SKILL.md`.
-- The helper is backend-enforced and can search only the current Slack conversation (channel / DM / MPIM) and its threads.
-- It cannot cross into other Slack channels or workspaces, even if asked.
+- The helper is backend-enforced and can search readable Slack conversations inside the current Slack workspace/team, including the current conversation.
+- It cannot cross into other Slack workspaces, even if asked.
 
 "#
             .to_string()
@@ -269,6 +269,7 @@ fn build_web_auth_capabilities_section() -> &'static str {
 - For plain HTTP fetches of public content, prefer `curl` or similar over browser automation.
 - Complete sign-in only through the active browser session when needed.
 - If Browserbase-backed browser sessions are configured, `playwright-cli` may reconnect to a persistent remote browser context from `.secrets/browserbase`. Still verify the actual page before assuming you are already signed in.
+- Once a browser session is already open, prefer `playwright-cli goto <url>` for same-tab navigation. Avoid calling `playwright-cli open <url>` again inside the same login flow, especially after a human handoff, because reopening may replace the current browser session instead of continuing the live tab.
 - During login, MFA, CAPTCHA, or other approval blockers, keep the flow in a single browser tab whenever possible so a live browser handoff can reopen the same stuck page. Avoid opening extra tabs until authentication is complete.
 - If browser launch fails before sign-in:
   - If error says Chrome is missing, retry with:
@@ -900,8 +901,8 @@ mod tests {
 
         assert!(prompt.contains("Scoped chat history search"));
         assert!(prompt.contains(".agents/skills/slack-history-search/SKILL.md"));
-        assert!(prompt.contains("current Slack conversation"));
-        assert!(prompt.contains("cannot cross into other Slack channels or workspaces"));
+        assert!(prompt.contains("current Slack workspace/team"));
+        assert!(prompt.contains("cannot cross into other Slack workspaces"));
     }
 
     #[test]

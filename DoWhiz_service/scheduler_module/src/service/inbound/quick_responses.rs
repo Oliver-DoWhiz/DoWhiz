@@ -27,6 +27,7 @@ use super::super::config::ServiceConfig;
 use super::super::BoxError;
 use super::discord_context::build_discord_router_context;
 use super::persist_discord_ingest_context;
+use super::slack::{build_slack_router_context, persist_slack_ingest_context};
 
 const DISCORD_QUICK_RESPONSE_DEDUPE_FILE: &str = "discord_quick_response_dedupe.json";
 const DISCORD_QUICK_RESPONSE_MAX_THREADS: usize = 512;
@@ -392,13 +393,20 @@ pub(crate) fn try_quick_response_slack(
         .filter(|word| !(word.starts_with("<@") && word.ends_with(">")))
         .collect::<Vec<_>>()
         .join(" ");
+    let slack_context = match build_slack_router_context(config, user_store, message) {
+        Ok(context) => context,
+        Err(err) => {
+            warn!("Failed to build Slack router context: {}", err);
+            None
+        }
+    };
 
     let employee_name = config.employee_profile.display_name.as_deref();
     let decision = runtime.block_on(message_router.classify(
         &cleaned_text,
         memory.as_deref(),
         employee_name,
-        None,
+        slack_context.as_deref(),
     ));
     match decision {
         RouterDecision::Simple {
@@ -436,6 +444,14 @@ pub(crate) fn try_quick_response_slack(
                     ))
                     .is_ok()
                 {
+                    if let Err(err) = persist_slack_ingest_context(
+                        config,
+                        user_store,
+                        message,
+                        &message.raw_payload,
+                    ) {
+                        warn!("Failed to persist Slack context after quick reply: {}", err);
+                    }
                     if let (Some(scope), Some(inbound_id)) =
                         (dedupe_scope.as_deref(), inbound_message_id)
                     {

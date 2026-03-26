@@ -154,6 +154,22 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
             self.assertEqual(calls[0][0], "POST")
             self.assertIn("REQUEST_RELEASE", json.dumps(calls[0][2], sort_keys=True))
 
+    def test_build_parser_accepts_state_dir_after_release_active_subcommand(self):
+        args = MODULE.build_parser().parse_args(
+            ["release-active", "--state-dir", "/tmp/browserbase-state"]
+        )
+
+        self.assertEqual(args.command, "release-active")
+        self.assertEqual(args.state_dir, "/tmp/browserbase-state")
+
+    def test_build_parser_accepts_timeout_after_ensure_session_subcommand(self):
+        args = MODULE.build_parser().parse_args(
+            ["ensure-session", "--timeout-seconds", "7200"]
+        )
+
+        self.assertEqual(args.command, "ensure-session")
+        self.assertEqual(args.timeout_seconds, 7200)
+
     def test_write_json_uses_unique_temp_files_for_parallel_writers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             state_dir = Path(temp_dir)
@@ -289,6 +305,33 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
 
         self.assertTrue(page_id_known)
         self.assertEqual(page_id, "page_live")
+
+    def test_resolve_page_id_for_session_omits_blank_page_when_no_live_tab_exists(self):
+        config = MODULE.BrowserbaseConfig(
+            api_key="bb_test",
+            project_id="proj_test",
+            api_base=MODULE.API_BASE_DEFAULT,
+            timeout_seconds=3600,
+        )
+
+        original_debug = MODULE.get_debug_urls
+        MODULE.get_debug_urls = lambda *_args, **_kwargs: {
+            "pages": [
+                {
+                    "id": "page_blank",
+                    "url": "about:blank",
+                    "title": "about:blank",
+                    "debuggerFullscreenUrl": "https://blank.example.com",
+                }
+            ]
+        }
+        try:
+            page_id, page_id_known = MODULE.resolve_page_id_for_session(config, "sess_blank")
+        finally:
+            MODULE.get_debug_urls = original_debug
+
+        self.assertTrue(page_id_known)
+        self.assertIsNone(page_id)
 
 
 if __name__ == "__main__":

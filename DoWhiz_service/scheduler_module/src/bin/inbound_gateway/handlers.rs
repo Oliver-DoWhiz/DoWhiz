@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration as StdDuration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -37,6 +39,8 @@ use super::verify::{
     verify_bluebubbles, verify_lark, verify_lark_challenge, verify_postmark, verify_slack,
     verify_twilio, verify_wechat, verify_whatsapp_subscription,
 };
+
+const SLACK_ENGAGED_THREAD_TTL: StdDuration = StdDuration::from_secs(12 * 60 * 60);
 
 /// Request payload for creating a workspace brief document
 #[derive(Debug, Deserialize)]
@@ -325,23 +329,81 @@ fn should_enqueue_slack_message(wrapper: &SlackEventWrapper, bot_user_id: Option
     }
 
     match event.event_type.as_str() {
-        "app_mention" => true,
+        "app_mention" => {
+            remember_slack_engaged_thread(wrapper);
+            true
+        }
         "message" => {
             if matches!(event.channel_type.as_deref(), Some("im") | Some("mpim")) {
+                return true;
+            }
+            if event.thread_ts.is_some() && slack_thread_is_engaged(wrapper) {
                 return true;
             }
             let Some(bot_user_id) = bot_user_id else {
                 return false;
             };
             let mention = format!("<@{}>", bot_user_id.trim());
-            event
+            let should_enqueue = event
                 .text
                 .as_deref()
                 .map(|text| text.contains(&mention))
-                .unwrap_or(false)
+                .unwrap_or(false);
+            if should_enqueue {
+                remember_slack_engaged_thread(wrapper);
+            }
+            should_enqueue
         }
         _ => false,
     }
+}
+
+fn slack_engaged_threads() -> &'static Mutex<HashMap<String, Instant>> {
+    static THREADS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    THREADS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn slack_thread_scope_key(wrapper: &SlackEventWrapper) -> Option<String> {
+    let event = wrapper.event.as_ref()?;
+    let team_id = wrapper.team_id.as_deref().unwrap_or("unknown").trim();
+    let channel_id = event.channel.as_deref()?.trim();
+    let root_ts = event
+        .thread_ts
+        .as_deref()
+        .unwrap_or(event.ts.as_str())
+        .trim();
+    if channel_id.is_empty() || root_ts.is_empty() {
+        return None;
+    }
+    Some(format!("slack:{team_id}:{channel_id}:{root_ts}"))
+}
+
+fn prune_stale_slack_engaged_threads(store: &mut HashMap<String, Instant>, now: Instant) {
+    store.retain(|_, last_seen| now.duration_since(*last_seen) <= SLACK_ENGAGED_THREAD_TTL);
+}
+
+fn remember_slack_engaged_thread(wrapper: &SlackEventWrapper) {
+    let Some(key) = slack_thread_scope_key(wrapper) else {
+        return;
+    };
+    let now = Instant::now();
+    let mut store = slack_engaged_threads()
+        .lock()
+        .expect("slack engaged thread lock poisoned");
+    prune_stale_slack_engaged_threads(&mut store, now);
+    store.insert(key, now);
+}
+
+fn slack_thread_is_engaged(wrapper: &SlackEventWrapper) -> bool {
+    let Some(key) = slack_thread_scope_key(wrapper) else {
+        return false;
+    };
+    let now = Instant::now();
+    let mut store = slack_engaged_threads()
+        .lock()
+        .expect("slack engaged thread lock poisoned");
+    prune_stale_slack_engaged_threads(&mut store, now);
+    store.contains_key(&key)
 }
 
 pub(super) async fn ingest_bluebubbles(
@@ -1641,6 +1703,89 @@ mod tests {
         };
 
         assert!(should_enqueue_slack_message(&wrapper, None));
+    }
+
+    #[test]
+    fn should_enqueue_slack_message_accepts_follow_up_in_engaged_thread() {
+        let root = SlackEventWrapper {
+            event_type: "event_callback".to_string(),
+            challenge: None,
+            token: None,
+            team_id: Some("T_engaged".to_string()),
+            api_app_id: Some("A1".to_string()),
+            event: Some(SlackMessageEvent {
+                event_type: "app_mention".to_string(),
+                subtype: None,
+                channel: Some("C_engaged".to_string()),
+                user: Some("U1".to_string()),
+                text: Some("<@B1> start thread".to_string()),
+                ts: "9.01".to_string(),
+                thread_ts: None,
+                bot_id: None,
+                app_id: None,
+                files: None,
+                channel_type: Some("channel".to_string()),
+                event_ts: None,
+            }),
+            event_id: Some("Ev_engaged_root".to_string()),
+            event_time: None,
+        };
+        assert!(should_enqueue_slack_message(&root, Some("B1")));
+
+        let follow_up = SlackEventWrapper {
+            event_type: "event_callback".to_string(),
+            challenge: None,
+            token: None,
+            team_id: Some("T_engaged".to_string()),
+            api_app_id: Some("A1".to_string()),
+            event: Some(SlackMessageEvent {
+                event_type: "message".to_string(),
+                subtype: None,
+                channel: Some("C_engaged".to_string()),
+                user: Some("U1".to_string()),
+                text: Some("link for follow-up".to_string()),
+                ts: "9.02".to_string(),
+                thread_ts: Some("9.01".to_string()),
+                bot_id: None,
+                app_id: None,
+                files: None,
+                channel_type: Some("channel".to_string()),
+                event_ts: None,
+            }),
+            event_id: Some("Ev_engaged_reply".to_string()),
+            event_time: None,
+        };
+
+        assert!(should_enqueue_slack_message(&follow_up, Some("B1")));
+    }
+
+    #[test]
+    fn should_enqueue_slack_message_rejects_follow_up_in_unengaged_thread() {
+        let wrapper = SlackEventWrapper {
+            event_type: "event_callback".to_string(),
+            challenge: None,
+            token: None,
+            team_id: Some("T_unengaged".to_string()),
+            api_app_id: Some("A1".to_string()),
+            event: Some(SlackMessageEvent {
+                event_type: "message".to_string(),
+                subtype: None,
+                channel: Some("C_unengaged".to_string()),
+                user: Some("U1".to_string()),
+                text: Some("plain thread reply".to_string()),
+                ts: "10.02".to_string(),
+                thread_ts: Some("10.01".to_string()),
+                bot_id: None,
+                app_id: None,
+                files: None,
+                channel_type: Some("channel".to_string()),
+                event_ts: None,
+            }),
+            event_id: Some("Ev_unengaged_reply".to_string()),
+            event_time: None,
+        };
+
+        assert!(!should_enqueue_slack_message(&wrapper, Some("B1")));
     }
 
     #[test]

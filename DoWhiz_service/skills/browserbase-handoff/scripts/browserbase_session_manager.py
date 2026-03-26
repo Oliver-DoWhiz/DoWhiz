@@ -360,9 +360,6 @@ def select_page_id_from_debug_payload(debug_urls: Dict[str, Any]) -> Optional[st
         if page_looks_live(page):
             return page_id
 
-    for _page, page_id in iter_candidates():
-        return page_id
-
     return None
 
 
@@ -574,11 +571,7 @@ def emit(payload: Dict[str, Any], output_format: str) -> None:
     print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="browserbase_session_manager",
-        description="Ensure and release Browserbase sessions for DoWhiz-managed browser tasks.",
-    )
+def add_common_cli_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--state-dir",
         default=os.environ.get("BROWSERBASE_STATE_DIR", "").strip() or STATE_DIR_DEFAULT,
@@ -591,9 +584,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override Browserbase session timeout in seconds.",
     )
 
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="browserbase_session_manager",
+        description="Ensure and release Browserbase sessions for DoWhiz-managed browser tasks.",
+    )
+    add_common_cli_args(parser)
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     ensure_parser = subparsers.add_parser("ensure-session", help="create or reuse the active session")
+    add_common_cli_args(ensure_parser)
     ensure_parser.add_argument(
         "--format",
         choices=("json", "shell"),
@@ -603,6 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
     ensure_parser.set_defaults(func=cmd_ensure_session)
 
     release_parser = subparsers.add_parser("release-active", help="request release for active session")
+    add_common_cli_args(release_parser)
     release_parser.add_argument(
         "--format",
         choices=("json",),

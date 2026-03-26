@@ -9,16 +9,30 @@ use crate::adapters::slack::SlackEventWrapper;
 use crate::channel::{Channel, InboundAdapter};
 use crate::index_store::IndexStore;
 use crate::slack_store::SlackStore;
-use crate::user_store::UserStore;
+use crate::thread_state::ThreadState;
+use crate::user_store::{UserPaths, UserRecord, UserStore};
 use crate::{ModuleExecutor, RunTaskTask, Scheduler, TaskKind};
 
 use super::super::bump_thread_state;
 use super::super::config::ServiceConfig;
 use super::super::default_thread_state_path;
 use super::super::scheduler::cancel_pending_thread_tasks;
-use super::super::workspace::ensure_thread_workspace;
+use super::super::workspace::{ensure_thread_workspace, refresh_thread_input_snapshot};
 use super::super::write_slack_chat_history_scope_file;
 use super::super::BoxError;
+
+const SLACK_ROUTER_CONTEXT_CHAR_LIMIT: usize = 4_000;
+const SLACK_ROUTER_RECENT_COUNT: usize = 6;
+
+#[derive(Debug, Clone)]
+pub(crate) struct PersistedSlackContext {
+    pub(crate) user: UserRecord,
+    pub(crate) user_paths: UserPaths,
+    pub(crate) workspace: std::path::PathBuf,
+    pub(crate) thread_key: String,
+    pub(crate) thread_state_path: std::path::PathBuf,
+    pub(crate) thread_state: ThreadState,
+}
 
 pub(crate) fn process_slack_event(
     config: &ServiceConfig,
@@ -65,49 +79,18 @@ pub(crate) fn process_slack_event(
         message.sender, message.metadata.slack_channel_id, message.text_body
     );
 
-    // Get channel ID (required for Slack)
+    let persisted = persist_slack_ingest_context(config, user_store, &message, raw_payload)?;
     let channel_id = message
         .metadata
         .slack_channel_id
         .as_ref()
         .ok_or("missing slack_channel_id")?;
-
-    let user = user_store.get_or_create_user("slack", &message.sender)?;
-    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
-    user_store.ensure_user_dirs(&user_paths)?;
-
-    // Thread key: channel_id + thread_id for grouping conversations
-    let thread_key = format!("slack:{}:{}", channel_id, message.thread_id);
-
-    // Create/get workspace for this thread
-    let workspace = ensure_thread_workspace(
-        &user_paths,
-        &user.user_id,
-        &thread_key,
-        &config.employee_profile,
-        config.skills_source_dir.as_deref(),
-    )?;
-
-    if let Err(err) = write_slack_chat_history_scope_file(config, &workspace, &message) {
-        warn!(
-            "failed to write scoped Slack history grant for {}: {}",
-            workspace.display(),
-            err
-        );
-    }
-
-    // Bump thread state
-    let thread_state_path = default_thread_state_path(&workspace);
-    let thread_state =
-        bump_thread_state(&thread_state_path, &thread_key, message.message_id.clone())?;
-
-    // Save the incoming Slack message to workspace
-    append_slack_message(
-        &workspace,
-        &message,
-        raw_payload,
-        thread_state.last_email_seq,
-    )?;
+    let user = persisted.user;
+    let user_paths = persisted.user_paths;
+    let workspace = persisted.workspace;
+    let thread_key = persisted.thread_key;
+    let thread_state_path = persisted.thread_state_path;
+    let thread_state = persisted.thread_state;
 
     // Determine model and runner
     let model_name = match config.employee_profile.model.clone() {
@@ -229,6 +212,164 @@ pub(crate) fn process_slack_event(
     Ok(())
 }
 
+fn ensure_slack_workspace(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message: &crate::channel::InboundMessage,
+) -> Result<(UserRecord, UserPaths, std::path::PathBuf, String), BoxError> {
+    let channel_id = message
+        .metadata
+        .slack_channel_id
+        .as_deref()
+        .ok_or("missing slack_channel_id")?;
+    let user = user_store.get_or_create_user("slack", &message.sender)?;
+    let user_paths = user_store.user_paths(&config.users_root, &user.user_id);
+    user_store.ensure_user_dirs(&user_paths)?;
+
+    let thread_key = format!("slack:{}:{}", channel_id, message.thread_id);
+    let workspace = ensure_thread_workspace(
+        &user_paths,
+        &user.user_id,
+        &thread_key,
+        &config.employee_profile,
+        config.skills_source_dir.as_deref(),
+    )?;
+
+    Ok((user, user_paths, workspace, thread_key))
+}
+
+pub(crate) fn persist_slack_ingest_context(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message: &crate::channel::InboundMessage,
+    raw_payload: &[u8],
+) -> Result<PersistedSlackContext, BoxError> {
+    let (user, user_paths, workspace, thread_key) =
+        ensure_slack_workspace(config, user_store, message)?;
+
+    if let Err(err) = write_slack_chat_history_scope_file(config, &workspace, message) {
+        warn!(
+            "failed to write scoped Slack history grant for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
+
+    let thread_state_path = default_thread_state_path(&workspace);
+    let thread_state =
+        bump_thread_state(&thread_state_path, &thread_key, message.message_id.clone())?;
+    append_slack_message(
+        &workspace,
+        message,
+        raw_payload,
+        thread_state.last_email_seq,
+    )?;
+
+    Ok(PersistedSlackContext {
+        user,
+        user_paths,
+        workspace,
+        thread_key,
+        thread_state_path,
+        thread_state,
+    })
+}
+
+pub(crate) fn build_slack_router_context(
+    config: &ServiceConfig,
+    user_store: &UserStore,
+    message: &crate::channel::InboundMessage,
+) -> Result<Option<String>, BoxError> {
+    let (_, _, workspace, _) = ensure_slack_workspace(config, user_store, message)?;
+    let incoming_dir = workspace.join("incoming_email");
+    let thread_request_path = incoming_dir.join("thread_request.md");
+    if let Ok(content) = std::fs::read_to_string(&thread_request_path) {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(truncate_slack_router_context(trimmed)));
+        }
+    }
+
+    Ok(
+        render_recent_slack_workspace_messages(&incoming_dir, SLACK_ROUTER_RECENT_COUNT)
+            .map(|content| truncate_slack_router_context(&content)),
+    )
+}
+
+fn truncate_slack_router_context(value: &str) -> String {
+    let mut truncated = value
+        .chars()
+        .take(SLACK_ROUTER_CONTEXT_CHAR_LIMIT)
+        .collect::<String>();
+    if value.chars().count() > SLACK_ROUTER_CONTEXT_CHAR_LIMIT {
+        truncated.push_str("\n\n(Truncated.)");
+    }
+    truncated
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SlackWorkspaceMetaLite {
+    #[serde(default)]
+    sender: Option<String>,
+    #[serde(default)]
+    sender_name: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+}
+
+fn render_recent_slack_workspace_messages(
+    incoming_dir: &Path,
+    max_messages: usize,
+) -> Option<String> {
+    let entries = std::fs::read_dir(incoming_dir).ok()?;
+    let mut message_files = entries
+        .filter_map(|entry| entry.ok().map(|value| value.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with("_slack_message.txt"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    message_files.sort();
+    if message_files.is_empty() {
+        return None;
+    }
+
+    let start = message_files.len().saturating_sub(max_messages);
+    let mut lines = Vec::new();
+    lines.push("Recent Slack thread context from earlier messages:".to_string());
+    for path in message_files.into_iter().skip(start) {
+        let text = std::fs::read_to_string(&path).ok()?;
+        let prefix = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.split('_').next())
+            .unwrap_or_default();
+        let meta_path = incoming_dir.join(format!("{prefix}_slack_meta.json"));
+        let meta = std::fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<SlackWorkspaceMetaLite>(&raw).ok());
+        let sender = meta
+            .as_ref()
+            .and_then(|value| value.sender_name.as_deref())
+            .or_else(|| meta.as_ref().and_then(|value| value.sender.as_deref()))
+            .unwrap_or("Slack user");
+        let timestamp = meta
+            .as_ref()
+            .and_then(|value| value.timestamp.as_deref())
+            .unwrap_or("");
+        let label = if timestamp.is_empty() {
+            sender.to_string()
+        } else {
+            format!("{sender} at {timestamp}")
+        };
+        lines.push(format!("- {}: {}", label, text.trim()));
+    }
+
+    Some(lines.join("\n"))
+}
+
 /// Save an incoming Slack message to the workspace.
 pub(super) fn append_slack_message(
     workspace: &Path,
@@ -237,7 +378,12 @@ pub(super) fn append_slack_message(
     seq: u64,
 ) -> Result<(), BoxError> {
     let incoming_dir = workspace.join("incoming_email");
+    let incoming_attachments = workspace.join("incoming_attachments");
+    let entries_email = incoming_dir.join("entries");
+    let entries_attachments = incoming_attachments.join("entries");
     std::fs::create_dir_all(&incoming_dir)?;
+    std::fs::create_dir_all(&entries_email)?;
+    std::fs::create_dir_all(&entries_attachments)?;
 
     // Save the raw JSON payload
     let raw_path = incoming_dir.join(format!("{:05}_slack_raw.json", seq));
@@ -253,6 +399,7 @@ pub(super) fn append_slack_message(
     let meta = serde_json::json!({
         "channel": "slack",
         "sender": message.sender,
+        "sender_name": message.sender_name,
         "channel_id": message.metadata.slack_channel_id,
         "team_id": message.metadata.slack_team_id,
         "thread_id": message.thread_id,
@@ -261,10 +408,147 @@ pub(super) fn append_slack_message(
     });
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
 
+    let entry_name = format!("{:05}_slack", seq);
+    let entry_email_dir = entries_email.join(&entry_name);
+    let entry_attachments_dir = entries_attachments.join(&entry_name);
+    std::fs::create_dir_all(&entry_email_dir)?;
+    std::fs::create_dir_all(&entry_attachments_dir)?;
+    std::fs::write(
+        entry_email_dir.join("postmark_payload.json"),
+        serde_json::to_vec_pretty(&build_slack_workspace_payload(message, &text_content))?,
+    )?;
+    std::fs::write(entry_email_dir.join("email.txt"), &text_content)?;
+
+    if let Err(err) = refresh_thread_input_snapshot(&incoming_dir, &incoming_attachments) {
+        warn!(
+            "failed to refresh Slack thread input snapshot for {}: {}",
+            workspace.display(),
+            err
+        );
+    }
+
     info!(
         "saved Slack message seq={} to {}",
         seq,
         incoming_dir.display()
     );
     Ok(())
+}
+
+fn build_slack_workspace_payload(
+    message: &crate::channel::InboundMessage,
+    text_content: &str,
+) -> serde_json::Value {
+    let sender = message
+        .sender_name
+        .as_deref()
+        .map(|name| format!("{name} ({})", message.sender))
+        .unwrap_or_else(|| message.sender.clone());
+    serde_json::json!({
+        "Channel": "Slack",
+        "Subject": "Slack thread message",
+        "From": sender,
+        "To": message.metadata.slack_channel_id,
+        "Cc": "",
+        "Bcc": "",
+        "Date": chrono::Utc::now().to_rfc3339(),
+        "MessageID": message.message_id,
+        "TextBody": text_content,
+        "HtmlBody": serde_json::Value::Null,
+        "SlackThreadId": message.thread_id,
+        "SlackChannelId": message.metadata.slack_channel_id,
+        "SlackTeamId": message.metadata.slack_team_id,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel::{Channel, ChannelMetadata, InboundMessage};
+
+    fn build_message(text: &str, thread_id: &str, message_id: &str) -> InboundMessage {
+        InboundMessage {
+            channel: Channel::Slack,
+            sender: "U123".to_string(),
+            sender_name: Some("Bingran".to_string()),
+            recipient: "C123".to_string(),
+            subject: None,
+            text_body: Some(text.to_string()),
+            html_body: None,
+            thread_id: thread_id.to_string(),
+            message_id: Some(message_id.to_string()),
+            attachments: Vec::new(),
+            reply_to: vec!["C123".to_string()],
+            raw_payload: br#"{"type":"event_callback"}"#.to_vec(),
+            metadata: ChannelMetadata {
+                slack_channel_id: Some("C123".to_string()),
+                slack_team_id: Some("T123".to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn append_slack_message_builds_thread_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path();
+
+        append_slack_message(
+            workspace,
+            &build_message("Root ask", "1700.1", "1700.1"),
+            br#"{"ts":"1700.1"}"#,
+            1,
+        )
+        .expect("append root");
+        append_slack_message(
+            workspace,
+            &build_message("Follow-up detail", "1700.1", "1700.2"),
+            br#"{"ts":"1700.2","thread_ts":"1700.1"}"#,
+            2,
+        )
+        .expect("append follow-up");
+
+        let incoming = workspace.join("incoming_email");
+        let thread_request =
+            std::fs::read_to_string(incoming.join("thread_request.md")).expect("thread request");
+        let thread_history =
+            std::fs::read_to_string(incoming.join("thread_history.md")).expect("thread history");
+
+        assert!(thread_request.contains("Follow-up detail"));
+        assert!(thread_request.contains("Root ask"));
+        assert!(thread_history.contains("00001_slack"));
+        assert!(thread_history.contains("00002_slack"));
+        assert!(incoming
+            .join("entries/00001_slack/postmark_payload.json")
+            .exists());
+        assert!(incoming.join("entries/00002_slack/email.txt").exists());
+    }
+
+    #[test]
+    fn render_recent_slack_workspace_messages_formats_recent_messages() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path();
+
+        append_slack_message(
+            workspace,
+            &build_message("First context", "1701.1", "1701.1"),
+            br#"{"ts":"1701.1"}"#,
+            1,
+        )
+        .expect("append first");
+        append_slack_message(
+            workspace,
+            &build_message("Second context", "1701.1", "1701.2"),
+            br#"{"ts":"1701.2","thread_ts":"1701.1"}"#,
+            2,
+        )
+        .expect("append second");
+
+        let rendered = render_recent_slack_workspace_messages(&workspace.join("incoming_email"), 6)
+            .expect("rendered");
+        assert!(rendered.contains("Recent Slack thread context"));
+        assert!(rendered.contains("First context"));
+        assert!(rendered.contains("Second context"));
+        assert!(rendered.contains("Bingran"));
+    }
 }

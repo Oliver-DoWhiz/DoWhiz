@@ -117,6 +117,9 @@ jobs:
             DoWhiz_service/target/release/inbound_gateway
             DoWhiz_service/target/release/google-docs
             DoWhiz_service/target/release/set_postmark_inbound_hook
+            DoWhiz_service/target/release/tpm_cli
+            DoWhiz_service/target/release/slack_cli
+            DoWhiz_service/target/release/discord_cli
           if-no-files-found: error
 
   deploy:
@@ -225,6 +228,9 @@ jobs:
           install -m 755 /tmp/dowhiz-release/inbound_gateway "$RELEASE_DIR/inbound_gateway"
           install -m 755 /tmp/dowhiz-release/google-docs "$RELEASE_DIR/google-docs"
           install -m 755 /tmp/dowhiz-release/set_postmark_inbound_hook "$RELEASE_DIR/set_postmark_inbound_hook"
+          install -m 755 /tmp/dowhiz-release/tpm_cli "$RELEASE_DIR/tpm_cli"
+          install -m 755 /tmp/dowhiz-release/slack_cli "$RELEASE_DIR/slack_cli"
+          install -m 755 /tmp/dowhiz-release/discord_cli "$RELEASE_DIR/discord_cli"
           rm -rf /tmp/dowhiz-release
           EOF
 
