@@ -15,7 +15,7 @@ use crate::slack_store::SlackStore;
 use crate::user_store::UserStore;
 
 use super::config::ServiceConfig;
-use super::email::{process_inbound_payload, PostmarkInbound};
+use super::email::{process_inbound_payload, record_human_approval_gate_reply, PostmarkInbound};
 use super::inbound::{
     process_bluebubbles_event, process_discord_inbound_message, process_google_workspace_message,
     process_lark_event, process_notion_message, process_slack_event, process_sms_message,
@@ -155,9 +155,10 @@ fn process_ingestion_envelope(
                 return Ok(());
             }
             if is_human_approval_gate_subject(subject) {
+                let updated = record_human_approval_gate_reply(&config.users_root, &payload)?;
                 info!(
-                    "skipping human approval gate reply from ingestion workflow: subject={}",
-                    subject
+                    "handled human approval gate reply from ingestion workflow: subject={} matched_challenges={}",
+                    subject, updated
                 );
                 return Ok(());
             }

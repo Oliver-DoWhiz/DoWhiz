@@ -65,6 +65,7 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
     "HUMAN_APPROVAL_FROM",
     "HUMAN_APPROVAL_REPLY_TO",
     "POSTMARK_API_BASE_URL",
+    "GOOGLE_PASSWORD",
     BROWSERBASE_STATE_DIR_ENV_KEY,
     BROWSERBASE_ACTIVE_SESSION_PATH_ENV_KEY,
     BROWSER_HANDOFF_BASE_URL_ENV_KEY,
@@ -3170,6 +3171,7 @@ mod tests {
         let _guards = vec![
             EnvVarGuard::set("POSTMARK_SERVER_TOKEN", "pm-token"),
             EnvVarGuard::set("HUMAN_APPROVAL_REPLY_TO", "inbox@example.com"),
+            EnvVarGuard::set("GOOGLE_PASSWORD", "google-password"),
             EnvVarGuard::set("EMPLOYEE_CONFIG_PATH", "/tmp/missing-employee-config.toml"),
             EnvVarGuard::unset("EMPLOYEE_ID"),
         ];
@@ -3181,6 +3183,9 @@ mod tests {
         assert!(overrides
             .iter()
             .any(|(k, v)| k == "HUMAN_APPROVAL_REPLY_TO" && v == "inbox@example.com"));
+        assert!(overrides
+            .iter()
+            .any(|(k, v)| k == "GOOGLE_PASSWORD" && v == "google-password"));
     }
 
     #[test]
@@ -3191,6 +3196,7 @@ mod tests {
             EnvVarGuard::set("HUMAN_APPROVAL_FROM", "   "),
             EnvVarGuard::unset("HUMAN_APPROVAL_REPLY_TO"),
             EnvVarGuard::unset("POSTMARK_API_BASE_URL"),
+            EnvVarGuard::unset("GOOGLE_PASSWORD"),
             EnvVarGuard::unset("EMPLOYEE_ID"),
             EnvVarGuard::set("EMPLOYEE_CONFIG_PATH", "/tmp/missing-employee-config.toml"),
         ];
@@ -3224,6 +3230,7 @@ addresses = ["dowhiz@deep-tutor.com"]
             EnvVarGuard::set("EMPLOYEE_ID", "boiled_egg"),
             EnvVarGuard::unset("HUMAN_APPROVAL_FROM"),
             EnvVarGuard::unset("HUMAN_APPROVAL_REPLY_TO"),
+            EnvVarGuard::unset("GOOGLE_PASSWORD"),
         ];
 
         let overrides = collect_human_approval_gate_env_overrides();
@@ -3261,6 +3268,7 @@ addresses = ["dowhiz@deep-tutor.com"]
             EnvVarGuard::set("EMPLOYEE_ID", "boiled_egg"),
             EnvVarGuard::unset("HUMAN_APPROVAL_FROM"),
             EnvVarGuard::unset("HUMAN_APPROVAL_REPLY_TO"),
+            EnvVarGuard::unset("GOOGLE_PASSWORD"),
         ];
 
         let overrides = collect_human_approval_gate_env_overrides();
@@ -3295,6 +3303,7 @@ addresses = ["dowhiz@deep-tutor.com"]
             EnvVarGuard::set("EMPLOYEE_ID", "boiled_egg"),
             EnvVarGuard::set("HUMAN_APPROVAL_FROM", "manual@dowhiz.com"),
             EnvVarGuard::unset("HUMAN_APPROVAL_REPLY_TO"),
+            EnvVarGuard::unset("GOOGLE_PASSWORD"),
         ];
 
         let overrides = collect_human_approval_gate_env_overrides();

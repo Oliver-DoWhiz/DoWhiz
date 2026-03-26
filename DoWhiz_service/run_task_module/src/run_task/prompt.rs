@@ -288,7 +288,7 @@ fn build_human_approval_gate_section() -> &'static str {
     r#"Human Approval Gate (2FA / verification challenges):
 - If login/auth flow asks for OTP/passcode/device approval/number tap, or you are blocked on CAPTCHA/password after the required local checks below, use the `human-approval-gate` skill with an honest challenge type and browser screenshot.
 - If the page shows CAPTCHA/image puzzle/text recognition challenge, do NOT attempt to solve it yourself. Immediately take the current browser screenshot(s) and use the MCP tool `dowhiz_human_approval_gate_request_and_wait` with `challenge_type="captcha"`.
-- If login is waiting for a password, first check the workspace `.env` for the relevant secret (for Google login, check `GOOGLE_PASSWORD` first). Only if the needed password is still missing should you use `dowhiz_human_approval_gate_request_and_wait` with `challenge_type="password"` and the current browser screenshot path(s).
+- If login is waiting for a password, first check the workspace `.env` and the current environment for the relevant secret (for Google login, check `GOOGLE_PASSWORD` first; if it is not in `.env`, run `printenv GOOGLE_PASSWORD`). Only if the needed password is still missing should you use `dowhiz_human_approval_gate_request_and_wait` with `challenge_type="password"` and the current browser screenshot path(s).
 - Only use `human_approval_gate` for steps that genuinely require human access outside the browser session, such as SMS codes, email codes sent to someone else, approval taps on another device, or information only the human can retrieve.
 - If multiple verification methods are available on the same challenge page, prefer SMS verification first by default. If SMS is unavailable or fails, fall back to another method and keep using `dowhiz_human_approval_gate_request_and_wait` for human input.
 - Before calling `dowhiz_human_approval_gate_request_and_wait` for 2FA, first use the website itself to initiate the challenge: click the button that sends the code / starts the approval / selects the method, and wait until the page is explicitly waiting for the human response.
@@ -1120,6 +1120,7 @@ mod tests {
         assert!(prompt.contains("challenge_type=\"two_factor\""));
         assert!(prompt.contains("screenshot path(s)"));
         assert!(prompt.contains("GOOGLE_PASSWORD"));
+        assert!(prompt.contains("printenv GOOGLE_PASSWORD"));
         assert!(prompt.contains("timeout"));
         assert!(prompt.contains("do NOT attempt to solve it yourself"));
         assert!(prompt.contains("required credential"));
