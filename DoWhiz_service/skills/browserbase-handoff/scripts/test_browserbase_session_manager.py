@@ -154,6 +154,22 @@ class BrowserbaseSessionManagerTests(unittest.TestCase):
             self.assertEqual(calls[0][0], "POST")
             self.assertIn("REQUEST_RELEASE", json.dumps(calls[0][2], sort_keys=True))
 
+    def test_build_parser_accepts_state_dir_after_release_active_subcommand(self):
+        args = MODULE.build_parser().parse_args(
+            ["release-active", "--state-dir", "/tmp/browserbase-state"]
+        )
+
+        self.assertEqual(args.command, "release-active")
+        self.assertEqual(args.state_dir, "/tmp/browserbase-state")
+
+    def test_build_parser_accepts_timeout_after_ensure_session_subcommand(self):
+        args = MODULE.build_parser().parse_args(
+            ["ensure-session", "--timeout-seconds", "7200"]
+        )
+
+        self.assertEqual(args.command, "ensure-session")
+        self.assertEqual(args.timeout_seconds, 7200)
+
     def test_write_json_uses_unique_temp_files_for_parallel_writers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             state_dir = Path(temp_dir)
