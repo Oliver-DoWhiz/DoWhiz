@@ -147,11 +147,11 @@ For the frontend to see tasks, channels with account linking (Discord, Google Wo
 // 1. Clone task before consuming
 let run_task_for_account = run_task.clone();
 
-// 2. Write to legacy storage (worker will execute from here)
+// 2. Build user path with legacy UUID, then insert task in MongoDB from deconstructed path (worker will execute from here)
 let mut scheduler = Scheduler::load(&user_paths.tasks_db_path, ...)?;
 let task_id = scheduler.add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))?;
 
-// 3. Write to account storage (frontend will query from here)
+// 3. Build user path with Supabase account_id, then insert task in MongoDB from deconstructed path (frontend will query from here)
 if let Ok(Some(account)) = account_store.get_account_by_identifier("discord", &message.sender) {
     let user_tasks_db_path = config.users_root
         .join(account.id.to_string())
