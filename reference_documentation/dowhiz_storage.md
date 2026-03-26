@@ -505,10 +505,10 @@ Ok(execution) => {
 }
 ```
 
-### Step 13a: `record_execution_finish()` -> MongoDB executions (legacy_user_id scope)
+### Step 13a: `record_execution_finish()` -> MongoDB executions
 - store/mongo.rs:169-196
-- **Uses `owner_scope.id` = `legacy_user_id`** (derived from worker's tasks.db path)
-- This is for the **worker's internal tracking**, NOT for frontend display
+- **Scope-agnostic:** Uses whatever `owner_scope` the SchedulerStore was initialized with
+- Called twice: once in main flow (legacy scope), once in Step 15a (account scope)
 
 ```rust
 pub(crate) fn record_execution_finish(
@@ -518,7 +518,7 @@ pub(crate) fn record_execution_finish(
     self.executions.update_one(
         doc! {
             "owner_scope.kind": &self.owner_kind,
-            "owner_scope.id": &self.owner_id,  // <- legacy_user_id from worker path
+            "owner_scope.id": &self.owner_id,  // <- from SchedulerStore's path
             "task_id": task_id.to_string(),
             "execution_id": execution_id,
         },
@@ -533,10 +533,10 @@ pub(crate) fn record_execution_finish(
 }
 ```
 
-### Step 14a: `update_task()` -> MongoDB tasks (legacy_user_id scope)
+### Step 14a: `update_task()` -> MongoDB tasks (legacy_user_id scope only)
 - store/mongo.rs:128-146
-- **Uses `owner_scope.id` = `legacy_user_id`** (derived from worker's tasks.db path)
-- This is for the **worker's internal tracking**, NOT for frontend display
+- **Only called in main flow** with `owner_scope.id` = `legacy_user_id`
+- Updates task schedule/enabled state for worker's internal tracking
 
 ```rust
 pub(crate) fn update_task(&self, task: &ScheduledTask) -> Result<(), SchedulerError> {
@@ -559,9 +559,9 @@ pub(crate) fn update_task(&self, task: &ScheduledTask) -> Result<(), SchedulerEr
 
 ## Part 3b: Frontend Visibility (account_id scope)
 
-> **Key distinction:** Steps 13a/14a above use `legacy_user_id` for the worker's internal storage.
-> Step 15a below uses `account_id` (Supabase auth user) for **frontend visibility**.
-> The frontend queries by `account_id`, so without Step 15a, tasks would show stale status.
+> **Key distinction:** The main execution flow (Steps 13a/14a) operates on the worker's SchedulerStore
+> which uses `legacy_user_id`. Step 15a opens a **separate** SchedulerStore with `account_id` scope
+> and calls the same `record_execution_*` functions to sync status for frontend visibility.
 
 ### Step 15a: `sync_task_status_to_user_storage()` -> User's account MongoDB (account_id scope)
 - core.rs:424-535
