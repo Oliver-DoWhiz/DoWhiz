@@ -562,6 +562,7 @@ fn derive_run_task_summary(workspace_dir: &Path, channel: &str) -> Option<String
         "telegram" => derive_header_text_file_summary(&incoming_dir, &["_telegram.txt"]),
         "whatsapp" => derive_header_text_file_summary(&incoming_dir, &["_whatsapp.txt"]),
         "wechat" => derive_header_text_file_summary(&incoming_dir, &["_wechat.txt"]),
+        "lark" => derive_header_text_file_summary(&incoming_dir, &["_lark.txt"]),
         _ => None,
     }
 }
