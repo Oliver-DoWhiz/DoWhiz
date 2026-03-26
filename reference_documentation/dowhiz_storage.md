@@ -505,8 +505,10 @@ Ok(execution) => {
 }
 ```
 
-### Step 13a: `record_execution_finish()` -> MongoDB executions
+### Step 13a: `record_execution_finish()` -> MongoDB executions (legacy_user_id scope)
 - store/mongo.rs:169-196
+- **Uses `owner_scope.id` = `legacy_user_id`** (derived from worker's tasks.db path)
+- This is for the **worker's internal tracking**, NOT for frontend display
 
 ```rust
 pub(crate) fn record_execution_finish(
@@ -516,7 +518,7 @@ pub(crate) fn record_execution_finish(
     self.executions.update_one(
         doc! {
             "owner_scope.kind": &self.owner_kind,
-            "owner_scope.id": &self.owner_id,
+            "owner_scope.id": &self.owner_id,  // <- legacy_user_id from worker path
             "task_id": task_id.to_string(),
             "execution_id": execution_id,
         },
@@ -531,14 +533,16 @@ pub(crate) fn record_execution_finish(
 }
 ```
 
-### Step 14a: `update_task()` -> MongoDB tasks
+### Step 14a: `update_task()` -> MongoDB tasks (legacy_user_id scope)
 - store/mongo.rs:128-146
+- **Uses `owner_scope.id` = `legacy_user_id`** (derived from worker's tasks.db path)
+- This is for the **worker's internal tracking**, NOT for frontend display
 
 ```rust
 pub(crate) fn update_task(&self, task: &ScheduledTask) -> Result<(), SchedulerError> {
     let task_json = serde_json::to_string(task)?;
     self.tasks.update_one(
-        self.task_filter(&task.id.to_string()),
+        self.task_filter(&task.id.to_string()),  // <- filter includes legacy_user_id
         doc! {
             "$set": {
                 "enabled": task.enabled, // **false if OneShot completed, updates schedule if cron job**
@@ -551,7 +555,15 @@ pub(crate) fn update_task(&self, task: &ScheduledTask) -> Result<(), SchedulerEr
 }
 ```
 
-### Step 15a: `sync_task_status_to_user_storage()` -> User's account MongoDB
+---
+
+## Part 3b: Frontend Visibility (account_id scope)
+
+> **Key distinction:** Steps 13a/14a above use `legacy_user_id` for the worker's internal storage.
+> Step 15a below uses `account_id` (Supabase auth user) for **frontend visibility**.
+> The frontend queries by `account_id`, so without Step 15a, tasks would show stale status.
+
+### Step 15a: `sync_task_status_to_user_storage()` -> User's account MongoDB (account_id scope)
 - core.rs:424-535
 
 **Important:** This function only **updates execution status** - it does NOT create the task. For the frontend to see the task, it must have been created at ingestion time via the dual-write pattern (see "Dual-Write Pattern for Linked Accounts" above).
