@@ -10,6 +10,10 @@ COPY DoWhiz_service/target/release/rust_service /app/rust_service
 COPY DoWhiz_service/target/release/inbound_fanout /app/inbound_fanout
 COPY DoWhiz_service/target/release/inbound_gateway /app/inbound_gateway
 COPY DoWhiz_service/target/release/google-docs /app/bin/google-docs
+COPY DoWhiz_service/target/release/notion_api_cli /app/bin/notion_api_cli
+COPY DoWhiz_service/target/release/tpm_cli /app/bin/tpm_cli
+COPY DoWhiz_service/target/release/slack_cli /app/bin/slack_cli
+COPY DoWhiz_service/target/release/discord_cli /app/bin/discord_cli
 COPY DoWhiz_service/bin/ /app/bin/
 
 # Copy employee configuration and personas
@@ -24,8 +28,12 @@ RUN ln -sf /app/bin/human_approval_gate /usr/local/bin/human_approval_gate
 RUN ln -sf /app/bin/human_approval_gate_mcp /usr/local/bin/human_approval_gate_mcp
 RUN ln -sf /app/bin/browserbase_session_manager /usr/local/bin/browserbase_session_manager
 RUN ln -sf /app/bin/playwright-cli /usr/local/bin/playwright-cli
-# Create symlink for google-docs CLI so it's accessible even if Codex sandbox resets PATH
+# Create symlinks for CLIs so they're accessible even if Codex sandbox resets PATH
 RUN ln -sf /app/bin/google-docs /usr/local/bin/google-docs || true
+RUN ln -sf /app/bin/notion_api_cli /usr/local/bin/notion_api_cli || true
+RUN ln -sf /app/bin/tpm_cli /usr/local/bin/tpm_cli || true
+RUN ln -sf /app/bin/slack_cli /usr/local/bin/slack_cli || true
+RUN ln -sf /app/bin/discord_cli /usr/local/bin/discord_cli || true
 RUN chown -R app:nogroup /app/DoWhiz_service /app/bin /app/rust_service /app/inbound_fanout /app/inbound_gateway
 
 USER app
