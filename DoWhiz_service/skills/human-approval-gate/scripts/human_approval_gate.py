@@ -319,6 +319,41 @@ def get_env_first(*keys: str) -> Optional[str]:
     return None
 
 
+def unquote_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def read_workspace_env_value(key: str, env_path: Optional[Path] = None) -> Optional[str]:
+    path = env_path or (Path.cwd() / ".env")
+    if not path.exists():
+        return None
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        entry_key, separator, entry_value = line.partition("=")
+        if separator != "=":
+            continue
+        if entry_key.strip() != key:
+            continue
+        value = unquote_env_value(entry_value.strip())
+        if value:
+            return value
+    return None
+
+
+def resolve_available_password_source(password_env_key: str) -> Optional[str]:
+    workspace_value = read_workspace_env_value(password_env_key)
+    if workspace_value:
+        return f"workspace .env ({(Path.cwd() / '.env').resolve()})"
+    env_value = get_env_first(password_env_key)
+    if env_value:
+        return "the current environment"
+    return None
+
+
 def discover_do_whiz_service_root() -> Optional[Path]:
     script_path = Path(__file__).resolve()
     for parent in script_path.parents:
@@ -1259,6 +1294,13 @@ def build_request_state(args: argparse.Namespace) -> Dict[str, Any]:
     if challenge_type != "password":
         password_env_key = ""
         password_lookup_status = ""
+    else:
+        available_password_source = resolve_available_password_source(password_env_key)
+        if available_password_source:
+            raise CliError(
+                f"{password_env_key} is already available in {available_password_source}; "
+                "use it directly instead of requesting human approval"
+            )
 
     screenshot_paths = ensure_file_paths(args.screenshot)
     postmark_attachments, attachment_summaries = build_postmark_attachments(screenshot_paths)

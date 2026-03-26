@@ -1,11 +1,13 @@
 use std::collections::HashSet;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
+use serde_json::{json, Value};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -48,9 +50,10 @@ pub fn process_inbound_payload(
 
     if is_human_approval_gate_reply(payload) {
         let subject = payload.subject.as_deref().unwrap_or("");
+        let updated = record_human_approval_gate_reply(&config.users_root, payload)?;
         info!(
-            "skipping human approval gate reply from normal inbound workflow: subject={}",
-            subject
+            "handled human approval gate reply from normal inbound workflow: subject={} matched_challenges={}",
+            subject, updated
         );
         return Ok(());
     }
@@ -555,6 +558,32 @@ fn is_human_approval_gate_reply(payload: &PostmarkInbound) -> bool {
     is_human_approval_gate_subject(subject)
 }
 
+pub(super) fn record_human_approval_gate_reply(
+    users_root: &Path,
+    payload: &PostmarkInbound,
+) -> Result<usize, BoxError> {
+    let subject = payload.subject.as_deref().unwrap_or("");
+    let Some(challenge_id) = extract_human_approval_gate_challenge_id(subject) else {
+        return Ok(0);
+    };
+    let state_paths = find_human_approval_gate_state_paths(users_root, &challenge_id)?;
+    if state_paths.is_empty() {
+        info!(
+            "human approval gate reply did not match any local challenge state: challenge_id={}",
+            challenge_id
+        );
+        return Ok(0);
+    }
+
+    let mut updated = 0usize;
+    for state_path in state_paths {
+        if update_human_approval_gate_state(&state_path, payload)? {
+            updated += 1;
+        }
+    }
+    Ok(updated)
+}
+
 fn is_human_approval_gate_subject(subject: &str) -> bool {
     let normalized = subject.trim();
     if normalized.is_empty() {
@@ -570,6 +599,146 @@ fn is_human_approval_gate_subject(subject: &str) -> bool {
         }
     }
     false
+}
+
+fn extract_human_approval_gate_challenge_id(subject: &str) -> Option<String> {
+    let normalized = subject.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    let lowered = normalized.to_ascii_lowercase();
+    let start = lowered.find("[hag:")?;
+    let remainder = &normalized[start + 5..];
+    let end = remainder.find(']')?;
+    let challenge_id = remainder[..end].trim();
+    if challenge_id.is_empty() {
+        None
+    } else {
+        Some(challenge_id.to_string())
+    }
+}
+
+fn find_human_approval_gate_state_paths(
+    users_root: &Path,
+    challenge_id: &str,
+) -> Result<Vec<PathBuf>, io::Error> {
+    let mut matches = Vec::new();
+    if !users_root.exists() {
+        return Ok(matches);
+    }
+    for user_entry in fs::read_dir(users_root)? {
+        let user_entry = user_entry?;
+        let workspaces_dir = user_entry.path().join("workspaces");
+        if !workspaces_dir.is_dir() {
+            continue;
+        }
+        for workspace_entry in fs::read_dir(workspaces_dir)? {
+            let workspace_entry = workspace_entry?;
+            let candidate = workspace_entry
+                .path()
+                .join(".human_approval_gate")
+                .join("challenges")
+                .join(format!("{challenge_id}.json"));
+            if candidate.is_file() {
+                matches.push(candidate);
+            }
+        }
+    }
+    Ok(matches)
+}
+
+fn build_human_approval_gate_reply_payload(payload: &PostmarkInbound) -> Value {
+    let reply_from_header = payload.from.clone().unwrap_or_default();
+    let from_email = extract_emails(&reply_from_header).into_iter().next();
+    let message_id = payload
+        .message_id
+        .as_deref()
+        .or(payload.header_message_id())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    json!({
+        "inbound_message_id": message_id,
+        "received_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "reply_from": from_email.clone().unwrap_or_else(|| reply_from_header.clone()),
+        "from_email": from_email,
+        "reply_subject": payload.subject.clone().unwrap_or_default(),
+        "stripped_text_reply": payload.stripped_text_reply.clone().unwrap_or_default(),
+        "text_body": payload.text_body.clone().unwrap_or_default(),
+        "html_body": payload.html_body.clone().unwrap_or_default(),
+        "headers": Value::Null,
+        "attachments": Value::Null,
+        "message": {
+            "From": reply_from_header,
+            "Subject": payload.subject.clone().unwrap_or_default(),
+            "TextBody": payload.text_body.clone().unwrap_or_default(),
+            "StrippedTextReply": payload.stripped_text_reply.clone().unwrap_or_default(),
+            "HtmlBody": payload.html_body.clone().unwrap_or_default(),
+            "MessageID": message_id,
+        }
+    })
+}
+
+fn update_human_approval_gate_state(
+    state_path: &Path,
+    payload: &PostmarkInbound,
+) -> Result<bool, BoxError> {
+    let raw = fs::read_to_string(state_path)?;
+    let mut state: Value = serde_json::from_str(&raw)?;
+    let Some(state_obj) = state.as_object_mut() else {
+        return Err(format!(
+            "human approval gate state is not a JSON object: {}",
+            state_path.display()
+        )
+        .into());
+    };
+
+    if state_obj
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|value| value == "replied")
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+
+    let inbound_message_id = payload
+        .message_id
+        .as_deref()
+        .or(payload.header_message_id())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let seen = state_obj
+        .entry("seen_inbound_message_ids")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !seen.is_array() {
+        *seen = Value::Array(Vec::new());
+    }
+    if let (Some(message_id), Some(items)) = (inbound_message_id.clone(), seen.as_array_mut()) {
+        let already_seen = items
+            .iter()
+            .any(|value| value.as_str() == Some(message_id.as_str()));
+        if !already_seen {
+            items.push(Value::String(message_id));
+        }
+    }
+
+    state_obj.insert("status".to_string(), Value::String("replied".to_string()));
+    state_obj.insert(
+        "reply".to_string(),
+        build_human_approval_gate_reply_payload(payload),
+    );
+    state_obj.insert(
+        "updated_at".to_string(),
+        Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+    );
+
+    let temp_path = state_path.with_extension("json.tmp");
+    fs::write(&temp_path, serde_json::to_vec_pretty(&state)?)?;
+    fs::rename(temp_path, state_path)?;
+    Ok(true)
 }
 
 fn thread_key(payload: &PostmarkInbound, raw_payload: &[u8]) -> String {
@@ -1168,6 +1337,95 @@ mod tests {
         )
         .expect("payload");
         assert!(is_human_approval_gate_reply(&payload));
+    }
+
+    #[test]
+    fn extract_human_approval_gate_challenge_id_reads_subject_token() {
+        assert_eq!(
+            extract_human_approval_gate_challenge_id(
+                "Re: [HAG:abc-123] Password needed for dowhiz@deep-tutor.com Google account"
+            )
+            .as_deref(),
+            Some("abc-123")
+        );
+        assert_eq!(
+            extract_human_approval_gate_challenge_id("re:   [hag:xyz] hello").as_deref(),
+            Some("xyz")
+        );
+        assert_eq!(
+            extract_human_approval_gate_challenge_id("Re: project update"),
+            None
+        );
+    }
+
+    #[test]
+    fn record_human_approval_gate_reply_updates_matching_challenge_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let users_root = temp.path().join("users");
+        let challenge_id = "c9105173-2f9f-4a1e-96cc-00f470374eea";
+        let challenge_path = users_root
+            .join("user_1")
+            .join("workspaces")
+            .join("thread_1")
+            .join(".human_approval_gate")
+            .join("challenges")
+            .join(format!("{challenge_id}.json"));
+        fs::create_dir_all(challenge_path.parent().expect("challenge parent"))
+            .expect("create challenge dir");
+        fs::write(
+            &challenge_path,
+            serde_json::to_vec_pretty(&json!({
+                "challenge_id": challenge_id,
+                "status": "pending",
+                "seen_inbound_message_ids": [],
+                "reply": Value::Null,
+            }))
+            .expect("serialize state"),
+        )
+        .expect("write challenge");
+
+        let payload: PostmarkInbound = serde_json::from_str(
+            r#"{
+  "From": "Admin <admin@dowhiz.com>",
+  "Subject": "Re: [HAG:c9105173-2f9f-4a1e-96cc-00f470374eea] Password needed for dowhiz@deep-tutor.com Google account",
+  "TextBody": "done",
+  "StrippedTextReply": "done",
+  "MessageID": "msg-123"
+}"#,
+        )
+        .expect("payload");
+
+        let updated = record_human_approval_gate_reply(&users_root, &payload).expect("record");
+        assert_eq!(updated, 1);
+
+        let state: Value =
+            serde_json::from_slice(&fs::read(&challenge_path).expect("read challenge"))
+                .expect("parse challenge");
+        assert_eq!(state.get("status").and_then(Value::as_str), Some("replied"));
+        assert_eq!(
+            state
+                .get("seen_inbound_message_ids")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("msg-123")
+        );
+        assert_eq!(
+            state
+                .get("reply")
+                .and_then(Value::as_object)
+                .and_then(|reply| reply.get("stripped_text_reply"))
+                .and_then(Value::as_str),
+            Some("done")
+        );
+        assert_eq!(
+            state
+                .get("reply")
+                .and_then(Value::as_object)
+                .and_then(|reply| reply.get("from_email"))
+                .and_then(Value::as_str),
+            Some("admin@dowhiz.com")
+        );
     }
 
     #[test]

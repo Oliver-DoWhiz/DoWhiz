@@ -140,6 +140,64 @@ class HumanApprovalGateTests(unittest.TestCase):
             self.assertNotIn("Checked workspace .env", rendered["text_body"])
             self.assertIn("Password needed", state["subject"])
 
+    def test_password_request_rejects_when_password_exists_in_current_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot = self.create_screenshot(temp_dir)
+            previous = os.environ.get("GOOGLE_PASSWORD")
+            os.environ["GOOGLE_PASSWORD"] = "already-available"
+            try:
+                args = self.parse_request(
+                    "--challenge-type",
+                    "password",
+                    "--scope",
+                    "admin",
+                    "--password-env-key",
+                    "GOOGLE_PASSWORD",
+                    "--account-label",
+                    "Oliver Google account",
+                    "--screenshot",
+                    screenshot,
+                )
+                with self.assertRaises(MODULE.CliError) as ctx:
+                    MODULE.build_request_state(args)
+            finally:
+                if previous is None:
+                    os.environ.pop("GOOGLE_PASSWORD", None)
+                else:
+                    os.environ["GOOGLE_PASSWORD"] = previous
+
+            self.assertIn("GOOGLE_PASSWORD is already available", str(ctx.exception))
+
+    def test_password_request_rejects_when_password_exists_in_workspace_env(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot = self.create_screenshot(temp_dir)
+            workspace_env = Path(temp_dir) / ".env"
+            workspace_env.write_text("GOOGLE_PASSWORD=workspace-secret\n", encoding="utf-8")
+            previous_password = os.environ.pop("GOOGLE_PASSWORD", None)
+            previous_cwd = os.getcwd()
+            os.chdir(temp_dir)
+            try:
+                args = self.parse_request(
+                    "--challenge-type",
+                    "password",
+                    "--scope",
+                    "admin",
+                    "--password-env-key",
+                    "GOOGLE_PASSWORD",
+                    "--account-label",
+                    "Oliver Google account",
+                    "--screenshot",
+                    screenshot,
+                )
+                with self.assertRaises(MODULE.CliError) as ctx:
+                    MODULE.build_request_state(args)
+            finally:
+                os.chdir(previous_cwd)
+                if previous_password is not None:
+                    os.environ["GOOGLE_PASSWORD"] = previous_password
+
+            self.assertIn("workspace .env", str(ctx.exception))
+
     def test_record_send_event_writes_attachment_details(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screenshot = self.create_screenshot(temp_dir)
