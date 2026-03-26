@@ -27,12 +27,17 @@ const LOGO_URL = `${SITE_URL}/assets/DoWhiz.svg`;
 const SUPPORT_EMAIL = 'admin@dowhiz.com';
 const ORG_NAME = 'DoWhiz';
 const CN_PATH_PREFIX = '/cn';
+const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
 
 const isCnPath = (pathname = '/') =>
   pathname === CN_PATH_PREFIX || pathname === `${CN_PATH_PREFIX}/` || pathname.startsWith(`${CN_PATH_PREFIX}/`);
 
 const getLocalizedAuthPath = (suffix = '', pathname = typeof window !== 'undefined' ? window.location.pathname : '/') =>
   `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/auth/index.html${suffix}`;
+
+const getLocalizedDashboardPath = (
+  pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
+) => getLocalizedAuthPath(LANDING_DASHBOARD_SUFFIX, pathname);
 
 const updateMetaContent = (selector, content) => {
   if (typeof document === 'undefined' || !content) {
@@ -65,10 +70,12 @@ function LandingPage({ locale }) {
   const [theme, setTheme] = useState(() => getThemeForLocalTime());
   const [enableMouseField, setEnableMouseField] = useState(false);
   const [user, setUser] = useState(null);
+  const [authStatus, setAuthStatus] = useState('checking');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [navHidden, setNavHidden] = useState(false);
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
+  const authRedirectStartedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -91,6 +98,10 @@ function LandingPage({ locale }) {
       return;
     }
 
+    if (authStatus !== 'anonymous') {
+      return;
+    }
+
     persistAttributionFromLocation();
     const sessionId = getOrCreateSessionId();
     trackAnalyticsEvent(
@@ -104,7 +115,7 @@ function LandingPage({ locale }) {
         eventKey: `landing_page_view:${sessionId}:${window.location.pathname}`
       }
     );
-  }, [pageLocale]);
+  }, [authStatus, pageLocale]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -165,19 +176,51 @@ function LandingPage({ locale }) {
 
   // Check for Supabase session on load
   useEffect(() => {
-    console.log('App: Checking for Supabase session...');
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      console.log('App: getSession result:', session);
-      console.log('App: User:', session?.user);
-      setUser(session?.user ?? null);
+    let isActive = true;
+
+    const syncSession = (session) => {
+      if (!isActive) {
+        return;
+      }
+
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+
+      if (currentUser) {
+        setAuthStatus('authenticated');
+        if (!authRedirectStartedRef.current && typeof window !== 'undefined') {
+          authRedirectStartedRef.current = true;
+          window.location.replace(getLocalizedDashboardPath(window.location.pathname));
+        }
+        return;
+      }
+
+      setAuthStatus('anonymous');
+    };
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        syncSession(session);
+      })
+      .catch((error) => {
+        console.error('App: Failed to load Supabase session', error);
+        if (isActive) {
+          setUser(null);
+          setAuthStatus('anonymous');
+        }
+      });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      syncSession(session);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('App: Auth state change:', event, session?.user);
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      isActive = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -598,13 +641,13 @@ function LandingPage({ locale }) {
                     {showUserMenu && (
                       <div className="user-dropdown">
                         <a
-                          href={getLocalizedAuthPath('?loggedIn=true')}
+                          href={getLocalizedDashboardPath(pathname)}
                           className="dropdown-item"
                           onClick={async (e) => {
                             e.preventDefault();
                             const { data: { session } } = await supabase.auth.getSession();
                             window.location.href = session
-                              ? getLocalizedAuthPath('?loggedIn=true')
+                              ? getLocalizedDashboardPath(window.location.pathname)
                               : getLocalizedAuthPath();
                           }}
                         >
