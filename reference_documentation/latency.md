@@ -9,7 +9,7 @@ scp dowhizstaging:/home/azureuser/server/DoWhiz/DoWhiz_service/task_timings.json
 ## Generate plots
 
 ```bash
-cd /Users/dylantang/DoWhiz/DoWhiz_service
+cd DoWhiz/DoWhiz_service
 python scripts/analyze_timings.py /tmp/task_timings.jsonl
 ```
 
