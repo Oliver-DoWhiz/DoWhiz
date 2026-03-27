@@ -2,7 +2,7 @@ const EN_LANDING_CONTENT = {
   metadata: {
     title: 'DoWhiz | Oliver works in your tools',
     description:
-      'Use Oliver from the landing page without starting in login. Email Oliver right away, then add Slack, Discord, GitHub, Notion, or Lark when you want more connected workflows.',
+      'Start with Oliver in email, Slack, or Discord without logging in first. GitHub, Notion, and Lark work can start with a real request now and connect later when you want saved workflows.',
     canonicalUrl: 'https://dowhiz.com/',
     ogLocale: 'en_US',
     themeColor: '#2C2C2E',
@@ -26,9 +26,9 @@ const EN_LANDING_CONTENT = {
     eyebrow: 'Start with a real request',
     title: 'Use Oliver in a channel you already have open.',
     subtitle:
-      'Email Oliver right away. Then add Slack, Discord, GitHub, Notion, or Lark when you want Oliver inside those workflows.',
+      'Start in email, Slack, or Discord right away. For GitHub, Notion, or Lark work, send the first request now and connect the app later only if it helps.',
     caption:
-      'Start with the request itself. Oliver can guide account linking, saved memory, and app setup later, inside the conversation.',
+      'Get first value before setup. Oliver can guide linking, saved memory, and deeper app access inside the conversation when needed.',
     primaryCta: 'Email Oliver now',
     secondaryCta: 'See real examples',
     manageAnonymous: 'Manage setup later',
@@ -38,61 +38,65 @@ const EN_LANDING_CONTENT = {
       'Hi Oliver,\n\nHere is the first task I want help with:\n\n- Context:\n- What done looks like:\n- Any deadline:\n\nThanks!',
     toolsEyebrow: 'Where Oliver works today',
     toolsHintAnonymous:
-      'Email is the only true no-login start today. The other channels open setup when you are ready to connect them.',
+      'Slack and Discord open public add flows. GitHub, Notion, and Lark start with a real request first, then connect later if you want saved access.',
     toolsHintAuthenticated: 'If you are signed in, these buttons start the real connect flow.',
     toolsFootnote:
-      'Use setup when you want saved memory, linked identities, or more app connections. It does not need to be your first step.',
+      'Sign in only when you want saved memory, linked identities, or deeper app access. It does not need to be your first step.',
     directEyebrow: 'Fastest first move',
-    directTitle: 'Send the first request by email.',
+    directTitle: 'Email is still the simplest first move.',
     directDescription:
-      'You do not need an account for the first message. Oliver can reply first and guide linking only if it helps.',
-    directBadge: 'No login needed for the first email',
-    directSubnote: 'Best for a first request, a follow-up, or any draft-heavy task.',
+      'If you want the lightest no-login start, send the first request by email and let Oliver guide any later setup in context.',
+    directBadge: 'Fastest no-login path',
+    directSubnote: 'Best for a brand-new request, a follow-up, or any drafting-heavy task.',
     directActionLabel: 'Compose email',
     actionLabels: {
       connect: 'Connect',
-      setup: 'Open setup',
       loading: 'Opening...'
     },
     tools: [
       {
         key: 'slack',
         label: 'Slack',
-        availability: 'Connect when ready',
-        description: 'Bring Oliver into the team chat where requests already show up.',
-        monogram: 'S',
+        anonymousStatus: 'Public install',
+        authenticatedStatus: 'Connect workspace',
+        anonymousActionLabel: 'Add bot',
+        description: 'Add Oliver to a workspace in one click, then ask the first thing you need handled in Slack.',
         accent: '#36c58b'
       },
       {
         key: 'discord',
         label: 'Discord',
-        availability: 'Connect when ready',
-        description: 'Add Oliver to fast back-and-forth coordination and community work.',
-        monogram: 'D',
+        anonymousStatus: 'Public invite',
+        authenticatedStatus: 'Connect server',
+        anonymousActionLabel: 'Add bot',
+        description: 'Invite Oliver into your server and start with a real request there.',
         accent: '#6c78ff'
       },
       {
         key: 'github',
         label: 'GitHub',
-        availability: 'Connect for repo work',
-        description: 'Connect issues, follow-up, and code-adjacent requests.',
-        monogram: 'GH',
+        anonymousStatus: 'Start with email',
+        authenticatedStatus: 'Connect repo access',
+        anonymousActionLabel: 'Send request',
+        description: 'Send repo context right away, then connect GitHub later for saved repo-side follow-up.',
         accent: '#2c2c2e'
       },
       {
         key: 'notion',
         label: 'Notion',
-        availability: 'Connect for docs',
-        description: 'Bring Oliver into notes, docs, and task context when it matters.',
-        monogram: 'N',
+        anonymousStatus: 'Start with email',
+        authenticatedStatus: 'Connect docs access',
+        anonymousActionLabel: 'Send request',
+        description: 'Start with a docs or notes request now, then connect Notion when you want workspace context.',
         accent: '#6f6b63'
       },
       {
         key: 'lark',
         label: 'Lark',
-        availability: 'Connect for ops',
-        description: 'Use Oliver in coordination-heavy operations and follow-through.',
-        monogram: 'L',
+        anonymousStatus: 'Start with email',
+        authenticatedStatus: 'Connect workspace',
+        anonymousActionLabel: 'Send request',
+        description: 'Start ops and coordination work now, then connect Lark when you want persistent access.',
         accent: '#3f88ff'
       }
     ]
@@ -176,17 +180,17 @@ const EN_LANDING_CONTENT = {
     {
       question: 'What is the fastest way to start?',
       answer:
-        'Email is the fastest real starting point today. You can send Oliver a request immediately, without creating an account first.'
+        'Email is still the fastest no-login start. Slack and Discord also have direct add flows, and GitHub, Notion, or Lark work can start with a first request before you connect anything.'
     },
     {
       question: 'Do I need an account before the first request?',
       answer:
-        'Not for the first email. Oliver can begin helping first, then guide account linking or setup later if it actually helps the workflow.'
+        'No. You can start with email, Slack, or Discord without creating an account first. GitHub, Notion, and Lark work can start with a request first and be linked later when deeper access helps.'
     },
     {
       question: 'Can I use Slack or Discord immediately?',
       answer:
-        'Today, email is the cleanest no-login entry point. Slack, Discord, GitHub, Notion, and Lark are best added when you are ready to connect them through setup.'
+        'Yes. Slack and Discord open public install or invite flows today. GitHub, Notion, and Lark still start with a request first, then connect later when you want saved app access.'
     },
     {
       question: 'What kinds of first requests work best?',
@@ -202,7 +206,7 @@ const EN_LANDING_CONTENT = {
   labels: {
     faqEyebrow: 'Questions',
     faqTitle: 'The essentials before you start',
-    faqIntro: 'Short answers about starting in email, connecting more channels later, and staying in control.',
+    faqIntro: 'Short answers about starting without login, choosing a real channel first, and deciding later which connections are worth saving.',
     faqLinkLabel: 'Open the Help Center',
     footerTitle: 'Resources',
     footerTagline: 'Oliver helps turn requests into finished work.',
@@ -223,7 +227,7 @@ const ZH_LANDING_CONTENT = {
   metadata: {
     title: 'DoWhiz 中文 | Oliver 在你的工具里工作',
     description:
-      '认识 Oliver。你不需要先登录再开始：现在就可以先给 Oliver 发邮件，等真正需要时再连接 Slack、Discord、GitHub、Notion 或 Lark。',
+      '认识 Oliver。你不需要先登录再开始：现在就可以直接通过 Email、Slack 或 Discord 开始使用。GitHub、Notion 和 Lark 相关任务也可以先发出真实请求，之后再决定是否连接。',
     canonicalUrl: 'https://dowhiz.com/cn',
     ogLocale: 'zh_CN',
     themeColor: '#2C2C2E',
@@ -247,9 +251,9 @@ const ZH_LANDING_CONTENT = {
     eyebrow: '先从一个真实请求开始',
     title: '在你已经打开的渠道里直接开始用 Oliver。',
     subtitle:
-      '你现在就可以先通过 Email 使用 Oliver。等你想让它进入 Slack、Discord、GitHub、Notion 或 Lark 的工作流时，再去连接这些渠道。',
+      '你现在就可以直接通过 Email、Slack 或 Discord 开始。对于 GitHub、Notion 或 Lark 相关任务，也可以先发出第一个请求，只有在真正有帮助时再连接 app。',
     caption:
-      '先从请求本身开始。真正需要的时候，Oliver 可以在对话里继续引导账号绑定、memory 和 app setup。',
+      '先拿到第一轮价值，再决定要不要 setup。真正需要的时候，Oliver 可以在对话里继续引导账号绑定、memory 和更深的 app 接入。',
     primaryCta: '现在给 Oliver 发邮件',
     secondaryCta: '看真实例子',
     manageAnonymous: '稍后再管理 setup',
@@ -259,61 +263,65 @@ const ZH_LANDING_CONTENT = {
       '你好 Oliver，\n\n这是我想先让你帮忙处理的第一个任务：\n\n- 背景：\n- 什么算完成：\n- 截止时间：\n\n谢谢！',
     toolsEyebrow: 'Oliver 现在可工作的渠道',
     toolsHintAnonymous:
-      '今天真正可以无登录直接开始的入口是 Email。其他渠道会在你准备好连接时带你进入 setup。',
+      'Slack 和 Discord 会直接打开公开安装入口。GitHub、Notion 和 Lark 则可以先发出真实请求，之后如果你希望保存访问权限，再去连接。',
     toolsHintAuthenticated: '如果你已经登录，这些按钮会直接启动真实连接流程。',
     toolsFootnote:
-      '只有当你希望 Oliver 记住更多上下文、绑定身份、或接入更多 app 时，才需要进入 setup。',
+      '只有当你希望 Oliver 记住更多上下文、绑定身份、或接入更深的 app 权限时，才需要登录进入 setup。',
     directEyebrow: '最快的第一步',
-    directTitle: '先直接发第一封邮件。',
+    directTitle: 'Email 仍然是最轻的第一步。',
     directDescription:
-      '第一条消息不需要先注册账号。Oliver 可以先接住请求，再在真正有帮助的时候引导你完成绑定。',
-    directBadge: '第一封邮件不需要登录',
-    directSubnote: '尤其适合第一次尝试、邮件往来、或需要起草的任务。',
+      '如果你想用最轻的无登录方式开始，先直接发邮件就可以。后续真的有帮助时，再让 Oliver 在对话里引导 setup。',
+    directBadge: '最快的无登录入口',
+    directSubnote: '尤其适合第一次尝试、后续追问，或任何需要起草的任务。',
     directActionLabel: '写邮件给 Oliver',
     actionLabels: {
       connect: '连接',
-      setup: '打开 setup',
       loading: '打开中...'
     },
     tools: [
       {
         key: 'slack',
         label: 'Slack',
-        availability: '准备好时再连接',
-        description: '当任务已经发生在团队聊天里时，把 Oliver 带进去。',
-        monogram: 'S',
+        anonymousStatus: '公开安装',
+        authenticatedStatus: '连接工作区',
+        anonymousActionLabel: '添加机器人',
+        description: '一键把 Oliver 加进 Slack workspace，然后直接在里面发出第一个请求。',
         accent: '#36c58b'
       },
       {
         key: 'discord',
         label: 'Discord',
-        availability: '准备好时再连接',
-        description: '把 Oliver 放进高频来回沟通和社区协作里。',
-        monogram: 'D',
+        anonymousStatus: '公开邀请',
+        authenticatedStatus: '连接服务器',
+        anonymousActionLabel: '添加机器人',
+        description: '把 Oliver 邀请进你的 server，然后直接在那里开始真实任务。',
         accent: '#6c78ff'
       },
       {
         key: 'github',
         label: 'GitHub',
-        availability: '用于 repo 工作',
-        description: '把 issue、跟进和代码周边请求交给 Oliver 处理。',
-        monogram: 'GH',
+        anonymousStatus: '先发邮件开始',
+        authenticatedStatus: '连接仓库权限',
+        anonymousActionLabel: '发送请求',
+        description: '先把 repo 上下文发给 Oliver，之后如果你希望它持续跟进，再连接 GitHub。',
         accent: '#2c2c2e'
       },
       {
         key: 'notion',
         label: 'Notion',
-        availability: '用于文档上下文',
-        description: '当文档、笔记和任务上下文很关键时，再把 Oliver 接进去。',
-        monogram: 'N',
+        anonymousStatus: '先发邮件开始',
+        authenticatedStatus: '连接文档权限',
+        anonymousActionLabel: '发送请求',
+        description: '先从文档或笔记相关请求开始，等你希望 Oliver 进入 workspace 上下文时再连接 Notion。',
         accent: '#6f6b63'
       },
       {
         key: 'lark',
         label: 'Lark',
-        availability: '用于协作运营',
-        description: '让 Oliver 进入运营协作和需要持续跟进的沟通里。',
-        monogram: 'L',
+        anonymousStatus: '先发邮件开始',
+        authenticatedStatus: '连接工作区',
+        anonymousActionLabel: '发送请求',
+        description: '先从协作运营或跟进型任务开始，之后如果需要持续权限，再连接 Lark。',
         accent: '#3f88ff'
       }
     ]
@@ -397,17 +405,17 @@ const ZH_LANDING_CONTENT = {
     {
       question: '最快怎么开始？',
       answer:
-        '今天最快、最真实的入口是 Email。你现在就可以先给 Oliver 发一封邮件，不需要先注册账号。'
+        'Email 仍然是最快的无登录入口。Slack 和 Discord 也已经有直接可用的公开安装入口，而 GitHub、Notion、Lark 相关任务也可以先发出第一个请求，再决定要不要连接。'
     },
     {
       question: '第一条消息之前必须先有账号吗？',
       answer:
-        '第一封邮件不需要。Oliver 可以先开始帮忙，等真的有帮助时，再在对话里引导你完成账号绑定或更多 setup。'
+        '不需要。你可以先通过 Email、Slack 或 Discord 开始，不用先注册账号。GitHub、Notion 和 Lark 相关任务也可以先发请求，之后再在更深权限真的有帮助时完成连接。'
     },
     {
       question: 'Slack 或 Discord 现在能直接开始吗？',
       answer:
-        '目前最干净的无登录入口是 Email。Slack、Discord、GitHub、Notion 和 Lark 更适合在你准备好连接这些渠道时再接入。'
+        '可以。Slack 和 Discord 现在就会打开公开安装或邀请入口。GitHub、Notion 和 Lark 目前仍然更适合先发出请求，再在你希望保存 app 访问权限时完成连接。'
     },
     {
       question: '第一条消息最适合发什么？',
@@ -423,7 +431,7 @@ const ZH_LANDING_CONTENT = {
   labels: {
     faqEyebrow: '常见问题',
     faqTitle: '开始之前真正需要知道的几件事',
-    faqIntro: '只回答最关键的问题：怎么开始、什么时候再连接更多渠道、以及你是否还掌控流程。',
+    faqIntro: '只回答最关键的问题：如何无登录开始、先用哪个真实渠道，以及哪些连接值得以后再保存。',
     faqLinkLabel: '打开帮助中心',
     footerTitle: '资源',
     footerTagline: 'Oliver 帮你把请求变成结果。',

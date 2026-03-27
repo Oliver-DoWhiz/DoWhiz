@@ -9,7 +9,7 @@ scp dowhizstaging:/home/azureuser/server/DoWhiz/DoWhiz_service/task_timings.json
 ## Generate plots
 
 ```bash
-cd /Users/dylantang/DoWhiz/DoWhiz_service
+cd DoWhiz/DoWhiz_service
 python scripts/analyze_timings.py /tmp/task_timings.jsonl
 ```
 
@@ -29,3 +29,40 @@ open /tmp/distribution.png
 - `codex_execution_ms` - Actual codex running
 - `result_download_ms` - Downloading results from ephemeral task fileshare to global fileshare @
 `/home/azureuser/server/.dowhiz/DoWhiz/run_task`
+
+## CLI Commands
+
+The `timing_cli` binary provides commands for managing timing logs.
+
+### Build
+
+```bash
+cd DoWhiz_service
+cargo build -p run_task_module --bin timing_cli --release
+```
+
+### Commands (on Local Machine, after scp)
+
+```bash
+# Clear the timing log (start fresh)
+TIMING_LOG_PATH=/tmp/task_timings.jsonl ./target/release/timing_cli clear
+
+# Show the path to the timing log
+TIMING_LOG_PATH=/tmp/task_timings.jsonl ./target/release/timing_cli path
+
+# Display timing log contents
+TIMING_LOG_PATH=/tmp/task_timings.jsonl ./target/release/timing_cli show
+
+# Run Python analysis script to generate plots
+TIMING_LOG_PATH=/tmp/task_timings.jsonl ./target/release/timing_cli analyze
+
+# Help
+./target/release/timing_cli help
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TIMING_LOG_PATH` | `./task_timings.jsonl` | Path to the JSONL timing log file |
+| `ANALYZE_SCRIPT_PATH` | `scripts/analyze_timings.py` | Path to the Python analysis script |
