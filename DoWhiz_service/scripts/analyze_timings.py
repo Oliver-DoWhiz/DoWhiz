@@ -88,7 +88,7 @@ def plot_mean_breakdown(records: list[dict], output_path: Path):
     for key, name in STAGES:
         values = [r[key] for r in records if r.get(key) is not None]
         if values:
-            means.append(np.mean(values))
+            means.append(np.mean(values) / 60000)
             labels.append(name)
 
     if not means:
@@ -97,13 +97,13 @@ def plot_mean_breakdown(records: list[dict], output_path: Path):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     bars = ax.barh(labels, means, color='steelblue')
-    ax.set_xlabel('Time (ms)')
+    ax.set_xlabel('Time (minutes)')
     ax.set_title(f'Mean Latency by Stage (n={len(records)} tasks)')
 
     # Add value labels
     for bar, val in zip(bars, means):
         ax.text(val + max(means) * 0.01, bar.get_y() + bar.get_height()/2,
-                f'{val:.0f}ms', va='center', fontsize=9)
+                f'{val:.1f}m', va='center', fontsize=9)
 
     plt.tight_layout()
     plt.savefig(output_path / "mean_breakdown.png", dpi=150)
@@ -121,12 +121,12 @@ def plot_stacked_timeline(records: list[dict], output_path: Path, last_n: int = 
     colors = plt.cm.tab10(np.linspace(0, 1, len(STAGES)))
 
     for (key, name), color in zip(STAGES, colors):
-        values = [r.get(key, 0) or 0 for r in recent]
+        values = [(r.get(key, 0) or 0) / 60000 for r in recent]  # Convert to minutes
         ax.bar(x, values, bottom=bottom, label=name, color=color, width=0.8)
         bottom += np.array(values)
 
     ax.set_xlabel('Task')
-    ax.set_ylabel('Time (ms)')
+    ax.set_ylabel('Time (minutes)')
     ax.set_title(f'Per-Task Timing Breakdown (last {len(recent)} tasks)')
     ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     ax.set_xticks(x)
@@ -143,7 +143,7 @@ def plot_distribution(records: list[dict], output_path: Path):
     labels = []
 
     for key, name in STAGES:
-        values = [r[key] for r in records if r.get(key) is not None]
+        values = [r[key] / 60000 for r in records if r.get(key) is not None]  # Convert to minutes
         if values:
             data.append(values)
             labels.append(name)
@@ -153,7 +153,7 @@ def plot_distribution(records: list[dict], output_path: Path):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.boxplot(data, labels=labels, vert=False)
-    ax.set_xlabel('Time (ms)')
+    ax.set_xlabel('Time (minutes)')
     ax.set_title(f'Latency Distribution by Stage (n={len(records)} tasks)')
 
     plt.tight_layout()
