@@ -26,7 +26,7 @@ STAGES = [
     ("setup_latency_ms", "Setup"),
     ("ephemeral_share_create_ms", "Ephemeral Create"),
     ("ephemeral_share_upload_ms", "Ephemeral Upload"),
-    ("aci_cold_start_ms", "ACI Cold Start"),
+    ("aci_cold_start_ms", "ACI Provisioning"),
     ("codex_execution_ms", "Codex Execution"),
     ("result_download_ms", "Result Download"),
 ]
