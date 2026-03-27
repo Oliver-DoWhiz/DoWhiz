@@ -52,6 +52,19 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 RUN mkdir -p /app/.cache/ms-playwright \
   && npx playwright install --with-deps chromium
 
+# Install azcopy for fast Azure file transfers
+RUN arch="$(dpkg --print-architecture)" \
+  && case "$arch" in \
+       amd64) azcopy_url="https://aka.ms/downloadazcopy-v10-linux" ;; \
+       arm64) azcopy_url="https://aka.ms/downloadazcopy-v10-linux-arm64" ;; \
+       *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "$azcopy_url" -o /tmp/azcopy.tar.gz \
+  && tar -xzf /tmp/azcopy.tar.gz -C /tmp \
+  && mv /tmp/azcopy_linux_*/azcopy /usr/local/bin/ \
+  && chmod +x /usr/local/bin/azcopy \
+  && rm -rf /tmp/azcopy.tar.gz /tmp/azcopy_linux_*
+
 # Install cloudflared for browser-use tunnels (remote-browser skill)
 RUN arch="$(dpkg --print-architecture)" \
   && case "$arch" in \

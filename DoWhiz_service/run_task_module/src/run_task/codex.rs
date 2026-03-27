@@ -1421,25 +1421,25 @@ fn upload_workspace_to_share(
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    let output = Command::new("az")
-        .arg("storage")
-        .arg("file")
-        .arg("upload-batch")
-        .arg("--destination")
-        .arg(share_name)
-        .arg("--source")
-        .arg(workspace_dir)
-        .arg("--account-name")
-        .arg(&config.storage_account)
-        .arg("--account-key")
-        .arg(&config.storage_key)
+    // Use azcopy for faster parallel uploads
+    let dest_url = format!(
+        "https://{}.file.core.windows.net/{}/",
+        config.storage_account, share_name
+    );
+    let output = Command::new("azcopy")
+        .arg("copy")
+        .arg(format!("{}/*", workspace_dir.display()))
+        .arg(&dest_url)
+        .arg("--recursive")
+        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
+        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "az storage file upload-batch --destination {} failed:\n{}",
-                share_name,
+                "azcopy copy to {} failed:\n{}",
+                dest_url,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -1452,25 +1452,25 @@ fn download_workspace_from_share(
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    let output = Command::new("az")
-        .arg("storage")
-        .arg("file")
-        .arg("download-batch")
-        .arg("--source")
-        .arg(share_name)
-        .arg("--destination")
+    // Use azcopy for faster parallel downloads
+    let source_url = format!(
+        "https://{}.file.core.windows.net/{}/*",
+        config.storage_account, share_name
+    );
+    let output = Command::new("azcopy")
+        .arg("copy")
+        .arg(&source_url)
         .arg(workspace_dir)
-        .arg("--account-name")
-        .arg(&config.storage_account)
-        .arg("--account-key")
-        .arg(&config.storage_key)
+        .arg("--recursive")
+        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
+        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "az storage file download-batch --source {} failed:\n{}",
-                share_name,
+                "azcopy copy {} failed:\n{}",
+                source_url,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -4382,7 +4382,7 @@ printf '%s\n' "$@" > "$capture_file"
 
     #[test]
     #[cfg(unix)]
-    fn test_upload_workspace_to_share_calls_az_storage_file_upload_batch() {
+    fn test_upload_workspace_to_share_calls_azcopy() {
         use std::os::unix::fs::PermissionsExt;
 
         let _lock = env_lock();
@@ -4393,27 +4393,27 @@ printf '%s\n' "$@" > "$capture_file"
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
         fs::write(workspace_dir.join("test.txt"), "test content").expect("write test file");
 
-        let capture_path = temp.path().join("az-args.txt");
-        let az_path = bin_dir.join("az");
+        let capture_path = temp.path().join("azcopy-args.txt");
+        let azcopy_path = bin_dir.join("azcopy");
         fs::write(
-            &az_path,
+            &azcopy_path,
             r#"#!/bin/sh
 set -e
-capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+capture_file="${TEST_AZCOPY_CAPTURE_FILE:?}"
 printf '%s\n' "$@" > "$capture_file"
 "#,
         )
-        .expect("write fake az");
-        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        .expect("write fake azcopy");
+        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+        fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
         let original_path = env::var("PATH").unwrap_or_default();
         let path_value = format!("{}:{}", bin_dir.display(), original_path);
         let capture_value = capture_path.to_string_lossy().to_string();
         let _guards = vec![
             EnvVarGuard::set("PATH", &path_value),
-            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+            EnvVarGuard::set("TEST_AZCOPY_CAPTURE_FILE", &capture_value),
         ];
 
         let config = AzureAciConfig {
@@ -4435,18 +4435,16 @@ printf '%s\n' "$@" > "$capture_file"
         upload_workspace_to_share(&config, "task-test-123", &workspace_dir).expect("upload");
 
         let args = fs::read_to_string(&capture_path).expect("read captured args");
-        assert!(args.contains("storage"));
-        assert!(args.contains("file"));
-        assert!(args.contains("upload-batch"));
-        assert!(args.contains("--destination"));
+        assert!(args.contains("copy"));
+        assert!(args.contains("--recursive"));
+        assert!(args.contains("teststorage.file.core.windows.net"));
         assert!(args.contains("task-test-123"));
-        assert!(args.contains("--source"));
         assert!(args.contains(&workspace_dir.to_string_lossy().to_string()));
     }
 
     #[test]
     #[cfg(unix)]
-    fn test_download_workspace_from_share_calls_az_storage_file_download_batch() {
+    fn test_download_workspace_from_share_calls_azcopy() {
         use std::os::unix::fs::PermissionsExt;
 
         let _lock = env_lock();
@@ -4456,27 +4454,27 @@ printf '%s\n' "$@" > "$capture_file"
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
 
-        let capture_path = temp.path().join("az-args.txt");
-        let az_path = bin_dir.join("az");
+        let capture_path = temp.path().join("azcopy-args.txt");
+        let azcopy_path = bin_dir.join("azcopy");
         fs::write(
-            &az_path,
+            &azcopy_path,
             r#"#!/bin/sh
 set -e
-capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+capture_file="${TEST_AZCOPY_CAPTURE_FILE:?}"
 printf '%s\n' "$@" > "$capture_file"
 "#,
         )
-        .expect("write fake az");
-        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        .expect("write fake azcopy");
+        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+        fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
         let original_path = env::var("PATH").unwrap_or_default();
         let path_value = format!("{}:{}", bin_dir.display(), original_path);
         let capture_value = capture_path.to_string_lossy().to_string();
         let _guards = vec![
             EnvVarGuard::set("PATH", &path_value),
-            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+            EnvVarGuard::set("TEST_AZCOPY_CAPTURE_FILE", &capture_value),
         ];
 
         let config = AzureAciConfig {
@@ -4498,12 +4496,10 @@ printf '%s\n' "$@" > "$capture_file"
         download_workspace_from_share(&config, "task-test-123", &workspace_dir).expect("download");
 
         let args = fs::read_to_string(&capture_path).expect("read captured args");
-        assert!(args.contains("storage"));
-        assert!(args.contains("file"));
-        assert!(args.contains("download-batch"));
-        assert!(args.contains("--source"));
+        assert!(args.contains("copy"));
+        assert!(args.contains("--recursive"));
+        assert!(args.contains("teststorage.file.core.windows.net"));
         assert!(args.contains("task-test-123"));
-        assert!(args.contains("--destination"));
         assert!(args.contains(&workspace_dir.to_string_lossy().to_string()));
     }
 
