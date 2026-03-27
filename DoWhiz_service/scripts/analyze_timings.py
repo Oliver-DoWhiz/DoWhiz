@@ -121,7 +121,7 @@ def plot_stacked_timeline(records: list[dict], output_path: Path, last_n: int = 
     colors = plt.cm.tab10(np.linspace(0, 1, len(STAGES)))
 
     for (key, name), color in zip(STAGES, colors):
-        values = [(r.get(key, 0) or 0) / 60000 for r in recent]  # Convert to minutes
+        values = [(r.get(key, 0) or 0) / 60000 for r in recent] 
         ax.bar(x, values, bottom=bottom, label=name, color=color, width=0.8)
         bottom += np.array(values)
 
@@ -143,7 +143,7 @@ def plot_distribution(records: list[dict], output_path: Path):
     labels = []
 
     for key, name in STAGES:
-        values = [r[key] / 60000 for r in records if r.get(key) is not None]  # Convert to minutes
+        values = [r[key] / 60000 for r in records if r.get(key) is not None]
         if values:
             data.append(values)
             labels.append(name)
