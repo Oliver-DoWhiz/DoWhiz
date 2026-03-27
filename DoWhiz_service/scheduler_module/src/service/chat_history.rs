@@ -202,6 +202,10 @@ struct SlackHistoryResponse {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
+    needed: Option<String>,
+    #[serde(default)]
+    provided: Option<String>,
+    #[serde(default)]
     messages: Vec<SlackHistoryMessage>,
     #[serde(default)]
     response_metadata: Option<SlackResponseMetadata>,
@@ -213,9 +217,35 @@ struct SlackConversationListResponse {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
+    needed: Option<String>,
+    #[serde(default)]
+    provided: Option<String>,
+    #[serde(default)]
     channels: Vec<SlackConversation>,
     #[serde(default)]
     response_metadata: Option<SlackResponseMetadata>,
+}
+
+fn format_slack_api_error(
+    error: Option<&str>,
+    needed: Option<&str>,
+    provided: Option<&str>,
+) -> String {
+    let error = error
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown_error");
+    let needed = needed.map(str::trim).filter(|value| !value.is_empty());
+    let provided = provided.map(str::trim).filter(|value| !value.is_empty());
+
+    match (needed, provided) {
+        (Some(needed), Some(provided)) => {
+            format!("{error} (needed scope: {needed}; provided: {provided})")
+        }
+        (Some(needed), None) => format!("{error} (needed scope: {needed})"),
+        (None, Some(provided)) => format!("{error} (provided: {provided})"),
+        (None, None) => error.to_string(),
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1134,11 +1164,12 @@ fn fetch_slack_searchable_conversations(
         }
         let payload: SlackConversationListResponse = response.json()?;
         if !payload.ok {
-            return Err(format!(
-                "slack conversations.list returned error {}",
-                payload.error.unwrap_or_else(|| "unknown_error".to_string())
-            )
-            .into());
+            let error = format_slack_api_error(
+                payload.error.as_deref(),
+                payload.needed.as_deref(),
+                payload.provided.as_deref(),
+            );
+            return Err(format!("slack conversations.list returned error {}", error).into());
         }
         channels.extend(payload.channels);
         cursor = payload
@@ -1247,7 +1278,11 @@ fn search_slack_channel_history_with_client(
             }
         };
         if !payload.ok {
-            let error = payload.error.unwrap_or_else(|| "unknown_error".to_string());
+            let error = format_slack_api_error(
+                payload.error.as_deref(),
+                payload.needed.as_deref(),
+                payload.provided.as_deref(),
+            );
             return slack_partial_or_error(
                 warnings,
                 results,
@@ -1364,7 +1399,11 @@ fn fetch_slack_thread_replies(
             }
         };
         if !payload.ok {
-            let error = payload.error.unwrap_or_else(|| "unknown_error".to_string());
+            let error = format_slack_api_error(
+                payload.error.as_deref(),
+                payload.needed.as_deref(),
+                payload.provided.as_deref(),
+            );
             return slack_partial_or_error(
                 warnings,
                 replies,
@@ -2626,6 +2665,57 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("Falling back to the origin Slack conversation")));
+    }
+
+    #[test]
+    fn slack_workspace_search_surfaces_needed_scope_details() {
+        let _lock = env_lock();
+        let mut server = mockito::Server::new();
+        let _api = EnvGuard::set("SLACK_API_BASE_URL", &server.url());
+
+        let list_mock = server
+            .mock("GET", "/conversations.list")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+                mockito::Matcher::UrlEncoded(
+                    "types".into(),
+                    "public_channel,private_channel,mpim,im".into(),
+                ),
+                mockito::Matcher::UrlEncoded("team_id".into(), "T123".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":false,"error":"missing_scope","needed":"channels:read","provided":"channels:history,chat:write"}"#,
+            )
+            .create();
+        let origin_history = server
+            .mock("GET", "/conversations.history")
+            .match_header("authorization", "Bearer xoxb-secret")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("channel".into(), "C123".into()),
+                mockito::Matcher::UrlEncoded("limit".into(), "200".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"ok":true,"messages":[{"ts":"1700000005.000100","text":"Needle from fallback origin"}],"response_metadata":{"next_cursor":""}}"#,
+            )
+            .create();
+
+        let scope = SlackScopeGrant {
+            team_id: "T123".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700.1".to_string()),
+        };
+        let outcome =
+            search_slack_history("xoxb-secret", &scope, None, "needle", 10).expect("search");
+
+        list_mock.assert();
+        origin_history.assert();
+        assert!(outcome.warnings.iter().any(|warning| {
+            warning.contains("needed scope: channels:read")
+                && warning.contains("provided: channels:history,chat:write")
+        }));
     }
 
     #[test]
