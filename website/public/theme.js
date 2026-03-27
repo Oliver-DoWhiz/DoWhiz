@@ -8,27 +8,19 @@
   const NAV_LABELS = {
     en: {
       home: 'DoWhiz homepage',
-      team: 'Team',
-      how: 'How it works',
-      workflows: 'Workflows',
-      safety: 'Safety',
-      features: 'Features',
+      start: 'Start now',
+      examples: 'What Oliver can do',
       faq: 'FAQ',
-      blog: 'Blog',
-      contact: 'Contact',
-      signIn: 'Sign In'
+      contact: 'Email Oliver',
+      signIn: 'Manage setup'
     },
     zh: {
       home: 'DoWhiz 首页',
-      team: '团队',
-      how: '工作方式',
-      workflows: '工作流',
-      safety: '安全',
-      features: '功能',
+      start: '现在开始',
+      examples: 'Oliver 能做什么',
       faq: '常见问题',
-      blog: '博客',
-      contact: '联系',
-      signIn: '登录'
+      contact: '给 Oliver 发邮件',
+      signIn: '管理 setup'
     }
   };
 
@@ -178,44 +170,28 @@
   }
 
   function getActiveNavHref(pathname) {
-    if (pathname.startsWith('/agents/')) {
-      return getHomeSectionHref('roles');
-    }
-
     if (
-      pathname.startsWith('/solutions/') ||
-      pathname.startsWith('/demo-videos/') ||
-      pathname.startsWith('/integrations/')
+      pathname.startsWith('/help-center/') ||
+      pathname.startsWith('/trust-safety/') ||
+      pathname.startsWith('/privacy/') ||
+      pathname.startsWith('/terms/')
     ) {
-      return getHomeSectionHref('workflows');
-    }
-
-    if (pathname.startsWith('/trust-safety/')) {
-      return getHomeSectionHref('safety');
-    }
-
-    if (pathname.startsWith('/help-center/')) {
       return getHomeSectionHref('faq');
     }
 
     if (pathname.startsWith('/agent-market/')) {
-      return getHomeSectionHref('how-it-works');
-    }
-
-    if (pathname.startsWith('/blog/')) {
-      return getHomeSectionHref('blog');
-    }
-
-    if (pathname.startsWith('/user-guide/')) {
-      return getHomeSectionHref('how-it-works');
+      return getHomeSectionHref('examples');
     }
 
     if (
-      pathname.startsWith('/privacy/') ||
-      pathname.startsWith('/terms/') ||
-      pathname.startsWith('/auth/')
+      pathname.startsWith('/agents/') ||
+      pathname.startsWith('/solutions/') ||
+      pathname.startsWith('/demo-videos/') ||
+      pathname.startsWith('/integrations/') ||
+      pathname.startsWith('/blog/') ||
+      pathname.startsWith('/user-guide/')
     ) {
-      return getHomeSectionHref('features');
+      return getHomeSectionHref('examples');
     }
 
     return '';
@@ -232,13 +208,9 @@
       '    <span>Do<span class="text-gradient">Whiz</span></span>',
       '  </a>',
       '  <div class="nav-links">',
-      '    <a href="' + getHomeSectionHref('roles') + '" class="nav-btn">' + labels.team + '</a>',
-      '    <a href="' + getHomeSectionHref('how-it-works') + '" class="nav-btn">' + labels.how + '</a>',
-      '    <a href="' + getHomeSectionHref('workflows') + '" class="nav-btn">' + labels.workflows + '</a>',
-      '    <a href="' + getHomeSectionHref('safety') + '" class="nav-btn">' + labels.safety + '</a>',
-      '    <a href="' + getHomeSectionHref('features') + '" class="nav-btn">' + labels.features + '</a>',
+      '    <a href="' + getHomeSectionHref('channels') + '" class="nav-btn">' + labels.start + '</a>',
+      '    <a href="' + getHomeSectionHref('examples') + '" class="nav-btn">' + labels.examples + '</a>',
       '    <a href="' + getHomeSectionHref('faq') + '" class="nav-btn">' + labels.faq + '</a>',
-      '    <a href="' + getHomeSectionHref('blog') + '" class="nav-btn">' + labels.blog + '</a>',
       '  </div>',
       '  <div class="nav-actions">',
       '    <div class="social-links">',
@@ -252,7 +224,7 @@
       '          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>',
       '        </svg>',
       '      </a>',
-      '      <a class="btn-small" href="mailto:admin@dowhiz.com" aria-label="' + labels.contact + '">',
+      '      <a class="btn-small" href="mailto:oliver@dowhiz.com" aria-label="' + labels.contact + '">',
       '        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">',
       '          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>',
       '          <polyline points="22,6 12,13 2,6"></polyline>',

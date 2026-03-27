@@ -2,7 +2,7 @@ const EN_LANDING_CONTENT = {
   metadata: {
     title: 'DoWhiz | Oliver works in your tools',
     description:
-      'Meet Oliver, the trusted AI operator for work and life. Start from the homepage, connect one app, send one real task, and review the result.',
+      'Use Oliver from the landing page without starting in login. Email Oliver right away, then add Slack, Discord, GitHub, Notion, or Lark when you want more connected workflows.',
     canonicalUrl: 'https://dowhiz.com/',
     ogLocale: 'en_US',
     themeColor: '#2C2C2E',
@@ -11,98 +11,96 @@ const EN_LANDING_CONTENT = {
   nav: {
     homePath: '/',
     links: [
-      { href: '#examples', label: 'Examples' },
-      { href: '#how-it-starts', label: 'How it starts' },
+      { href: '#channels', label: 'Start now' },
+      { href: '#examples', label: 'What Oliver can do' },
       { href: '#faq', label: 'FAQ' }
     ],
-    signIn: 'Sign in',
-    dashboard: 'Oliver setup',
+    signIn: 'Manage setup',
+    dashboard: 'Your Oliver',
     signOut: 'Sign out',
     githubAriaLabel: 'GitHub',
     discordAriaLabel: 'Discord',
     contactAriaLabel: 'Email Oliver'
   },
   hero: {
-    eyebrow: 'Meet Oliver',
-    title: 'Tell Oliver what needs doing.',
+    eyebrow: 'Start with a real request',
+    title: 'Use Oliver in a channel you already have open.',
     subtitle:
-      'Oliver is the trusted AI operator that works in email, Slack, Discord, GitHub, Notion, and Lark, then brings back finished work you can review.',
-    caption: 'Start with one app. Keep the first task small.',
-    primaryCtaAnonymous: 'Start with one app',
-    primaryCtaAuthenticated: 'Continue onboarding',
+      'Email Oliver right away. Then add Slack, Discord, GitHub, Notion, or Lark when you want Oliver inside those workflows.',
+    caption:
+      'Start with the request itself. Oliver can guide account linking, saved memory, and app setup later, inside the conversation.',
+    primaryCta: 'Email Oliver now',
+    secondaryCta: 'See real examples',
+    manageAnonymous: 'Manage setup later',
+    manageAuthenticated: 'Open your setup',
     contactSubject: 'A first task for Oliver',
     contactBody:
       'Hi Oliver,\n\nHere is the first task I want help with:\n\n- Context:\n- What done looks like:\n- Any deadline:\n\nThanks!',
-    toolsEyebrow: 'Choose a real starting point',
-    toolsHintAnonymous: 'Email works right away. The other tools take you into setup.',
+    toolsEyebrow: 'Where Oliver works today',
+    toolsHintAnonymous:
+      'Email is the only true no-login start today. The other channels open setup when you are ready to connect them.',
     toolsHintAuthenticated: 'If you are signed in, these buttons start the real connect flow.',
+    toolsFootnote:
+      'Use setup when you want saved memory, linked identities, or more app connections. It does not need to be your first step.',
+    directEyebrow: 'Fastest first move',
+    directTitle: 'Send the first request by email.',
+    directDescription:
+      'You do not need an account for the first message. Oliver can reply first and guide linking only if it helps.',
+    directBadge: 'No login needed for the first email',
+    directSubnote: 'Best for a first request, a follow-up, or any draft-heavy task.',
+    directActionLabel: 'Compose email',
     actionLabels: {
-      email: 'Send now',
       connect: 'Connect',
       setup: 'Open setup',
       loading: 'Opening...'
     },
     tools: [
       {
-        key: 'email',
-        label: 'Email',
-        description: 'Send Oliver a request right away.',
-        monogram: '@',
-        accent: '#ff8a3d'
-      },
-      {
         key: 'slack',
         label: 'Slack',
-        description: 'Connect the place where chat work lands.',
+        availability: 'Connect when ready',
+        description: 'Bring Oliver into the team chat where requests already show up.',
         monogram: 'S',
         accent: '#36c58b'
       },
       {
         key: 'discord',
         label: 'Discord',
-        description: 'Start where fast back-and-forth already happens.',
+        availability: 'Connect when ready',
+        description: 'Add Oliver to fast back-and-forth coordination and community work.',
         monogram: 'D',
         accent: '#6c78ff'
       },
       {
         key: 'github',
         label: 'GitHub',
-        description: 'Connect repo work, issues, and follow-up.',
+        availability: 'Connect for repo work',
+        description: 'Connect issues, follow-up, and code-adjacent requests.',
         monogram: 'GH',
         accent: '#2c2c2e'
       },
       {
         key: 'notion',
         label: 'Notion',
-        description: 'Connect docs, notes, and task context.',
+        availability: 'Connect for docs',
+        description: 'Bring Oliver into notes, docs, and task context when it matters.',
         monogram: 'N',
         accent: '#6f6b63'
       },
       {
         key: 'lark',
         label: 'Lark',
-        description: 'Connect operations and coordination.',
+        availability: 'Connect for ops',
+        description: 'Use Oliver in coordination-heavy operations and follow-through.',
         monogram: 'L',
         accent: '#3f88ff'
       }
-    ],
-    flowEyebrow: 'How onboarding starts',
-    flowSteps: [
-      'Connect one app',
-      'Give Oliver one task',
-      'Review the result',
-      'Repeat what works'
-    ],
-    previewEyebrow: 'A good first task',
-    previewRequest:
-      'Draft a reply to this email, pull the action items into Notion, and hold anything sensitive for review.',
-    previewResultTitle: 'What comes back',
-    previewResults: ['Reply draft ready', 'Tasks captured', 'Approval items flagged']
+    ]
   },
   demo: {
     eyebrow: 'Real product examples',
-    title: 'See Oliver working, not just described.',
-    intro: 'One desktop walkthrough and three quick mobile demos.',
+    title: 'Watch the request-to-result loop before you change your workflow.',
+    intro: 'One longer walkthrough and three faster mobile examples.',
     desktopTitle: 'Desktop walkthrough',
     desktopDescription: 'See the request-to-result loop in one flow.',
     desktopVideoId: 'IsSOTSYIIIY',
@@ -128,38 +126,10 @@ const EN_LANDING_CONTENT = {
       }
     ]
   },
-  story: {
-    eyebrow: 'How it starts',
-    title: 'The first win should be small, clear, and useful.',
-    intro: 'You are not setting up a whole new system. You are proving one real loop.',
-    steps: [
-      {
-        id: '01',
-        title: 'Connect one app',
-        description: 'Choose the place where work already lands.'
-      },
-      {
-        id: '02',
-        title: 'Give one real task',
-        description: 'Pick something concrete, reviewable, and worth handing off.'
-      },
-      {
-        id: '03',
-        title: 'Review and repeat',
-        description: 'Check the output, save the memory, and only then expand.'
-      }
-    ],
-    controlEyebrow: 'Review and control',
-    controlTitle: 'Oliver works with your approval, not in the dark.',
-    controlPoints: [
-      'Connect only the apps you want Oliver to use',
-      'Review drafts before sensitive actions',
-      'Keep your preferences and memory in one place'
-    ]
-  },
   examples: {
-    eyebrow: 'Useful from day one',
-    title: 'Good early tasks span both work and life.',
+    eyebrow: 'What you can ask',
+    title: 'Start with something concrete, not a toy prompt.',
+    intro: 'Good first requests are real, bounded, and worth handing off for a first pass.',
     cards: [
       {
         tag: 'Research',
@@ -193,42 +163,51 @@ const EN_LANDING_CONTENT = {
       }
     ]
   },
+  control: {
+    eyebrow: 'Control and trust',
+    title: 'Oliver can help first while you stay in control.',
+    points: [
+      'Start in the channel that already fits the request',
+      'Keep sensitive work reviewable before anything final is sent',
+      'Save setup and memory only when you want Oliver to keep context'
+    ]
+  },
   faqItems: [
     {
-      question: 'What is DoWhiz now?',
+      question: 'What is the fastest way to start?',
       answer:
-        'DoWhiz starts with Oliver: a trusted AI operator who works in your tools, returns finished work, and helps you build trust one task at a time.'
+        'Email is the fastest real starting point today. You can send Oliver a request immediately, without creating an account first.'
     },
     {
-      question: 'What should I do first?',
+      question: 'Do I need an account before the first request?',
       answer:
-        'Connect one app, give Oliver one real task, review the result, and save the preference or memory that made it useful.'
+        'Not for the first email. Oliver can begin helping first, then guide account linking or setup later if it actually helps the workflow.'
     },
     {
-      question: 'What kinds of work fit best?',
+      question: 'Can I use Slack or Discord immediately?',
       answer:
-        'Good first uses include research, drafting, document organization, inbox follow-up, repo-side coordination, and posts that still wait for your approval.'
+        'Today, email is the cleanest no-login entry point. Slack, Discord, GitHub, Notion, and Lark are best added when you are ready to connect them through setup.'
+    },
+    {
+      question: 'What kinds of first requests work best?',
+      answer:
+        'Research, drafting, inbox follow-up, document organization, repo-side coordination, and posts that still wait for your approval are all good first uses.'
     },
     {
       question: 'Do I stay in control?',
       answer:
-        'Yes. You choose what gets connected, you can review sensitive work before it is sent, and you can keep setup narrow while Oliver earns trust.'
-    },
-    {
-      question: 'Is DoWhiz only for personal use?',
-      answer:
-        'The product starts with personal usefulness first. Once Oliver is trusted in one workflow, the same setup can grow into shared SMB routines later.'
+        'Yes. You decide which apps Oliver can use, when setup is worth saving, and which sensitive actions should stay reviewable.'
     }
   ],
   labels: {
     faqEyebrow: 'Questions',
     faqTitle: 'The essentials before you start',
-    faqIntro: 'Short answers about trust, fit, and what onboarding really looks like.',
+    faqIntro: 'Short answers about starting in email, connecting more channels later, and staying in control.',
     faqLinkLabel: 'Open the Help Center',
     footerTitle: 'Resources',
     footerTagline: 'Oliver helps turn requests into finished work.',
-    footerPill: 'Start personal. Expand carefully.',
-    footerBottomSecondary: 'One app, one task, one reviewable result.'
+    footerPill: 'Start with the request. Expand later.',
+    footerBottomSecondary: 'Use first. Connect more only when it helps.'
   },
   footerLinks: [
     { href: '/privacy/', label: 'Privacy' },
@@ -244,7 +223,7 @@ const ZH_LANDING_CONTENT = {
   metadata: {
     title: 'DoWhiz 中文 | Oliver 在你的工具里工作',
     description:
-      '认识 Oliver。它是服务工作和生活的可信 AI operator，可以从首页直接开始：连接一个工具，交给它一个真实任务，再审阅结果。',
+      '认识 Oliver。你不需要先登录再开始：现在就可以先给 Oliver 发邮件，等真正需要时再连接 Slack、Discord、GitHub、Notion 或 Lark。',
     canonicalUrl: 'https://dowhiz.com/cn',
     ogLocale: 'zh_CN',
     themeColor: '#2C2C2E',
@@ -253,92 +232,96 @@ const ZH_LANDING_CONTENT = {
   nav: {
     homePath: '/cn',
     links: [
-      { href: '#examples', label: '实际例子' },
-      { href: '#how-it-starts', label: '怎么开始' },
+      { href: '#channels', label: '现在开始' },
+      { href: '#examples', label: 'Oliver 能做什么' },
       { href: '#faq', label: '常见问题' }
     ],
-    signIn: '登录',
-    dashboard: 'Oliver 设置',
+    signIn: '管理 setup',
+    dashboard: '你的 Oliver',
     signOut: '退出登录',
     githubAriaLabel: 'GitHub',
     discordAriaLabel: 'Discord',
     contactAriaLabel: '给 Oliver 发邮件'
   },
   hero: {
-    eyebrow: '认识 Oliver',
-    title: '直接告诉 Oliver 要做什么。',
+    eyebrow: '先从一个真实请求开始',
+    title: '在你已经打开的渠道里直接开始用 Oliver。',
     subtitle:
-      'Oliver 是一个可信的 AI operator。它会在 email、Slack、Discord、GitHub、Notion 和 Lark 里工作，再把可审阅的结果带回来。',
-    caption: '先从一个工具开始，第一次任务尽量小一点。',
-    primaryCtaAnonymous: '从一个工具开始',
-    primaryCtaAuthenticated: '继续 onboarding',
+      '你现在就可以先通过 Email 使用 Oliver。等你想让它进入 Slack、Discord、GitHub、Notion 或 Lark 的工作流时，再去连接这些渠道。',
+    caption:
+      '先从请求本身开始。真正需要的时候，Oliver 可以在对话里继续引导账号绑定、memory 和 app setup。',
+    primaryCta: '现在给 Oliver 发邮件',
+    secondaryCta: '看真实例子',
+    manageAnonymous: '稍后再管理 setup',
+    manageAuthenticated: '打开你的 setup',
     contactSubject: '给 Oliver 的第一个任务',
     contactBody:
       '你好 Oliver，\n\n这是我想先让你帮忙处理的第一个任务：\n\n- 背景：\n- 什么算完成：\n- 截止时间：\n\n谢谢！',
-    toolsEyebrow: '从一个真实入口开始',
-    toolsHintAnonymous: 'Email 可以直接发。其他工具会带你进入 setup。',
+    toolsEyebrow: 'Oliver 现在可工作的渠道',
+    toolsHintAnonymous:
+      '今天真正可以无登录直接开始的入口是 Email。其他渠道会在你准备好连接时带你进入 setup。',
     toolsHintAuthenticated: '如果你已经登录，这些按钮会直接启动真实连接流程。',
+    toolsFootnote:
+      '只有当你希望 Oliver 记住更多上下文、绑定身份、或接入更多 app 时，才需要进入 setup。',
+    directEyebrow: '最快的第一步',
+    directTitle: '先直接发第一封邮件。',
+    directDescription:
+      '第一条消息不需要先注册账号。Oliver 可以先接住请求，再在真正有帮助的时候引导你完成绑定。',
+    directBadge: '第一封邮件不需要登录',
+    directSubnote: '尤其适合第一次尝试、邮件往来、或需要起草的任务。',
+    directActionLabel: '写邮件给 Oliver',
     actionLabels: {
-      email: '立即发送',
       connect: '连接',
       setup: '打开 setup',
       loading: '打开中...'
     },
     tools: [
       {
-        key: 'email',
-        label: 'Email',
-        description: '现在就可以直接发请求。',
-        monogram: '@',
-        accent: '#ff8a3d'
-      },
-      {
         key: 'slack',
         label: 'Slack',
-        description: '从任务本来就在发生的聊天里开始。',
+        availability: '准备好时再连接',
+        description: '当任务已经发生在团队聊天里时，把 Oliver 带进去。',
         monogram: 'S',
         accent: '#36c58b'
       },
       {
         key: 'discord',
         label: 'Discord',
-        description: '在高频来回沟通里接住任务。',
+        availability: '准备好时再连接',
+        description: '把 Oliver 放进高频来回沟通和社区协作里。',
         monogram: 'D',
         accent: '#6c78ff'
       },
       {
         key: 'github',
         label: 'GitHub',
-        description: '连接 repo、issue 和后续动作。',
+        availability: '用于 repo 工作',
+        description: '把 issue、跟进和代码周边请求交给 Oliver 处理。',
         monogram: 'GH',
         accent: '#2c2c2e'
       },
       {
         key: 'notion',
         label: 'Notion',
-        description: '连接文档、笔记和任务上下文。',
+        availability: '用于文档上下文',
+        description: '当文档、笔记和任务上下文很关键时，再把 Oliver 接进去。',
         monogram: 'N',
         accent: '#6f6b63'
       },
       {
         key: 'lark',
         label: 'Lark',
-        description: '连接协作和运营沟通。',
+        availability: '用于协作运营',
+        description: '让 Oliver 进入运营协作和需要持续跟进的沟通里。',
         monogram: 'L',
         accent: '#3f88ff'
       }
-    ],
-    flowEyebrow: 'onboarding 怎么开始',
-    flowSteps: ['连接一个工具', '交给 Oliver 一个任务', '审阅结果', '把有效流程复用起来'],
-    previewEyebrow: '适合先试的任务',
-    previewRequest: '帮我起草这封邮件的回复，把 action items 拉进 Notion，敏感内容先保留给我确认。',
-    previewResultTitle: '回来的结果',
-    previewResults: ['回复草稿已准备', '待办已提取', '需要确认的部分已标出']
+    ]
   },
   demo: {
     eyebrow: '真实产品演示',
-    title: '先看 Oliver 怎么工作，而不是先看一大段解释。',
-    intro: '一个完整桌面演示，加上三个更短的移动端例子。',
+    title: '先看 Oliver 如何把请求变成结果，而不是先看一整套流程说明。',
+    intro: '一个较完整的桌面演示，加上三个更短的移动端例子。',
     desktopTitle: '桌面完整演示',
     desktopDescription: '一条龙看完从请求到结果的过程。',
     desktopVideoId: 'IsSOTSYIIIY',
@@ -364,38 +347,10 @@ const ZH_LANDING_CONTENT = {
       }
     ]
   },
-  story: {
-    eyebrow: '怎么开始',
-    title: '第一次成功应该是小而清楚，而且真的有用。',
-    intro: '不是先搭一整套系统，而是先跑通一个真实闭环。',
-    steps: [
-      {
-        id: '01',
-        title: '先连接一个工具',
-        description: '从任务本来就会出现的地方开始。'
-      },
-      {
-        id: '02',
-        title: '交给 Oliver 一个真实任务',
-        description: '选一个具体、可复核、而且值得交出去的任务。'
-      },
-      {
-        id: '03',
-        title: '审阅后再复用',
-        description: '先看结果，再保存偏好，最后再决定是否扩展。'
-      }
-    ],
-    controlEyebrow: '审阅与控制',
-    controlTitle: 'Oliver 的执行建立在你的许可上，而不是背后偷偷做事。',
-    controlPoints: [
-      '只连接你想让 Oliver 用的工具',
-      '敏感动作前先看草稿再放行',
-      '把偏好和 memory 放在一个地方维护'
-    ]
-  },
   examples: {
-    eyebrow: '从第一天就有用',
-    title: '早期最适合的任务，通常横跨工作和生活。',
+    eyebrow: '你可以怎么问',
+    title: '第一条消息最好是真实任务，而不是试玩 prompt。',
+    intro: '最好的第一次请求，通常都具体、可复核，而且值得先让 Oliver 做一版。',
     cards: [
       {
         tag: 'Research',
@@ -429,42 +384,51 @@ const ZH_LANDING_CONTENT = {
       }
     ]
   },
+  control: {
+    eyebrow: '控制与信任',
+    title: 'Oliver 可以先开始帮忙，而你仍然掌控节奏。',
+    points: [
+      '先在最适合任务的那个渠道里开始',
+      '敏感动作仍然可以保持可审阅、可确认',
+      '只有当你希望保留上下文时，再保存 setup 和 memory'
+    ]
+  },
   faqItems: [
     {
-      question: '现在的 DoWhiz 是什么？',
+      question: '最快怎么开始？',
       answer:
-        'DoWhiz 现在先从 Oliver 开始。它是一个会在你的工具里工作、把结果带回来、并且可以逐步建立信任的 AI operator。'
+        '今天最快、最真实的入口是 Email。你现在就可以先给 Oliver 发一封邮件，不需要先注册账号。'
     },
     {
-      question: '第一步应该做什么？',
+      question: '第一条消息之前必须先有账号吗？',
       answer:
-        '先连接一个工具，交给 Oliver 一个真实任务，审阅结果，再把让它更好用的偏好或 memory 记下来。'
+        '第一封邮件不需要。Oliver 可以先开始帮忙，等真的有帮助时，再在对话里引导你完成账号绑定或更多 setup。'
     },
     {
-      question: '什么样的任务最适合先用？',
+      question: 'Slack 或 Discord 现在能直接开始吗？',
       answer:
-        '研究、起草、材料整理、收件箱跟进、repo 协调，以及需要你最后确认的内容发布，都是很好的开始。'
+        '目前最干净的无登录入口是 Email。Slack、Discord、GitHub、Notion 和 Lark 更适合在你准备好连接这些渠道时再接入。'
+    },
+    {
+      question: '第一条消息最适合发什么？',
+      answer:
+        '研究、起草、收件箱跟进、材料整理、repo 协调，以及需要你最终确认的内容发布，都是很好的开始。'
     },
     {
       question: '我还掌控流程吗？',
       answer:
-        '掌控权在你手里。你决定接哪些工具、哪些动作需要复核，以及 Oliver 什么时候才算真正值得复用。'
-    },
-    {
-      question: 'DoWhiz 现在只做个人场景吗？',
-      answer:
-        '产品先从个人可用性出发。当 Oliver 已经在一个人的工作流里证明自己，再自然扩展到 SMB 的共享流程。'
+        '掌控权仍然在你手里。你决定连哪些工具、哪些动作要先审阅，以及 Oliver 什么时候值得保存更多上下文。'
     }
   ],
   labels: {
     faqEyebrow: '常见问题',
-    faqTitle: '开始之前最需要知道的几件事',
-    faqIntro: '只回答信任、适配度和 onboarding 相关的核心问题。',
+    faqTitle: '开始之前真正需要知道的几件事',
+    faqIntro: '只回答最关键的问题：怎么开始、什么时候再连接更多渠道、以及你是否还掌控流程。',
     faqLinkLabel: '打开帮助中心',
     footerTitle: '资源',
     footerTagline: 'Oliver 帮你把请求变成结果。',
-    footerPill: '先服务个人，再谨慎扩展。',
-    footerBottomSecondary: '一个工具，一个任务，一个可审阅的结果。'
+    footerPill: '先从请求开始，再决定是否扩展。',
+    footerBottomSecondary: '先用起来，再在真正有帮助的时候连接更多。'
   },
   footerLinks: [
     { href: '/privacy/', label: '隐私政策' },

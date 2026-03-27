@@ -20,15 +20,10 @@ const LOGO_URL = `${SITE_URL}/assets/DoWhiz.svg`;
 const SUPPORT_EMAIL = 'admin@dowhiz.com';
 const ORG_NAME = 'DoWhiz';
 const CN_PATH_PREFIX = '/cn';
-const LANDING_PAGE_OVERRIDE_PARAM = 'view';
-const LANDING_PAGE_OVERRIDE_VALUE = 'landing';
-const LANDING_PAGE_OVERRIDE_SUFFIX = `?${LANDING_PAGE_OVERRIDE_PARAM}=${LANDING_PAGE_OVERRIDE_VALUE}`;
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
-const LANDING_SETUP_SUFFIX = '#section-workspace';
-const AUTHENTICATED_SETUP_SUFFIX = '?loggedIn=true#section-workspace';
 const LANDING_SETTINGS_SUFFIX = '#section-settings';
 const AUTHENTICATED_SETTINGS_SUFFIX = '?loggedIn=true#section-settings';
-const LANDING_PAGE_VARIANT = 'oliver_onboarding_v2';
+const LANDING_PAGE_VARIANT = 'oliver_channel_first_v1';
 const OAUTH_ENDPOINTS = {
   discord: '/auth/discord',
   slack: '/auth/slack',
@@ -45,43 +40,9 @@ const getLocalizedAuthPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/auth/index.html${suffix}`;
 
-const getLocalizedLandingPagePath = (
-  pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
-) => `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/${LANDING_PAGE_OVERRIDE_SUFFIX}`;
-
 const getLocalizedDashboardPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => getLocalizedAuthPath(LANDING_DASHBOARD_SUFFIX, pathname);
-
-const hasSameOriginReferrer = () => {
-  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.referrer) {
-    return false;
-  }
-
-  try {
-    return new URL(document.referrer, window.location.origin).origin === window.location.origin;
-  } catch {
-    return false;
-  }
-};
-
-const shouldStayOnLandingPage = () => {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  const { hash, search } = window.location;
-  const searchParams = new URLSearchParams(search);
-  if (searchParams.get(LANDING_PAGE_OVERRIDE_PARAM) === LANDING_PAGE_OVERRIDE_VALUE) {
-    return true;
-  }
-
-  if (search || hash) {
-    return true;
-  }
-
-  return hasSameOriginReferrer();
-};
 
 const updateMetaContent = (selector, content) => {
   if (typeof document === 'undefined' || !content) {
@@ -119,9 +80,7 @@ function LandingPage({ locale }) {
   const [navHidden, setNavHidden] = useState(false);
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
-  const authRedirectStartedRef = useRef(false);
-  const localizedHomePath =
-    authStatus === 'authenticated' ? getLocalizedLandingPagePath(pathname) : content.nav.homePath;
+  const localizedHomePath = content.nav.homePath;
   const isAuthenticated = authStatus === 'authenticated' && Boolean(user);
 
   useEffect(() => {
@@ -233,14 +192,6 @@ function LandingPage({ locale }) {
 
       if (currentUser) {
         setAuthStatus('authenticated');
-        if (
-          !authRedirectStartedRef.current &&
-          typeof window !== 'undefined' &&
-          !shouldStayOnLandingPage()
-        ) {
-          authRedirectStartedRef.current = true;
-          window.location.replace(getLocalizedDashboardPath(window.location.pathname));
-        }
         return;
       }
 
@@ -394,15 +345,12 @@ function LandingPage({ locale }) {
   };
 
   const oliverContactHref = buildMailtoLink('oliver@dowhiz.com', content.hero.contactSubject, content.hero.contactBody);
-  const primaryCtaHref = isAuthenticated
-    ? getLocalizedAuthPath(AUTHENTICATED_SETUP_SUFFIX, pathname)
-    : getLocalizedAuthPath(LANDING_SETUP_SUFFIX, pathname);
-  const primaryCtaLabel = isAuthenticated
-    ? content.hero.primaryCtaAuthenticated
-    : content.hero.primaryCtaAnonymous;
   const settingsHref = isAuthenticated
     ? getLocalizedAuthPath(AUTHENTICATED_SETTINGS_SUFFIX, pathname)
     : getLocalizedAuthPath(LANDING_SETTINGS_SUFFIX, pathname);
+  const manageSetupLabel = isAuthenticated
+    ? content.hero.manageAuthenticated
+    : content.hero.manageAnonymous;
   const toolHint = isAuthenticated ? content.hero.toolsHintAuthenticated : content.hero.toolsHintAnonymous;
 
   const trackCtaClick = (eventName, properties) => {
@@ -448,10 +396,6 @@ function LandingPage({ locale }) {
       return content.hero.actionLabels.loading;
     }
 
-    if (toolKey === 'email') {
-      return content.hero.actionLabels.email;
-    }
-
     return isAuthenticated ? content.hero.actionLabels.connect : content.hero.actionLabels.setup;
   };
 
@@ -476,11 +420,6 @@ function LandingPage({ locale }) {
     });
 
     if (typeof window === 'undefined') {
-      return;
-    }
-
-    if (tool.key === 'email') {
-      window.location.href = oliverContactHref;
       return;
     }
 
@@ -632,7 +571,7 @@ function LandingPage({ locale }) {
           </div>
         </nav>
 
-        <section className="hero-section">
+        <section id="channels" className="hero-section">
           {enableMouseField ? <MouseField theme={theme} /> : null}
           <div className="halo-effect"></div>
           <div className="container hero-content hero-shell">
@@ -640,19 +579,34 @@ function LandingPage({ locale }) {
               <p className="hero-eyebrow">{content.hero.eyebrow}</p>
               <h1 className="hero-title">{content.hero.title}</h1>
               <p className="hero-subtitle">{content.hero.subtitle}</p>
-              <a
-                className="btn btn-primary hero-primary-cta"
-                href={primaryCtaHref}
-                onClick={() =>
-                  trackCtaClick('primary_cta_click', {
-                    cta_location: 'hero_primary',
-                    cta_text: primaryCtaLabel,
-                    landing_page_variant: LANDING_PAGE_VARIANT
-                  })
-                }
-              >
-                {primaryCtaLabel}
-              </a>
+              <div className="hero-cta-row">
+                <a
+                  className="btn btn-primary hero-primary-cta"
+                  href={oliverContactHref}
+                  onClick={() =>
+                    trackCtaClick('primary_cta_click', {
+                      cta_location: 'hero_primary_email',
+                      cta_text: content.hero.primaryCta,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {content.hero.primaryCta}
+                </a>
+                <a
+                  className="btn btn-secondary hero-secondary-cta"
+                  href="#watch"
+                  onClick={() =>
+                    trackCtaClick('secondary_cta_click', {
+                      cta_location: 'hero_secondary_watch',
+                      cta_text: content.hero.secondaryCta,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {content.hero.secondaryCta}
+                </a>
+              </div>
               <p className="hero-caption">{content.hero.caption}</p>
             </div>
 
@@ -673,6 +627,31 @@ function LandingPage({ locale }) {
                 </div>
               </div>
 
+              <article className="hero-direct-card">
+                <div className="hero-direct-copy">
+                  <span className="hero-panel-kicker">{content.hero.directEyebrow}</span>
+                  <h2>{content.hero.directTitle}</h2>
+                  <p>{content.hero.directDescription}</p>
+                  <div className="hero-direct-meta">
+                    <span className="hero-direct-badge">{content.hero.directBadge}</span>
+                    <span className="hero-direct-subnote">{content.hero.directSubnote}</span>
+                  </div>
+                </div>
+                <a
+                  className="btn btn-primary hero-direct-cta"
+                  href={oliverContactHref}
+                  onClick={() =>
+                    trackCtaClick('primary_cta_click', {
+                      cta_location: 'hero_direct_email',
+                      cta_text: content.hero.directActionLabel,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {content.hero.directActionLabel}
+                </a>
+              </article>
+
               <div className="hero-tool-grid" role="group" aria-label={content.hero.toolsEyebrow}>
                 {content.hero.tools.map((tool) => (
                   <button
@@ -691,46 +670,33 @@ function LandingPage({ locale }) {
                     </div>
                     <div className="hero-tool-card-copy">
                       <strong>{tool.label}</strong>
+                      <span className="hero-tool-status">{tool.availability}</span>
                       <span>{tool.description}</span>
                     </div>
                   </button>
                 ))}
               </div>
 
-              <div className="hero-dock-grid">
-                <article className="hero-flow-card">
-                  <span className="hero-panel-kicker">{content.hero.flowEyebrow}</span>
-                  <div className="hero-flow-steps">
-                    {content.hero.flowSteps.map((step, index) => (
-                      <div key={step} className="hero-flow-step">
-                        <span className="hero-flow-index">{index + 1}</span>
-                        <p>{step}</p>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-
-                <article className="hero-preview-card">
-                  <span className="hero-panel-kicker">{content.hero.previewEyebrow}</span>
-                  <div className="hero-preview-request">
-                    <span className="hero-preview-label">{isChinesePage ? '任务' : 'Task'}</span>
-                    <p>{content.hero.previewRequest}</p>
-                  </div>
-                  <div className="hero-preview-result">
-                    <span className="hero-preview-label">{content.hero.previewResultTitle}</span>
-                    <ul className="hero-preview-list">
-                      {content.hero.previewResults.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </article>
+              <div className="hero-channel-footnote">
+                <p>{content.hero.toolsFootnote}</p>
+                <a
+                  href={settingsHref}
+                  onClick={() =>
+                    trackCtaClick('secondary_cta_click', {
+                      cta_location: 'hero_manage_setup',
+                      cta_text: manageSetupLabel,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {manageSetupLabel}
+                </a>
               </div>
             </div>
           </div>
         </section>
 
-        <section id="examples" className="section demo-showcase-section">
+        <section id="watch" className="section demo-showcase-section">
           <div className="container">
             <div className="section-heading-shell">
               <span className="section-kicker">{content.demo.eyebrow}</span>
@@ -800,39 +766,12 @@ function LandingPage({ locale }) {
           </div>
         </section>
 
-        <section id="how-it-starts" className="section story-section">
+        <section id="examples" className="section example-showcase-section">
           <div className="container story-stack">
             <div className="section-heading-shell">
-              <span className="section-kicker">{content.story.eyebrow}</span>
-              <h2 className="section-title section-title-left">{content.story.title}</h2>
-              <p className="section-intro section-intro-left">{content.story.intro}</p>
-            </div>
-
-            <div className="story-step-grid">
-              {content.story.steps.map((step) => (
-                <article key={step.id} className="story-step-card">
-                  <span className="story-step-index">{step.id}</span>
-                  <h3>{step.title}</h3>
-                  <p>{step.description}</p>
-                </article>
-              ))}
-            </div>
-
-            <aside className="control-band">
-              <div className="control-band-copy">
-                <span className="section-kicker">{content.story.controlEyebrow}</span>
-                <h3>{content.story.controlTitle}</h3>
-              </div>
-              <ul className="control-band-list">
-                {content.story.controlPoints.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            </aside>
-
-            <div className="section-heading-shell examples-heading">
               <span className="section-kicker">{content.examples.eyebrow}</span>
               <h2 className="section-title section-title-left">{content.examples.title}</h2>
+              <p className="section-intro section-intro-left">{content.examples.intro}</p>
             </div>
 
             <div className="example-card-grid">
@@ -844,6 +783,18 @@ function LandingPage({ locale }) {
                 </article>
               ))}
             </div>
+
+            <aside className="control-band">
+              <div className="control-band-copy">
+                <span className="section-kicker">{content.control.eyebrow}</span>
+                <h3>{content.control.title}</h3>
+              </div>
+              <ul className="control-band-list">
+                {content.control.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            </aside>
           </div>
         </section>
 
