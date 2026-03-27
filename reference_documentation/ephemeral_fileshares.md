@@ -102,8 +102,8 @@ Located in `run_task_module/src/run_task/codex.rs`:
 | `use_ephemeral_share()` | Checks if feature is enabled via env var |
 | `create_ephemeral_share()` | Creates Azure file share via `az storage share create` |
 | `delete_ephemeral_share()` | Deletes Azure file share via `az storage share delete` |
-| `upload_workspace_to_share()` | Uploads workspace via `az storage file upload-batch` |
-| `download_workspace_from_share()` | Downloads results via `az storage file download-batch` |
+| `upload_workspace_to_share()` | Uploads workspace via `azcopy` |
+| `download_workspace_from_share()` | Downloads results via `azcopy` |
 | `EphemeralShareGuard` | RAII struct for automatic cleanup on drop |
 
 ### EphemeralShareGuard
@@ -208,12 +208,16 @@ az storage share create \
 
 ### Upload Workspace
 
+Uses `azcopy` for faster parallel uploads:
+
 ```bash
-az storage file upload-batch \
-    --destination task-dwz-codex-1711234567890-12345-0 \
-    --source /mnt/dowhiz-share/little_bear/users/abc/workspaces/thread_123 \
-    --account-name $STORAGE_ACCOUNT \
-    --account-key $STORAGE_KEY
+export AZURE_STORAGE_ACCOUNT=$STORAGE_ACCOUNT
+export AZURE_STORAGE_KEY=$STORAGE_KEY
+
+azcopy copy \
+    "/mnt/dowhiz-share/little_bear/users/abc/workspaces/thread_123/*" \
+    "https://$STORAGE_ACCOUNT.file.core.windows.net/task-dwz-codex-1711234567890-12345-0/" \
+    --recursive
 ```
 
 ### ACI Container Create (with ephemeral share)
@@ -233,11 +237,13 @@ az container create \
 ### Download Results
 
 ```bash
-az storage file download-batch \
-    --source task-dwz-codex-1711234567890-12345-0 \
-    --destination /mnt/dowhiz-share/little_bear/users/abc/workspaces/thread_123 \
-    --account-name $STORAGE_ACCOUNT \
-    --account-key $STORAGE_KEY
+export AZURE_STORAGE_ACCOUNT=$STORAGE_ACCOUNT
+export AZURE_STORAGE_KEY=$STORAGE_KEY
+
+azcopy copy \
+    "https://$STORAGE_ACCOUNT.file.core.windows.net/task-dwz-codex-1711234567890-12345-0/*" \
+    "/mnt/dowhiz-share/little_bear/users/abc/workspaces/thread_123" \
+    --recursive
 ```
 
 ### Delete Ephemeral Share
@@ -264,7 +270,7 @@ az storage share delete \
 
 ## Download Behavior
 
-The `az storage file download-batch` command performs a **merge with overwrite**:
+The `azcopy copy` command performs a **merge with overwrite**:
 
 - Files in ephemeral share **overwrite** same-named files in host workspace
 - Files that exist only in host workspace (not in ephemeral) are **kept**
@@ -283,14 +289,15 @@ Tests are located in `run_task_module/src/run_task/codex.rs`:
 | `test_ephemeral_share_prefix_format` | Share name format `task-{id}` |
 | `test_create_ephemeral_share_calls_az_storage_share_create` | Correct az CLI args |
 | `test_delete_ephemeral_share_calls_az_storage_share_delete` | Correct az CLI args |
-| `test_upload_workspace_to_share_calls_az_storage_file_upload_batch` | Correct az CLI args |
-| `test_download_workspace_from_share_calls_az_storage_file_download_batch` | Correct az CLI args |
+| `test_upload_workspace_to_share_calls_azcopy` | Correct azcopy args |
+| `test_download_workspace_from_share_calls_azcopy` | Correct azcopy args |
 | `test_build_aci_create_command_uses_provided_file_share` | `file_share` param used |
 
 Run tests:
 
 ```bash
 cargo test -p run_task_module -- ephemeral --nocapture
+cargo test -p run_task_module -- azcopy --nocapture
 ```
 
 ## Related Documentation
