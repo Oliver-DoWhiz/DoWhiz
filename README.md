@@ -1,4 +1,4 @@
-# DoWhiz - One-click startup workspace for founders and digital founding teams.
+# DoWhiz - Oliver, a trusted AI operator for work and life.
 
 <p align="center"><strong>Product Shorts</strong></p>
 
@@ -29,20 +29,22 @@
 
 <p align="center"><sub>Tap any preview to watch the full Shorts video.</sub></p>
 
-DoWhiz is an agent-native startup workspace platform.
+DoWhiz is an agent-native product built around Oliver, the trusted AI operator that works in your existing tools and brings back finished work.
 
 Current product model:
-- Solo-founder-first onboarding to generate a startup workspace blueprint.
-- Workspace-first operating surface for resources, tasks, artifacts, approvals, and memory.
+- Oliver-first landing and onboarding for consumer adoption.
+- Personal setup dashboard for connected apps, tasks, memory, and settings.
 - Multi-channel execution across email, Slack/Discord, GitHub, Google Docs, and related surfaces.
+- Legacy startup/workspace routes remain available for backward compatibility, but they are no longer the primary product journey.
 
 Primary web routes:
 - `/`: public landing
-- `/start`: founder intake -> canonical startup workspace blueprint
-- `/workspace`: workspace home (brief/resources/agents/tasks/artifacts/approvals)
+- `/auth/index.html`: Oliver setup dashboard
+- `/start`: legacy startup intake flow
+- `/workspace`: legacy workspace route, softened away from the main journey
 - `/dashboard`: internal analytics/supporting page
 
-Startup workspace backend layer:
+Startup workspace legacy backend layer:
 - `DoWhiz_service/scheduler_module/src/domain/*`
 - `DoWhiz_service/scheduler_module/src/service/startup_workspace/*`
 - `DoWhiz_service/scheduler_module/src/service/workspace.rs` (persist bootstrap artifacts in workspace)
@@ -57,6 +59,7 @@ Current production model:
 Prerequisites:
 - Rust toolchain
 - Node.js 20+
+- MongoDB available at the `MONGODB_URI` configured in `DoWhiz_service/.env`
 - `ngrok` (only for local public webhook testing)
 
 1. Configure env:
@@ -82,6 +85,15 @@ cd DoWhiz_service
 cargo run -p scheduler_module --bin set_postmark_inbound_hook -- \
   --hook-url https://YOUR-NGROK-DOMAIN/postmark/inbound
 ```
+
+5. Test the personal dashboard locally:
+```bash
+cd website
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173/auth/index.html` after the Rust service is up. If the auth page shows a network error, confirm MongoDB is running first, then re-run the worker command above.
 
 ## Runtime Flow
 

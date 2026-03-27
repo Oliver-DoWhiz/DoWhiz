@@ -4,8 +4,8 @@
   <img src="public/assets/DoWhiz.svg" alt="Do icon" width="96" />
 </p>
 
-Workspace-first product shell for DoWhiz, built with Vite + React.
-The web app handles founder onboarding (inline hero intake on `/` plus `/start`), workspace home (`/workspace`), and supporting internal analytics (`/dashboard`).
+Oliver-first product shell for DoWhiz, built with Vite + React.
+The web app handles the public landing story, auth onboarding, Oliver setup dashboard, and supporting internal analytics.
 
 ## Prerequisites
 - Node.js 18+ (20+ recommended).
@@ -72,11 +72,11 @@ If you are using a dedicated API subdomain (example: `api.dowhiz.com`) for the R
 - `website/vercel.json`: hosting redirects/rewrites for Vercel deployment.
 
 ## Core route map
-- `/`: Landing page with inline conversational startup intake in the hero.
-- `/start`: Backward-compatible founder intake route (same conversational flow + edit questionnaire mode).
-- `/workspace`: Workspace home showing startup brief, resources, agents, tasks, artifacts, approvals, and next actions.
+- `/`: Oliver-first landing page with a clear onboarding path.
+- `/start`: Legacy startup intake route retained for backward compatibility.
+- `/workspace`: Legacy workspace route that is no longer part of the primary product journey.
 - `/dashboard`: Internal analytics dashboard (supporting page, not the primary product home).
-- `/auth/index.html`: Unified team + personal dashboard (channels, tasks, memo, settings).
+- `/auth/index.html`: Oliver setup dashboard (connections, tasks, memory, settings).
 - `/cn`: Localized landing path.
 
 ## Routing and hosting notes
@@ -90,4 +90,5 @@ Provider-runtime overlays gracefully degrade when the user is not authenticated.
 
 ## Troubleshooting
 - Port 5173 in use: run `npm run dev -- --port 5174` or stop the other process.
+- `/auth/index.html` shows `Failed to fetch`: make sure MongoDB is reachable at `MONGODB_URI`, then start `./DoWhiz_service/scripts/run_employee.sh little_bear 9001 --skip-hook --skip-ngrok`. The auth page treats loopback hosts such as `localhost`, `127.0.0.1`, `0.0.0.0`, and `::1` as local development URLs.
 - Clean install: remove `website/node_modules/` and run `npm install` again.
