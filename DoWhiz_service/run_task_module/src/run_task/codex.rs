@@ -76,6 +76,7 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
 const HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY: &str = "HUMAN_APPROVAL_GATE_REQUIRE_MCP";
 const HUMAN_APPROVAL_GATE_MCP_SERVER_NAME: &str = "human-approval-gate";
 const HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS: u32 = 31 * 60;
+const NOTION_MCP_ENV_KEYS: &[&str] = &["EMPLOYEE_ID", "MONGODB_URI", "NOTION_DEFAULT_WORKSPACE"];
 const HUMAN_APPROVAL_FROM_ENV_KEY: &str = "HUMAN_APPROVAL_FROM";
 const HUMAN_APPROVAL_REPLY_TO_ENV_KEY: &str = "HUMAN_APPROVAL_REPLY_TO";
 const EMPLOYEE_CONFIG_PATH_ENV_KEY: &str = "EMPLOYEE_CONFIG_PATH";
@@ -102,6 +103,10 @@ const REMOTE_OUTPUT_FILENAME: &str = ".codex_remote_output.log";
 const REMOTE_EXIT_CODE_FILENAME: &str = ".codex_remote_exit_code";
 const HAG_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ HUMAN APPROVAL GATE MCP";
 const HAG_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ HUMAN APPROVAL GATE MCP";
+const NOTION_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ NOTION MCP";
+const NOTION_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ NOTION MCP";
+const NOTION_MCP_SERVER_NAME: &str = "notion";
+const NOTION_MCP_TOOL_TIMEOUT_SECONDS: u32 = 120;
 const EPHEMERAL_SHARE_PREFIX: &str = "task-";
 static ACI_CONTAINER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -384,6 +389,7 @@ pub(super) fn run_codex_task(
     };
     let browserbase_env_overrides = collect_browserbase_env_overrides(&browserbase_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
+    let notion_env_overrides = collect_notion_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
     let prompt = build_prompt(
@@ -427,6 +433,9 @@ pub(super) fn run_codex_task(
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &human_approval_gate_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &notion_env_overrides {
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &github_auth.env_overrides {
@@ -548,6 +557,9 @@ pub(super) fn run_codex_task(
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         for (key, value) in &human_approval_gate_env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
+        for (key, value) in &notion_env_overrides {
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         cmd.arg("-e")
@@ -686,6 +698,9 @@ pub(super) fn run_codex_task(
             cmd.env(key, value);
         }
         for (key, value) in &human_approval_gate_env_overrides {
+            cmd.env(key, value);
+        }
+        for (key, value) in &notion_env_overrides {
             cmd.env(key, value);
         }
         cmd.env(HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY, "1");
@@ -902,6 +917,7 @@ fn run_codex_task_azure_aci(
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
     let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
+    let notion_env_overrides = collect_notion_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
     let prompt = build_prompt(
@@ -998,6 +1014,9 @@ fn run_codex_task_azure_aci(
     for (key, value) in human_approval_gate_env_overrides {
         env_overrides.push((key, value));
     }
+    for (key, value) in notion_env_overrides {
+        env_overrides.push((key, value));
+    }
     env_overrides.push((
         HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY.to_string(),
         "1".to_string(),
@@ -1072,7 +1091,10 @@ fn run_codex_task_azure_aci(
     };
 
     let (effective_share, effective_container_workspace) = match &ephemeral_guard {
-        Some(guard) => (guard.share_name().to_string(), config.container_share_root.clone()),
+        Some(guard) => (
+            guard.share_name().to_string(),
+            config.container_share_root.clone(),
+        ),
         None => (config.file_share.clone(), container_workspace_dir.clone()),
     };
 
@@ -1142,7 +1164,10 @@ fn run_codex_task_azure_aci(
     if let Some(ref guard) = ephemeral_guard {
         timing.start_stage();
         if let Err(e) = guard.download_back() {
-            eprintln!("[run_task] failed to download from ephemeral share: {:?}", e);
+            eprintln!(
+                "[run_task] failed to download from ephemeral share: {:?}",
+                e
+            );
         }
         timing.end_result_download();
     }
@@ -1519,7 +1544,11 @@ struct EphemeralShareGuard<'a> {
 }
 
 impl<'a> EphemeralShareGuard<'a> {
-    fn new(config: &'a AzureAciConfig, task_id: &str, workspace_dir: &Path) -> Result<Self, RunTaskError> {
+    fn new(
+        config: &'a AzureAciConfig,
+        task_id: &str,
+        workspace_dir: &Path,
+    ) -> Result<Self, RunTaskError> {
         let share_name = format!("{}{}", EPHEMERAL_SHARE_PREFIX, task_id);
         create_ephemeral_share(config, &share_name)?;
         upload_workspace_to_share(config, &share_name, workspace_dir)?;
@@ -1542,7 +1571,10 @@ impl<'a> EphemeralShareGuard<'a> {
 impl Drop for EphemeralShareGuard<'_> {
     fn drop(&mut self) {
         if let Err(e) = delete_ephemeral_share(self.config, &self.share_name) {
-            eprintln!("[ephemeral_share] failed to delete share {}: {:?}", self.share_name, e);
+            eprintln!(
+                "[ephemeral_share] failed to delete share {}: {:?}",
+                self.share_name, e
+            );
         }
     }
 }
@@ -1710,7 +1742,13 @@ exit \"$status\"\n",
 
     let create_command = format!("/bin/bash -lc {}", shell_quote(&script));
     timing.start_stage();
-    match create_aci_container(config, container_name, &create_command, env_overrides, file_share) {
+    match create_aci_container(
+        config,
+        container_name,
+        &create_command,
+        env_overrides,
+        file_share,
+    ) {
         Ok(()) => {}
         Err(err) if is_aci_quota_error(&err) => {
             eprintln!(
@@ -1731,7 +1769,13 @@ exit \"$status\"\n",
                     );
                 }
             }
-            create_aci_container(config, container_name, &create_command, env_overrides, file_share)?;
+            create_aci_container(
+                config,
+                container_name,
+                &create_command,
+                env_overrides,
+                file_share,
+            )?;
         }
         Err(err) => return Err(err),
     }
@@ -1931,7 +1975,8 @@ fn create_aci_container(
     env_overrides: &[(String, String)],
     file_share: &str,
 ) -> Result<(), RunTaskError> {
-    let mut create_cmd = build_aci_create_command(config, container_name, create_command, file_share);
+    let mut create_cmd =
+        build_aci_create_command(config, container_name, create_command, file_share);
     let env_overrides = dedupe_env_overrides_last_wins(env_overrides);
     if !env_overrides.is_empty() {
         create_cmd.arg("--environment-variables");
@@ -2244,6 +2289,7 @@ fn ensure_codex_config_at(
 
     let block = build_codex_config_block(azure_endpoint);
     let hag_mcp_block = build_human_approval_gate_mcp_block();
+    let notion_mcp_block = build_notion_mcp_block();
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -2257,6 +2303,12 @@ fn ensure_codex_config_at(
         HAG_MCP_CONFIG_START_MARKER,
         HAG_MCP_CONFIG_END_MARKER,
         &hag_mcp_block,
+    );
+    let updated = update_managed_config_block(
+        &updated,
+        NOTION_MCP_CONFIG_START_MARKER,
+        NOTION_MCP_CONFIG_END_MARKER,
+        &notion_mcp_block,
     );
     let updated = ensure_project_trust(&updated, trust_workspace_dir);
     fs::write(config_path, updated)?;
@@ -2369,6 +2421,13 @@ fn collect_human_approval_gate_env_overrides() -> Vec<(String, String)> {
     }
 
     overrides
+}
+
+fn collect_notion_env_overrides() -> Vec<(String, String)> {
+    NOTION_MCP_ENV_KEYS
+        .iter()
+        .filter_map(|key| read_env_trimmed(key).map(|value| ((*key).to_string(), value)))
+        .collect()
 }
 
 fn collect_bright_data_env_overrides() -> Vec<(String, String)> {
@@ -2681,6 +2740,18 @@ env_vars = [{env_vars}]
 tool_timeout_sec = {HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS}
 
 {HAG_MCP_CONFIG_END_MARKER}"#
+    )
+}
+
+fn build_notion_mcp_block() -> String {
+    format!(
+        r#"{NOTION_MCP_CONFIG_START_MARKER}
+[mcp_servers.{NOTION_MCP_SERVER_NAME}]
+command = "notion_mcp"
+env_vars = ["EMPLOYEE_ID", "MONGODB_URI", "NOTION_DEFAULT_WORKSPACE"]
+tool_timeout_sec = {NOTION_MCP_TOOL_TIMEOUT_SECONDS}
+
+{NOTION_MCP_CONFIG_END_MARKER}"#
     )
 }
 
@@ -4455,7 +4526,9 @@ printf '%s\n' "$@" > "$capture_file"
 "#,
         )
         .expect("write fake azcopy");
-        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        let mut perms = fs::metadata(&azcopy_path)
+            .expect("azcopy metadata")
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
@@ -4533,7 +4606,9 @@ printf '%s\n' "$@" > "$capture_file"
 "#,
         )
         .expect("write fake azcopy");
-        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        let mut perms = fs::metadata(&azcopy_path)
+            .expect("azcopy metadata")
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
@@ -4650,11 +4725,22 @@ printf '%s\n' "$@" > "$capture_file"
             container_share_root: PathBuf::from("/mnt/dowhiz-share"),
         };
 
-        let cmd = build_aci_create_command(&config, "test-container", "echo hello", "task-ephemeral-share");
-        let args: Vec<_> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        let cmd = build_aci_create_command(
+            &config,
+            "test-container",
+            "echo hello",
+            "task-ephemeral-share",
+        );
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
 
         assert!(args.contains(&"--azure-file-volume-share-name".to_string()));
-        let share_idx = args.iter().position(|a| a == "--azure-file-volume-share-name").unwrap();
+        let share_idx = args
+            .iter()
+            .position(|a| a == "--azure-file-volume-share-name")
+            .unwrap();
         assert_eq!(args[share_idx + 1], "task-ephemeral-share");
     }
 }
