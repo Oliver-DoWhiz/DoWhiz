@@ -24,6 +24,17 @@ sudo apt-get install -y docker.io cifs-utils
 sudo systemctl enable --now docker
 ```
 
+Install azcopy (required for ephemeral file share transfers):
+
+```bash
+curl -fsSL "https://aka.ms/downloadazcopy-v10-linux" -o /tmp/azcopy.tar.gz
+tar -xzf /tmp/azcopy.tar.gz -C /tmp
+sudo mv /tmp/azcopy_linux_*/azcopy /usr/local/bin/
+sudo chmod +x /usr/local/bin/azcopy
+rm -rf /tmp/azcopy.tar.gz /tmp/azcopy_linux_*
+azcopy --version
+```
+
 Mount Azure Files share (example):
 
 ```bash
