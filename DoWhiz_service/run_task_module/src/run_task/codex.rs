@@ -28,6 +28,7 @@ use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
+use super::timing::{TaskTimingBuilder, TIMING_COLLECTOR};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
 use super::utils::{
@@ -854,6 +855,8 @@ fn run_codex_task_azure_aci(
 ) -> Result<RunTaskOutput, RunTaskError> {
     let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let config = load_azure_aci_config()?;
+    let mut timing = TaskTimingBuilder::new("pending");
+    timing.start_stage();
 
     let host_workspace_dir = canonicalize_dir(request.workspace_dir)?;
     let host_share_root = canonicalize_dir(&config.host_share_root)?;
@@ -1017,6 +1020,8 @@ fn run_codex_task_azure_aci(
     let mut env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
 
     let container_name = build_aci_container_name();
+    timing.set_task_id(&container_name);
+    timing.end_setup();
     let timeout = run_task_timeout();
     let mut trace = RunTaskTraceRecorder::new(
         request.workspace_dir,
@@ -1051,13 +1056,16 @@ fn run_codex_task_azure_aci(
             "[run_task] azure_aci ephemeral_share=true task_id={}",
             container_name
         );
-        match EphemeralShareGuard::new(&config, &container_name, &host_workspace_dir) {
+        timing.start_stage();
+        let guard = match EphemeralShareGuard::new(&config, &container_name, &host_workspace_dir) {
             Ok(guard) => Some(guard),
             Err(e) => {
                 eprintln!("[run_task] failed to create ephemeral share: {:?}", e);
                 None
             }
-        }
+        };
+        timing.end_ephemeral_create();
+        guard
     } else {
         None
     };
@@ -1106,6 +1114,7 @@ fn run_codex_task_azure_aci(
         timeout,
         cancel_monitor,
         &effective_share,
+        &mut timing,
     );
     eprintln!(
         "[run_task] azure_aci delete-request container={} resource_group={}",
@@ -1130,9 +1139,11 @@ fn run_codex_task_azure_aci(
     deregister_aci_container(&container_name);
 
     if let Some(ref guard) = ephemeral_guard {
+        timing.start_stage();
         if let Err(e) = guard.download_back() {
             eprintln!("[run_task] failed to download from ephemeral share: {:?}", e);
         }
+        timing.end_result_download();
     }
 
     let output_content = fs::read_to_string(&remote_output_path).unwrap_or_default();
@@ -1221,6 +1232,8 @@ fn run_codex_task_azure_aci(
     }
     let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
     let _ = trace.finish(exit_status, true, None, token_usage.as_ref());
+
+    TIMING_COLLECTOR.record(timing.finish());
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,
@@ -1541,6 +1554,7 @@ fn run_azure_aci_execution(
     timeout: Duration,
     cancel_monitor: Option<&ThreadSupersedeMonitor>,
     file_share: &str,
+    timing: &mut TaskTimingBuilder,
 ) -> Result<AzureAciExecutionArtifacts, RunTaskError> {
     if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
         return Err(RunTaskError::Canceled {
@@ -1661,6 +1675,7 @@ exit \"$status\"\n",
     );
 
     let create_command = format!("/bin/bash -lc {}", shell_quote(&script));
+    timing.start_stage();
     match create_aci_container(config, container_name, &create_command, env_overrides, file_share) {
         Ok(()) => {}
         Err(err) if is_aci_quota_error(&err) => {
@@ -1686,6 +1701,7 @@ exit \"$status\"\n",
         }
         Err(err) => return Err(err),
     }
+    timing.end_aci_cold_start();
 
     let elapsed_after_create = execution_started.elapsed();
     if elapsed_after_create >= timeout {
@@ -1699,6 +1715,7 @@ exit \"$status\"\n",
         });
     }
     let poll_timeout = timeout.saturating_sub(elapsed_after_create);
+    timing.start_stage();
     let poll_state = poll_aci_state(
         config,
         container_name,
@@ -1706,6 +1723,7 @@ exit \"$status\"\n",
         poll_timeout,
         cancel_monitor,
     )?;
+    timing.end_codex_execution();
     let logs = fetch_aci_logs(config, container_name).unwrap_or_default();
     let container_show_json = fetch_aci_show_json(config, container_name).ok();
     Ok(AzureAciExecutionArtifacts {
