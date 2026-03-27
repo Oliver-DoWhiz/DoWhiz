@@ -356,12 +356,26 @@ async fn slack_install(State(state): State<AppState>) -> impl IntoResponse {
         )
     });
 
-    let scopes = "chat:write,channels:history,groups:history,im:history,mpim:history";
+    // Keep this scope list in sync with website/public/auth/index.html.
+    let scopes = [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "users:read",
+    ]
+    .join(",");
 
     let auth_url = format!(
         "https://slack.com/oauth/v2/authorize?client_id={}&scope={}&redirect_uri={}",
         urlencoding::encode(&client_id),
-        urlencoding::encode(scopes),
+        urlencoding::encode(&scopes),
         urlencoding::encode(&redirect_uri)
     );
 

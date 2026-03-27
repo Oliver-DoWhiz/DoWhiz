@@ -92,6 +92,11 @@ The Azure ACI fallback avoids writing `127.0.0.1` into the workspace scope file 
 
 Slack workspace search now enumerates readable conversations through `conversations.list`, then scans scoped history with `conversations.history` plus `conversations.replies`.
 
+Whole-workspace Slack search depends on the installed Slack app having both:
+
+- conversation listing/read scopes (`channels:read`, `groups:read`, `im:read`, `mpim:read`)
+- history scopes (`channels:history`, `groups:history`, `im:history`, `mpim:history`)
+
 Current Slack scan coverage includes:
 
 - readable public channels

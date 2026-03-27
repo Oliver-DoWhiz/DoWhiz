@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  getDoWhizApiBaseUrl,
   getOrCreateSessionId,
   persistAttributionFromLocation,
   trackAnalyticsEvent
@@ -19,10 +20,17 @@ const LOGO_URL = `${SITE_URL}/assets/DoWhiz.svg`;
 const SUPPORT_EMAIL = 'admin@dowhiz.com';
 const ORG_NAME = 'DoWhiz';
 const CN_PATH_PREFIX = '/cn';
-const LANDING_PAGE_OVERRIDE_PARAM = 'view';
-const LANDING_PAGE_OVERRIDE_VALUE = 'landing';
-const LANDING_PAGE_OVERRIDE_SUFFIX = `?${LANDING_PAGE_OVERRIDE_PARAM}=${LANDING_PAGE_OVERRIDE_VALUE}`;
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
+const LANDING_SETTINGS_SUFFIX = '#section-settings';
+const AUTHENTICATED_SETTINGS_SUFFIX = '?loggedIn=true#section-settings';
+const LANDING_PAGE_VARIANT = 'oliver_channel_first_v1';
+const OAUTH_ENDPOINTS = {
+  discord: '/auth/discord',
+  slack: '/auth/slack',
+  github: '/auth/github',
+  notion: '/auth/notion',
+  lark: '/auth/lark'
+};
 
 const isCnPath = (pathname = '/') =>
   pathname === CN_PATH_PREFIX || pathname === `${CN_PATH_PREFIX}/` || pathname.startsWith(`${CN_PATH_PREFIX}/`);
@@ -32,43 +40,9 @@ const getLocalizedAuthPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/auth/index.html${suffix}`;
 
-const getLocalizedLandingPagePath = (
-  pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
-) => `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/${LANDING_PAGE_OVERRIDE_SUFFIX}`;
-
 const getLocalizedDashboardPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => getLocalizedAuthPath(LANDING_DASHBOARD_SUFFIX, pathname);
-
-const hasSameOriginReferrer = () => {
-  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.referrer) {
-    return false;
-  }
-
-  try {
-    return new URL(document.referrer, window.location.origin).origin === window.location.origin;
-  } catch {
-    return false;
-  }
-};
-
-const shouldStayOnLandingPage = () => {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  const { hash, search } = window.location;
-  const searchParams = new URLSearchParams(search);
-  if (searchParams.get(LANDING_PAGE_OVERRIDE_PARAM) === LANDING_PAGE_OVERRIDE_VALUE) {
-    return true;
-  }
-
-  if (search || hash) {
-    return true;
-  }
-
-  return hasSameOriginReferrer();
-};
 
 const updateMetaContent = (selector, content) => {
   if (typeof document === 'undefined' || !content) {
@@ -101,13 +75,13 @@ function LandingPage({ locale }) {
   const [enableMouseField, setEnableMouseField] = useState(false);
   const [user, setUser] = useState(null);
   const [authStatus, setAuthStatus] = useState('checking');
+  const [activeToolKey, setActiveToolKey] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [navHidden, setNavHidden] = useState(false);
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
-  const authRedirectStartedRef = useRef(false);
-  const localizedHomePath =
-    authStatus === 'authenticated' ? getLocalizedLandingPagePath(pathname) : content.nav.homePath;
+  const localizedHomePath = content.nav.homePath;
+  const isAuthenticated = authStatus === 'authenticated' && Boolean(user);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -139,7 +113,7 @@ function LandingPage({ locale }) {
     trackAnalyticsEvent(
       'landing_page_view',
       {
-        landing_page_variant: 'oliver_consumer_v1',
+        landing_page_variant: LANDING_PAGE_VARIANT,
         landing_page_variant_legacy: 'oliver_consumer_v1',
         language: pageLocale
       },
@@ -218,14 +192,6 @@ function LandingPage({ locale }) {
 
       if (currentUser) {
         setAuthStatus('authenticated');
-        if (
-          !authRedirectStartedRef.current &&
-          typeof window !== 'undefined' &&
-          !shouldStayOnLandingPage()
-        ) {
-          authRedirectStartedRef.current = true;
-          window.location.replace(getLocalizedDashboardPath(window.location.pathname));
-        }
         return;
       }
 
@@ -379,11 +345,91 @@ function LandingPage({ locale }) {
   };
 
   const oliverContactHref = buildMailtoLink('oliver@dowhiz.com', content.hero.contactSubject, content.hero.contactBody);
-  const primaryCtaHref = user ? getLocalizedDashboardPath(pathname) : getLocalizedAuthPath('', pathname);
-  const secondaryCtaHref = content.hero.secondaryHref || '#use-cases';
+  const settingsHref = isAuthenticated
+    ? getLocalizedAuthPath(AUTHENTICATED_SETTINGS_SUFFIX, pathname)
+    : getLocalizedAuthPath(LANDING_SETTINGS_SUFFIX, pathname);
+  const manageSetupLabel = isAuthenticated
+    ? content.hero.manageAuthenticated
+    : content.hero.manageAnonymous;
+  const toolHint = isAuthenticated ? content.hero.toolsHintAuthenticated : content.hero.toolsHintAnonymous;
 
   const trackCtaClick = (eventName, properties) => {
     trackAnalyticsEvent(eventName, properties);
+  };
+
+  const startProviderConnect = async (provider) => {
+    const endpoint = OAUTH_ENDPOINTS[provider];
+    if (!endpoint) {
+      window.location.href = settingsHref;
+      return;
+    }
+
+    try {
+      const {
+        data: { session }
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        window.location.href = settingsHref;
+        return;
+      }
+
+      const response = await fetch(`${getDoWhizApiBaseUrl()}${endpoint}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` }
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || !data?.redirect_url) {
+        throw new Error(data?.error || `Failed to start ${provider} connection`);
+      }
+
+      window.location.href = data.redirect_url;
+    } catch (error) {
+      console.error(`Landing: failed to start ${provider} connect flow`, error);
+      setActiveToolKey(null);
+      window.location.href = settingsHref;
+    }
+  };
+
+  const getHeroToolActionLabel = (toolKey) => {
+    if (activeToolKey === toolKey) {
+      return content.hero.actionLabels.loading;
+    }
+
+    return isAuthenticated ? content.hero.actionLabels.connect : content.hero.actionLabels.setup;
+  };
+
+  const handleHeroToolAction = async (tool) => {
+    if (activeToolKey) {
+      return;
+    }
+
+    const actionType =
+      tool.key === 'email'
+        ? 'mailto'
+        : isAuthenticated
+          ? 'oauth'
+          : 'setup';
+
+    trackCtaClick('hero_tool_action_click', {
+      cta_location: 'hero_tool_grid',
+      cta_text: tool.label,
+      tool: tool.key,
+      action_type: actionType,
+      landing_page_variant: LANDING_PAGE_VARIANT
+    });
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!isAuthenticated) {
+      window.location.href = settingsHref;
+      return;
+    }
+
+    setActiveToolKey(tool.key);
+    await startProviderConnect(tool.key);
   };
 
   const [openFaq, setOpenFaq] = useState(null);
@@ -525,91 +571,194 @@ function LandingPage({ locale }) {
           </div>
         </nav>
 
-        <section className="hero-section">
+        <section id="channels" className="hero-section">
           {enableMouseField ? <MouseField theme={theme} /> : null}
           <div className="halo-effect"></div>
-          <div className="container hero-content hero-content-oliver">
-            <div className="hero-copy">
+          <div className="container hero-content hero-shell">
+            <div className="hero-copy hero-copy-compact">
               <p className="hero-eyebrow">{content.hero.eyebrow}</p>
               <h1 className="hero-title">{content.hero.title}</h1>
               <p className="hero-subtitle">{content.hero.subtitle}</p>
-              <p className="hero-note">{content.hero.note}</p>
-              <div className="hero-chip-row" aria-label={isChinesePage ? 'Oliver 工作的主要表面' : 'Primary surfaces Oliver works in'}>
-                {content.hero.chips.map((chip) => (
-                  <span key={chip} className="hero-chip">
-                    {chip}
-                  </span>
-                ))}
-              </div>
               <div className="hero-cta-row">
                 <a
-                  className="btn btn-primary"
-                  href={primaryCtaHref}
+                  className="btn btn-primary hero-primary-cta"
+                  href={oliverContactHref}
                   onClick={() =>
                     trackCtaClick('primary_cta_click', {
-                      cta_location: 'hero_primary',
-                      cta_text: content.hero.primaryCta
+                      cta_location: 'hero_primary_email',
+                      cta_text: content.hero.primaryCta,
+                      landing_page_variant: LANDING_PAGE_VARIANT
                     })
                   }
                 >
                   {content.hero.primaryCta}
                 </a>
                 <a
-                  className="btn btn-secondary"
-                  href={secondaryCtaHref}
+                  className="btn btn-secondary hero-secondary-cta"
+                  href="#watch"
                   onClick={() =>
                     trackCtaClick('secondary_cta_click', {
-                      cta_location: 'hero_secondary',
-                      cta_text: content.hero.secondaryCta
+                      cta_location: 'hero_secondary_watch',
+                      cta_text: content.hero.secondaryCta,
+                      landing_page_variant: LANDING_PAGE_VARIANT
                     })
                   }
                 >
                   {content.hero.secondaryCta}
                 </a>
               </div>
+              <p className="hero-caption">{content.hero.caption}</p>
             </div>
 
-            <div className="hero-panel-grid">
-              <article className="hero-spotlight-card">
-                <div className="hero-spotlight-head">
-                  <div className="hero-portrait-wrap">
+            <div className="hero-product-card">
+              <div className="hero-product-head">
+                <div className="hero-product-heading">
+                  <span className="hero-panel-kicker">{content.hero.toolsEyebrow}</span>
+                  <p>{toolHint}</p>
+                </div>
+                <div className="hero-operator-chip">
+                  <div className="hero-operator-portrait">
                     <img src={oliverImg} alt="Oliver" className="hero-portrait" />
                   </div>
-                  <div className="hero-spotlight-copy">
-                    <span className="hero-panel-kicker">{content.hero.profileEyebrow}</span>
-                    <h2>{content.hero.profileTitle}</h2>
-                    <p>{content.hero.profileDescription}</p>
+                  <div className="hero-operator-copy">
+                    <strong>Oliver</strong>
+                    <span>{isChinesePage ? '可信 AI operator' : 'Trusted AI operator'}</span>
                   </div>
                 </div>
-                <ul className="hero-spotlight-list">
-                  {content.hero.profilePoints.map((point) => (
-                    <li key={point}>{point}</li>
-                  ))}
-                </ul>
-                <div className="hero-task-sampler">
-                  <span className="hero-panel-kicker">{content.hero.exampleTitle}</span>
-                  <ul className="hero-task-list">
-                    {content.hero.exampleTasks.map((task) => (
-                      <li key={task}>{task}</li>
-                    ))}
-                  </ul>
+              </div>
+
+              <article className="hero-direct-card">
+                <div className="hero-direct-copy">
+                  <span className="hero-panel-kicker">{content.hero.directEyebrow}</span>
+                  <h2>{content.hero.directTitle}</h2>
+                  <p>{content.hero.directDescription}</p>
+                  <div className="hero-direct-meta">
+                    <span className="hero-direct-badge">{content.hero.directBadge}</span>
+                    <span className="hero-direct-subnote">{content.hero.directSubnote}</span>
+                  </div>
+                </div>
+                <a
+                  className="btn btn-primary hero-direct-cta"
+                  href={oliverContactHref}
+                  onClick={() =>
+                    trackCtaClick('primary_cta_click', {
+                      cta_location: 'hero_direct_email',
+                      cta_text: content.hero.directActionLabel,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {content.hero.directActionLabel}
+                </a>
+              </article>
+
+              <div className="hero-tool-grid" role="group" aria-label={content.hero.toolsEyebrow}>
+                {content.hero.tools.map((tool) => (
+                  <button
+                    key={tool.key}
+                    type="button"
+                    className="hero-tool-card"
+                    style={{ '--tool-accent': tool.accent }}
+                    onClick={() => handleHeroToolAction(tool)}
+                    disabled={Boolean(activeToolKey)}
+                  >
+                    <div className="hero-tool-card-top">
+                      <span className="hero-tool-badge" aria-hidden="true">
+                        {tool.monogram}
+                      </span>
+                      <span className="hero-tool-action">{getHeroToolActionLabel(tool.key)}</span>
+                    </div>
+                    <div className="hero-tool-card-copy">
+                      <strong>{tool.label}</strong>
+                      <span className="hero-tool-status">{tool.availability}</span>
+                      <span>{tool.description}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="hero-channel-footnote">
+                <p>{content.hero.toolsFootnote}</p>
+                <a
+                  href={settingsHref}
+                  onClick={() =>
+                    trackCtaClick('secondary_cta_click', {
+                      cta_location: 'hero_manage_setup',
+                      cta_text: manageSetupLabel,
+                      landing_page_variant: LANDING_PAGE_VARIANT
+                    })
+                  }
+                >
+                  {manageSetupLabel}
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="watch" className="section demo-showcase-section">
+          <div className="container">
+            <div className="section-heading-shell">
+              <span className="section-kicker">{content.demo.eyebrow}</span>
+              <h2 className="section-title section-title-left">{content.demo.title}</h2>
+              <p className="section-intro section-intro-left">{content.demo.intro}</p>
+            </div>
+
+            <div className="demo-showcase-grid">
+              <article className="demo-feature-card">
+                <div className="demo-card-head">
+                  <div>
+                    <h3>{content.demo.desktopTitle}</h3>
+                    <p>{content.demo.desktopDescription}</p>
+                  </div>
+                  <a
+                    className="demo-inline-link"
+                    href={content.demo.desktopVideoHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {content.demo.desktopCta}
+                  </a>
+                </div>
+                <div className="frame-shell frame-landscape">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${content.demo.desktopVideoId}?rel=0`}
+                    title={content.demo.desktopTitle}
+                    loading="lazy"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
+                  ></iframe>
                 </div>
               </article>
 
-              <aside className="hero-onboarding-card" aria-label={content.hero.onboardingAriaLabel}>
-                <div className="hero-card-header">
-                  <span className="hero-panel-kicker">{content.hero.onboardingTitle}</span>
-                  <p>{content.hero.onboardingDescription}</p>
+              <aside className="demo-short-rail">
+                <div className="demo-short-head">
+                  <h3>{content.demo.shortsTitle}</h3>
+                  <p>{content.demo.shortsDescription}</p>
                 </div>
-                <div className="hero-onboarding-list">
-                  {content.onboardingSteps.map((step) => (
-                    <div key={step.id} className="hero-onboarding-item">
-                      <span className="hero-step-index">{step.id}</span>
-                      <div>
-                        <h3>{step.title}</h3>
-                        <p>{step.desc}</p>
+                <div className="demo-short-grid">
+                  {content.demo.shorts.map((item) => (
+                    <article key={item.videoId} className="demo-short-card">
+                      <div className="frame-shell frame-portrait">
+                        <iframe
+                          src={`https://www.youtube.com/embed/${item.videoId}?rel=0`}
+                          title={item.title}
+                          loading="lazy"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          allowFullScreen
+                        ></iframe>
                       </div>
-                    </div>
+                      <a
+                        className="demo-short-link"
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {item.title}
+                      </a>
+                    </article>
                   ))}
                 </div>
               </aside>
@@ -617,111 +766,46 @@ function LandingPage({ locale }) {
           </div>
         </section>
 
-        <section id="getting-started" className="section">
-          <div className="container">
-            <h2 className="section-title">{content.sections.gettingStartedTitle}</h2>
-            <p className="section-intro">{content.sections.gettingStartedIntro}</p>
-            <div className="step-grid">
-              {content.onboardingSteps.map((step) => (
-                <article key={step.id} className="step-card">
-                  <span className="step-card-index">{step.id}</span>
-                  <h3>{step.title}</h3>
-                  <p className="step-card-desc">{step.desc}</p>
-                  <p className="step-card-detail">{step.detail}</p>
-                </article>
-              ))}
+        <section id="examples" className="section example-showcase-section">
+          <div className="container story-stack">
+            <div className="section-heading-shell">
+              <span className="section-kicker">{content.examples.eyebrow}</span>
+              <h2 className="section-title section-title-left">{content.examples.title}</h2>
+              <p className="section-intro section-intro-left">{content.examples.intro}</p>
             </div>
-          </div>
-        </section>
 
-        <section id="use-cases" className="section">
-          <div className="container">
-            <h2 className="section-title">{content.sections.useCasesTitle}</h2>
-            <p className="section-intro">{content.sections.useCasesIntro}</p>
-            <div className="use-case-grid">
-              {content.useCases.map((item) => (
-                <article key={item.title} className="use-case-card">
-                  <span className="use-case-tag">{item.tag}</span>
+            <div className="example-card-grid">
+              {content.examples.cards.map((item) => (
+                <article key={item.title} className="example-card">
+                  <span className="example-card-tag">{item.tag}</span>
                   <h3>{item.title}</h3>
-                  <p>{item.desc}</p>
+                  <p>{item.description}</p>
                 </article>
               ))}
             </div>
-          </div>
-        </section>
 
-        <section id="surfaces" className="section features-section">
-          <div className="container">
-            <h2 className="section-title">{content.sections.surfacesTitle}</h2>
-            <p className="section-intro">{content.sections.surfacesIntro}</p>
-            <div className="surface-grid">
-              {content.surfaces.map((surface) => (
-                <article key={surface.title} className="surface-card">
-                  <div className="surface-card-head">
-                    <div className="feature-iconwrap">
-                      <img src={surface.icon} alt={surface.title} className="feature-icon" />
-                    </div>
-                    <span className="use-case-tag">{surface.tag}</span>
-                  </div>
-                  <h3>{surface.title}</h3>
-                  <p>{surface.desc}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="control" className="section">
-          <div className="container">
-            <h2 className="section-title">{content.sections.controlTitle}</h2>
-            <p className="section-intro">{content.sections.controlIntro}</p>
-            <div className="control-layout">
-              <div className="control-card-stack">
-                {content.safetyItems.map((item) => (
-                  <article key={item.title} className="control-card">
-                    <div className="control-card-head">
-                      <div className="feature-iconwrap">
-                        <img src={item.icon} alt={item.tag} className="feature-icon" />
-                      </div>
-                      <span className="use-case-tag">{item.tag}</span>
-                    </div>
-                    <h3>{item.title}</h3>
-                    <p>{item.desc}</p>
-                    <ul className="control-point-list">
-                      {item.points.map((point) => (
-                        <li key={point}>{point}</li>
-                      ))}
-                    </ul>
-                  </article>
-                ))}
+            <aside className="control-band">
+              <div className="control-band-copy">
+                <span className="section-kicker">{content.control.eyebrow}</span>
+                <h3>{content.control.title}</h3>
               </div>
-              <aside className="control-steps-card">
-                <h3>{content.labels.accessPlaybookTitle}</h3>
-                <p>{content.labels.accessPlaybookDescription}</p>
-                <div className="control-step-list">
-                  {content.accessFlowSteps.map((step, index) => (
-                    <div key={step.title} className="control-step-item">
-                      <span className="control-step-index">{index + 1}</span>
-                      <div>
-                        <h4>{step.title}</h4>
-                        <p>{step.desc}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <a href="/trust-safety/" className="access-playbook-link">
-                  {content.labels.accessPlaybookLink}
-                </a>
-              </aside>
-            </div>
+              <ul className="control-band-list">
+                {content.control.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            </aside>
           </div>
         </section>
 
         <section id="faq" className="section faq-section">
           <div className="container">
-            <h2 className="section-title">{content.sections.faqTitle}</h2>
-            <p className="section-intro">{content.sections.faqIntro}</p>
-            <div className="faq-accordion">
+            <div className="section-heading-shell">
+              <span className="section-kicker">{content.labels.faqEyebrow}</span>
+              <h2 className="section-title section-title-left">{content.labels.faqTitle}</h2>
+              <p className="section-intro section-intro-left">{content.labels.faqIntro}</p>
+            </div>
+            <div className="faq-accordion faq-compact">
               {content.faqItems.map((item, idx) => {
                 const isOpen = openFaq === idx;
                 return (
@@ -749,41 +833,10 @@ function LandingPage({ locale }) {
                 );
               })}
             </div>
-            <div className="faq-cta">
-              <a className="btn btn-secondary" href="https://www.dowhiz.com/help-center/">
-                {content.labels.faqCta}
+            <div className="faq-link-row">
+              <a className="faq-text-link" href="https://www.dowhiz.com/help-center/">
+                {content.labels.faqLinkLabel}
               </a>
-            </div>
-          </div>
-        </section>
-
-        <section id="blog" className="section blog-section">
-          <div className="container">
-            <div className="blog-header">
-              <div>
-                <span className="blog-eyebrow">{content.labels.blogEyebrow}</span>
-                <h2 className="blog-title">{content.labels.blogTitle}</h2>
-                <p className="blog-intro">{content.labels.blogIntro}</p>
-              </div>
-              <a className="btn btn-secondary blog-header-btn" href="/blog/">
-                {content.labels.blogHeaderButton}
-              </a>
-            </div>
-            <div className="blog-grid">
-              {content.blogPosts.map((post) => (
-                <article key={post.title} className="blog-card" role="article">
-                  <div className="blog-meta">
-                    <span className="blog-tag">{post.tag}</span>
-                    <span className="blog-date">{post.date}</span>
-                  </div>
-                  <h3>{post.title}</h3>
-                  <p>{post.excerpt}</p>
-                  <a className="blog-link" href={post.link}>
-                    {content.labels.blogLinkLabel}
-                    <span aria-hidden="true" className="blog-link-icon"></span>
-                  </a>
-                </article>
-              ))}
             </div>
           </div>
         </section>
