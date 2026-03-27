@@ -32,7 +32,7 @@ function WorkspaceHomePage() {
           <a className="btn btn-primary" href={DASHBOARD_WORKSPACE_ANCHOR}>
             Open Oliver setup
           </a>
-          <Link className="btn btn-secondary" to="/">
+          <Link className="btn btn-secondary" to="/?view=landing">
             Back to landing
           </Link>
         </div>
