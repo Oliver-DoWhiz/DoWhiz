@@ -13,7 +13,7 @@ cd DoWhiz/DoWhiz_service
 python scripts/analyze_timings.py /tmp/task_timings.jsonl
 ```
 
-## View plots
+## View plots manually
 
 ```bash
 open /tmp/mean_breakdown.png

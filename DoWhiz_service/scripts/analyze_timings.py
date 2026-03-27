@@ -191,6 +191,15 @@ def main():
 
     print(f"\nPlots saved to: {output_path}")
 
+    # Open plots (macOS)
+    import subprocess
+    import platform
+    if platform.system() == "Darwin":
+        for name in ["mean_breakdown.png", "stacked_timeline.png", "distribution.png"]:
+            plot_file = output_path / name
+            if plot_file.exists():
+                subprocess.run(["open", str(plot_file)])
+
 
 if __name__ == "__main__":
     main()
