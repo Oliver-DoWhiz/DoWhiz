@@ -9,6 +9,7 @@ use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{Duration as ChronoDuration, Utc};
 use serde::Deserialize;
 
 use super::browserbase::{
@@ -75,6 +76,7 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
 const HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY: &str = "HUMAN_APPROVAL_GATE_REQUIRE_MCP";
 const HUMAN_APPROVAL_GATE_MCP_SERVER_NAME: &str = "human-approval-gate";
 const HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS: u32 = 31 * 60;
+const NOTION_MCP_ENV_KEYS: &[&str] = &["EMPLOYEE_ID", "MONGODB_URI", "NOTION_DEFAULT_WORKSPACE"];
 const HUMAN_APPROVAL_FROM_ENV_KEY: &str = "HUMAN_APPROVAL_FROM";
 const HUMAN_APPROVAL_REPLY_TO_ENV_KEY: &str = "HUMAN_APPROVAL_REPLY_TO";
 const EMPLOYEE_CONFIG_PATH_ENV_KEY: &str = "EMPLOYEE_CONFIG_PATH";
@@ -101,6 +103,10 @@ const REMOTE_OUTPUT_FILENAME: &str = ".codex_remote_output.log";
 const REMOTE_EXIT_CODE_FILENAME: &str = ".codex_remote_exit_code";
 const HAG_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ HUMAN APPROVAL GATE MCP";
 const HAG_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ HUMAN APPROVAL GATE MCP";
+const NOTION_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ NOTION MCP";
+const NOTION_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ NOTION MCP";
+const NOTION_MCP_SERVER_NAME: &str = "notion";
+const NOTION_MCP_TOOL_TIMEOUT_SECONDS: u32 = 120;
 const EPHEMERAL_SHARE_PREFIX: &str = "task-";
 static ACI_CONTAINER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -383,6 +389,7 @@ pub(super) fn run_codex_task(
     };
     let browserbase_env_overrides = collect_browserbase_env_overrides(&browserbase_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
+    let notion_env_overrides = collect_notion_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
     let prompt = build_prompt(
@@ -426,6 +433,9 @@ pub(super) fn run_codex_task(
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &human_approval_gate_env_overrides {
+        trace_env_overrides.push((key.clone(), value.clone()));
+    }
+    for (key, value) in &notion_env_overrides {
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &github_auth.env_overrides {
@@ -547,6 +557,9 @@ pub(super) fn run_codex_task(
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         for (key, value) in &human_approval_gate_env_overrides {
+            cmd.arg("-e").arg(format!("{}={}", key, value));
+        }
+        for (key, value) in &notion_env_overrides {
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         cmd.arg("-e")
@@ -685,6 +698,9 @@ pub(super) fn run_codex_task(
             cmd.env(key, value);
         }
         for (key, value) in &human_approval_gate_env_overrides {
+            cmd.env(key, value);
+        }
+        for (key, value) in &notion_env_overrides {
             cmd.env(key, value);
         }
         cmd.env(HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY, "1");
@@ -901,6 +917,7 @@ fn run_codex_task_azure_aci(
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
     let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
+    let notion_env_overrides = collect_notion_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
     let prompt = build_prompt(
@@ -997,6 +1014,9 @@ fn run_codex_task_azure_aci(
     for (key, value) in human_approval_gate_env_overrides {
         env_overrides.push((key, value));
     }
+    for (key, value) in notion_env_overrides {
+        env_overrides.push((key, value));
+    }
     env_overrides.push((
         HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY.to_string(),
         "1".to_string(),
@@ -1071,7 +1091,10 @@ fn run_codex_task_azure_aci(
     };
 
     let (effective_share, effective_container_workspace) = match &ephemeral_guard {
-        Some(guard) => (guard.share_name().to_string(), config.container_share_root.clone()),
+        Some(guard) => (
+            guard.share_name().to_string(),
+            config.container_share_root.clone(),
+        ),
         None => (config.file_share.clone(), container_workspace_dir.clone()),
     };
 
@@ -1141,7 +1164,10 @@ fn run_codex_task_azure_aci(
     if let Some(ref guard) = ephemeral_guard {
         timing.start_stage();
         if let Err(e) = guard.download_back() {
-            eprintln!("[run_task] failed to download from ephemeral share: {:?}", e);
+            eprintln!(
+                "[run_task] failed to download from ephemeral share: {:?}",
+                e
+            );
         }
         timing.end_result_download();
     }
@@ -1416,30 +1442,64 @@ fn delete_ephemeral_share(config: &AzureAciConfig, share_name: &str) -> Result<(
     Ok(())
 }
 
+/// Generate a SAS token for an Azure File share (valid for 1 hour)
+fn generate_share_sas(config: &AzureAciConfig, share_name: &str) -> Result<String, RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("share")
+        .arg("generate-sas")
+        .arg("--name")
+        .arg(share_name)
+        .arg("--account-name")
+        .arg(&config.storage_account)
+        .arg("--account-key")
+        .arg(&config.storage_key)
+        .arg("--permissions")
+        .arg("rwdl") // read, write, delete, list
+        .arg("--expiry")
+        .arg(
+            (Utc::now() + ChronoDuration::hours(1))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string(),
+        )
+        .arg("--output")
+        .arg("tsv")
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage share generate-sas failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn upload_workspace_to_share(
     config: &AzureAciConfig,
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    // Use azcopy for faster parallel uploads
+    // Generate SAS token for azcopy auth
+    let sas = generate_share_sas(config, share_name)?;
     let dest_url = format!(
-        "https://{}.file.core.windows.net/{}/",
-        config.storage_account, share_name
+        "https://{}.file.core.windows.net/{}?{}",
+        config.storage_account, share_name, sas
     );
     let output = Command::new("azcopy")
         .arg("copy")
         .arg(format!("{}/*", workspace_dir.display()))
         .arg(&dest_url)
         .arg("--recursive")
-        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
-        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "azcopy copy to {} failed:\n{}",
-                dest_url,
+                "azcopy copy to share {} failed:\n{}",
+                share_name,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -1452,25 +1512,24 @@ fn download_workspace_from_share(
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    // Use azcopy for faster parallel downloads
+    // Generate SAS token for azcopy auth
+    let sas = generate_share_sas(config, share_name)?;
     let source_url = format!(
-        "https://{}.file.core.windows.net/{}/*",
-        config.storage_account, share_name
+        "https://{}.file.core.windows.net/{}/*?{}",
+        config.storage_account, share_name, sas
     );
     let output = Command::new("azcopy")
         .arg("copy")
         .arg(&source_url)
         .arg(workspace_dir)
         .arg("--recursive")
-        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
-        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "azcopy copy {} failed:\n{}",
-                source_url,
+                "azcopy copy from share {} failed:\n{}",
+                share_name,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -1485,7 +1544,11 @@ struct EphemeralShareGuard<'a> {
 }
 
 impl<'a> EphemeralShareGuard<'a> {
-    fn new(config: &'a AzureAciConfig, task_id: &str, workspace_dir: &Path) -> Result<Self, RunTaskError> {
+    fn new(
+        config: &'a AzureAciConfig,
+        task_id: &str,
+        workspace_dir: &Path,
+    ) -> Result<Self, RunTaskError> {
         let share_name = format!("{}{}", EPHEMERAL_SHARE_PREFIX, task_id);
         create_ephemeral_share(config, &share_name)?;
         upload_workspace_to_share(config, &share_name, workspace_dir)?;
@@ -1508,7 +1571,10 @@ impl<'a> EphemeralShareGuard<'a> {
 impl Drop for EphemeralShareGuard<'_> {
     fn drop(&mut self) {
         if let Err(e) = delete_ephemeral_share(self.config, &self.share_name) {
-            eprintln!("[ephemeral_share] failed to delete share {}: {:?}", self.share_name, e);
+            eprintln!(
+                "[ephemeral_share] failed to delete share {}: {:?}",
+                self.share_name, e
+            );
         }
     }
 }
@@ -1676,7 +1742,13 @@ exit \"$status\"\n",
 
     let create_command = format!("/bin/bash -lc {}", shell_quote(&script));
     timing.start_stage();
-    match create_aci_container(config, container_name, &create_command, env_overrides, file_share) {
+    match create_aci_container(
+        config,
+        container_name,
+        &create_command,
+        env_overrides,
+        file_share,
+    ) {
         Ok(()) => {}
         Err(err) if is_aci_quota_error(&err) => {
             eprintln!(
@@ -1697,7 +1769,13 @@ exit \"$status\"\n",
                     );
                 }
             }
-            create_aci_container(config, container_name, &create_command, env_overrides, file_share)?;
+            create_aci_container(
+                config,
+                container_name,
+                &create_command,
+                env_overrides,
+                file_share,
+            )?;
         }
         Err(err) => return Err(err),
     }
@@ -1897,7 +1975,8 @@ fn create_aci_container(
     env_overrides: &[(String, String)],
     file_share: &str,
 ) -> Result<(), RunTaskError> {
-    let mut create_cmd = build_aci_create_command(config, container_name, create_command, file_share);
+    let mut create_cmd =
+        build_aci_create_command(config, container_name, create_command, file_share);
     let env_overrides = dedupe_env_overrides_last_wins(env_overrides);
     if !env_overrides.is_empty() {
         create_cmd.arg("--environment-variables");
@@ -2210,6 +2289,7 @@ fn ensure_codex_config_at(
 
     let block = build_codex_config_block(azure_endpoint);
     let hag_mcp_block = build_human_approval_gate_mcp_block();
+    let notion_mcp_block = build_notion_mcp_block();
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -2223,6 +2303,12 @@ fn ensure_codex_config_at(
         HAG_MCP_CONFIG_START_MARKER,
         HAG_MCP_CONFIG_END_MARKER,
         &hag_mcp_block,
+    );
+    let updated = update_managed_config_block(
+        &updated,
+        NOTION_MCP_CONFIG_START_MARKER,
+        NOTION_MCP_CONFIG_END_MARKER,
+        &notion_mcp_block,
     );
     let updated = ensure_project_trust(&updated, trust_workspace_dir);
     fs::write(config_path, updated)?;
@@ -2335,6 +2421,13 @@ fn collect_human_approval_gate_env_overrides() -> Vec<(String, String)> {
     }
 
     overrides
+}
+
+fn collect_notion_env_overrides() -> Vec<(String, String)> {
+    NOTION_MCP_ENV_KEYS
+        .iter()
+        .filter_map(|key| read_env_trimmed(key).map(|value| ((*key).to_string(), value)))
+        .collect()
 }
 
 fn collect_bright_data_env_overrides() -> Vec<(String, String)> {
@@ -2647,6 +2740,18 @@ env_vars = [{env_vars}]
 tool_timeout_sec = {HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS}
 
 {HAG_MCP_CONFIG_END_MARKER}"#
+    )
+}
+
+fn build_notion_mcp_block() -> String {
+    format!(
+        r#"{NOTION_MCP_CONFIG_START_MARKER}
+[mcp_servers.{NOTION_MCP_SERVER_NAME}]
+command = "notion_mcp"
+env_vars = ["EMPLOYEE_ID", "MONGODB_URI", "NOTION_DEFAULT_WORKSPACE"]
+tool_timeout_sec = {NOTION_MCP_TOOL_TIMEOUT_SECONDS}
+
+{NOTION_MCP_CONFIG_END_MARKER}"#
     )
 }
 
@@ -4393,6 +4498,23 @@ printf '%s\n' "$@" > "$capture_file"
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
         fs::write(workspace_dir.join("test.txt"), "test content").expect("write test file");
 
+        // Fake az that outputs a fake SAS token when called with generate-sas
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+if echo "$@" | grep -q "generate-sas"; then
+    echo "sv=2022-11-02&ss=f&srt=sco&sp=rwdlc&se=2099-01-01&sig=fakesig"
+else
+    exit 0
+fi
+"#,
+        )
+        .expect("write fake az");
+        let mut az_perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        az_perms.set_mode(0o755);
+        fs::set_permissions(&az_path, az_perms).expect("chmod fake az");
+
         let capture_path = temp.path().join("azcopy-args.txt");
         let azcopy_path = bin_dir.join("azcopy");
         fs::write(
@@ -4404,7 +4526,9 @@ printf '%s\n' "$@" > "$capture_file"
 "#,
         )
         .expect("write fake azcopy");
-        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        let mut perms = fs::metadata(&azcopy_path)
+            .expect("azcopy metadata")
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
@@ -4454,6 +4578,23 @@ printf '%s\n' "$@" > "$capture_file"
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
 
+        // Fake az that outputs a fake SAS token when called with generate-sas
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+if echo "$@" | grep -q "generate-sas"; then
+    echo "sv=2022-11-02&ss=f&srt=sco&sp=rwdlc&se=2099-01-01&sig=fakesig"
+else
+    exit 0
+fi
+"#,
+        )
+        .expect("write fake az");
+        let mut az_perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        az_perms.set_mode(0o755);
+        fs::set_permissions(&az_path, az_perms).expect("chmod fake az");
+
         let capture_path = temp.path().join("azcopy-args.txt");
         let azcopy_path = bin_dir.join("azcopy");
         fs::write(
@@ -4465,7 +4606,9 @@ printf '%s\n' "$@" > "$capture_file"
 "#,
         )
         .expect("write fake azcopy");
-        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        let mut perms = fs::metadata(&azcopy_path)
+            .expect("azcopy metadata")
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
 
@@ -4582,11 +4725,22 @@ printf '%s\n' "$@" > "$capture_file"
             container_share_root: PathBuf::from("/mnt/dowhiz-share"),
         };
 
-        let cmd = build_aci_create_command(&config, "test-container", "echo hello", "task-ephemeral-share");
-        let args: Vec<_> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        let cmd = build_aci_create_command(
+            &config,
+            "test-container",
+            "echo hello",
+            "task-ephemeral-share",
+        );
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
 
         assert!(args.contains(&"--azure-file-volume-share-name".to_string()));
-        let share_idx = args.iter().position(|a| a == "--azure-file-volume-share-name").unwrap();
+        let share_idx = args
+            .iter()
+            .position(|a| a == "--azure-file-volume-share-name")
+            .unwrap();
         assert_eq!(args[share_idx + 1], "task-ephemeral-share");
     }
 }

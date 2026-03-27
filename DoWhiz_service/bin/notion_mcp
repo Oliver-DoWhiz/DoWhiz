@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "python interpreter not found for notion_mcp" >&2
+  exit 1
+fi
+
+candidates=(
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/notion/scripts/notion_mcp.py"
+  "${PWD}/DoWhiz_service/skills/notion/scripts/notion_mcp.py"
+  "./.agents/skills/notion/scripts/notion_mcp.py"
+  "${PWD}/.agents/skills/notion/scripts/notion_mcp.py"
+  "/app/DoWhiz_service/skills/notion/scripts/notion_mcp.py"
+  "${HOME:-}/.dowhiz/DoWhiz/skills/notion/scripts/notion_mcp.py"
+)
+
+for script_path in "${candidates[@]}"; do
+  if [[ -n "${script_path}" && -f "${script_path}" ]]; then
+    exec "${PYTHON_BIN}" "${script_path}" "$@"
+  fi
+done
+
+echo "notion_mcp.py not found in expected locations" >&2
+exit 1
