@@ -25,7 +25,7 @@ open /tmp/distribution.png
 
 - `setup_latency_ms` - Initial setup before ACI
 - `ephemeral_share_create_ms` - Creating Azure file share
-- `aci_cold_start_ms` - ACI container spin-up
+- `aci_cold_start_ms` - ACI container spin-up/provisioning from pre-built image
 - `codex_execution_ms` - Actual codex running
 - `result_download_ms` - Downloading results from ephemeral task fileshare to global fileshare @
 `/home/azureuser/server/.dowhiz/DoWhiz/run_task`
