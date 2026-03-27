@@ -1,5 +1,68 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
+
+/// Serializable version of TaskTiming with durations as milliseconds
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskTimingRecord {
+    pub task_id: String,
+    pub timestamp: String,
+    pub queue_latency_ms: Option<f64>,
+    pub setup_latency_ms: Option<f64>,
+    pub ephemeral_share_create_ms: Option<f64>,
+    pub ephemeral_share_upload_ms: Option<f64>,
+    pub aci_cold_start_ms: Option<f64>,
+    pub codex_execution_ms: Option<f64>,
+    pub result_download_ms: Option<f64>,
+    pub total_ms: Option<f64>,
+}
+
+impl From<&TaskTiming> for TaskTimingRecord {
+    fn from(t: &TaskTiming) -> Self {
+        Self {
+            task_id: t.task_id.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            queue_latency_ms: t.queue_latency.map(|d| d.as_secs_f64() * 1000.0),
+            setup_latency_ms: t.setup_latency.map(|d| d.as_secs_f64() * 1000.0),
+            ephemeral_share_create_ms: t.ephemeral_share_create.map(|d| d.as_secs_f64() * 1000.0),
+            ephemeral_share_upload_ms: t.ephemeral_share_upload.map(|d| d.as_secs_f64() * 1000.0),
+            aci_cold_start_ms: t.aci_cold_start.map(|d| d.as_secs_f64() * 1000.0),
+            codex_execution_ms: t.codex_execution.map(|d| d.as_secs_f64() * 1000.0),
+            result_download_ms: t.result_download.map(|d| d.as_secs_f64() * 1000.0),
+            total_ms: t.total.map(|d| d.as_secs_f64() * 1000.0),
+        }
+    }
+}
+
+fn timing_log_path() -> PathBuf {
+    //write to ./task_timings.jsonl
+    std::env::var("TIMING_LOG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./task_timings.jsonl"))
+}
+
+pub fn append_timing_to_file(timing: &TaskTiming) {
+    let record = TaskTimingRecord::from(timing);
+    let path = timing_log_path();
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if let Ok(json) = serde_json::to_string(&record) {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            //Write via JSONL format
+            let _ = writeln!(file, "{}", json);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskTiming {
@@ -107,6 +170,9 @@ impl TimingCollector {
     }
 
     pub fn record(&self, timing: TaskTiming) {
+        // Write to file first
+        append_timing_to_file(&timing);
+
         let mut timings = self.timings.write().unwrap();
         timings.push(timing);
         if timings.len() > self.max_entries {
