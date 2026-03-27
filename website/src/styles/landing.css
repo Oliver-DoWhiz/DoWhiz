@@ -385,6 +385,471 @@
   letter-spacing: 0.05em;
 }
 
+/* Oliver-first landing layout */
+.hero-content-oliver {
+  gap: 2rem;
+}
+
+.hero-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.85rem;
+}
+
+.hero-cta-row .btn {
+  min-width: 12.5rem;
+  justify-content: center;
+}
+
+.hero-panel-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.92fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.hero-spotlight-card,
+.hero-onboarding-card {
+  border: 1px solid var(--glass-border);
+  border-radius: 1.35rem;
+  box-shadow: 0 24px 48px -28px var(--shadow-color);
+}
+
+.hero-spotlight-card {
+  padding: 1.35rem;
+  display: grid;
+  gap: 1rem;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--brand-primary) 18%, transparent), transparent 38%),
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--surface-primary) 90%, #ffffff 10%) 0%,
+      color-mix(in srgb, var(--surface-primary) 96%, #eaf1ff 4%) 100%
+    );
+}
+
+.hero-spotlight-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.hero-portrait-wrap {
+  width: 88px;
+  height: 88px;
+  padding: 0.28rem;
+  border-radius: 1.3rem;
+  background: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--brand-primary) 55%, #ffffff 45%),
+    color-mix(in srgb, var(--brand-primary) 22%, var(--surface-primary))
+  );
+  box-shadow: 0 18px 34px -24px var(--shadow-strong);
+  flex-shrink: 0;
+}
+
+.hero-portrait {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 1.05rem;
+}
+
+.hero-spotlight-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.hero-panel-kicker {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.hero-spotlight-copy h2 {
+  margin: 0;
+  font-size: clamp(1.28rem, 2.2vw, 1.6rem);
+  line-height: 1.18;
+  letter-spacing: -0.03em;
+}
+
+.hero-spotlight-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.58;
+}
+
+.hero-spotlight-list,
+.hero-task-list,
+.hero-onboarding-list,
+.control-point-list,
+.control-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hero-spotlight-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.hero-spotlight-list li,
+.control-point-list li {
+  position: relative;
+  padding-left: 1rem;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.56;
+}
+
+.hero-spotlight-list li::before,
+.control-point-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.56rem;
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--brand-primary) 65%, var(--text-primary));
+}
+
+.hero-task-sampler {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--glass-border) 88%, transparent);
+}
+
+.hero-task-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.hero-task-list li {
+  padding: 0.8rem 0.92rem;
+  border-radius: 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 82%, transparent);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.52;
+}
+
+.hero-onboarding-card {
+  padding: 1.35rem;
+  display: grid;
+  gap: 1rem;
+  background:
+    linear-gradient(
+      170deg,
+      color-mix(in srgb, var(--surface-primary) 94%, #ffffff 6%) 0%,
+      color-mix(in srgb, var(--surface-primary) 99%, #dfe9ff 1%) 100%
+    );
+}
+
+.hero-card-header {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.hero-card-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.94rem;
+  line-height: 1.56;
+}
+
+.hero-onboarding-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.hero-onboarding-item {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.9rem 0.95rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 82%, transparent);
+}
+
+.hero-step-index {
+  width: 40px;
+  height: 40px;
+  border-radius: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 26%, var(--glass-border));
+  background: color-mix(in srgb, var(--brand-primary) 10%, var(--surface-primary));
+}
+
+.hero-onboarding-item h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.hero-onboarding-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.step-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.step-card,
+.use-case-card,
+.surface-card,
+.control-card,
+.control-steps-card {
+  border: 1px solid var(--glass-border);
+  border-radius: 1.25rem;
+  background: var(--glass-bg);
+  box-shadow: 0 16px 34px -28px var(--shadow-color);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.step-card:hover,
+.use-case-card:hover,
+.surface-card:hover,
+.control-card:hover,
+.control-steps-card:hover {
+  border-color: var(--card-hover-border);
+  box-shadow: 0 20px 38px -24px var(--shadow-strong);
+  transform: translateY(-2px);
+}
+
+.step-card {
+  position: relative;
+  overflow: hidden;
+  padding: 1.3rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.step-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--brand-primary) 72%, transparent),
+    color-mix(in srgb, var(--brand-primary) 12%, transparent)
+  );
+}
+
+.step-card-index {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 24%, var(--glass-border));
+  background: color-mix(in srgb, var(--brand-primary) 10%, var(--surface-primary));
+  color: var(--text-primary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.step-card h3,
+.use-case-card h3,
+.surface-card h3,
+.control-card h3,
+.control-steps-card h3 {
+  margin: 0;
+  line-height: 1.22;
+  letter-spacing: var(--tracking-tight);
+}
+
+.step-card h3 {
+  font-size: 1.12rem;
+}
+
+.step-card-desc,
+.step-card-detail,
+.use-case-card p,
+.surface-card p,
+.control-card p,
+.control-step-item p,
+.control-steps-card > p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.step-card-desc {
+  font-size: 0.96rem;
+}
+
+.step-card-detail {
+  font-size: 0.88rem;
+}
+
+.use-case-grid,
+.surface-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.use-case-card,
+.surface-card,
+.control-card {
+  padding: 1.3rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.use-case-tag {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  padding: 0.36rem 0.72rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--surface-primary) 84%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.use-case-card h3,
+.surface-card h3,
+.control-card h3 {
+  font-size: 1.16rem;
+}
+
+.surface-card-head,
+.control-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.surface-card .feature-iconwrap,
+.control-card .feature-iconwrap {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0.25rem;
+  border-radius: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 86%, transparent);
+}
+
+.control-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.control-card-stack {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.control-point-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.control-steps-card {
+  position: sticky;
+  top: 6.4rem;
+  padding: 1.35rem;
+  display: grid;
+  gap: 0.95rem;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--brand-primary) 15%, transparent), transparent 46%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-primary) 92%, #ffffff 8%) 0%,
+      color-mix(in srgb, var(--surface-primary) 98%, #e7efff 2%) 100%
+    );
+}
+
+.control-steps-card h3 {
+  font-size: 1.38rem;
+}
+
+.control-steps-card > p {
+  font-size: 0.96rem;
+}
+
+.control-step-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.control-step-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 0.78rem;
+  align-items: start;
+  padding: 0.88rem 0.95rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 84%, transparent);
+}
+
+.control-step-index {
+  width: 38px;
+  height: 38px;
+  border-radius: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 24%, var(--glass-border));
+  background: color-mix(in srgb, var(--brand-primary) 10%, var(--surface-primary));
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.control-step-item h4 {
+  margin: 0 0 0.2rem;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.landing-page-cn .hero-panel-kicker,
+.landing-page-cn .step-card-index,
+.landing-page-cn .use-case-tag {
+  text-transform: none;
+  letter-spacing: 0.05em;
+}
+
 /* Features - Grid */
 .features-grid {
   display: grid;
