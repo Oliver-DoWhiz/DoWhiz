@@ -28,6 +28,7 @@ use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
+use super::timing::{TaskTimingBuilder, TIMING_COLLECTOR};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
 use super::utils::{
@@ -100,6 +101,7 @@ const REMOTE_OUTPUT_FILENAME: &str = ".codex_remote_output.log";
 const REMOTE_EXIT_CODE_FILENAME: &str = ".codex_remote_exit_code";
 const HAG_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ HUMAN APPROVAL GATE MCP";
 const HAG_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ HUMAN APPROVAL GATE MCP";
+const EPHEMERAL_SHARE_PREFIX: &str = "task-";
 static ACI_CONTAINER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
@@ -853,6 +855,8 @@ fn run_codex_task_azure_aci(
 ) -> Result<RunTaskOutput, RunTaskError> {
     let _browserbase_cleanup = BrowserbaseSessionCleanupGuard::new(request.workspace_dir);
     let config = load_azure_aci_config()?;
+    let mut timing = TaskTimingBuilder::new("pending");
+    timing.start_stage();
 
     let host_workspace_dir = canonicalize_dir(request.workspace_dir)?;
     let host_share_root = canonicalize_dir(&config.host_share_root)?;
@@ -1013,9 +1017,11 @@ fn run_codex_task_azure_aci(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
-    let env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
+    let mut env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
 
     let container_name = build_aci_container_name();
+    timing.set_task_id(&container_name);
+    timing.end_setup();
     let timeout = run_task_timeout();
     let mut trace = RunTaskTraceRecorder::new(
         request.workspace_dir,
@@ -1043,9 +1049,54 @@ fn run_codex_task_azure_aci(
     let _ = trace.record_text("aci/prompt_path.txt", &prompt_path.to_string_lossy());
     let env_override_keys: Vec<&str> = env_overrides.iter().map(|(key, _)| key.as_str()).collect();
     let _ = trace.record_json("aci/env_override_keys.json", &env_override_keys);
-    // Register container BEFORE creation so it gets cleaned up on shutdown
-    // even if creation succeeds but execution fails partway through
     register_aci_container(&container_name);
+
+    let ephemeral_guard = if use_ephemeral_share() {
+        eprintln!(
+            "[run_task] azure_aci ephemeral_share=true task_id={}",
+            container_name
+        );
+        timing.start_stage();
+        let guard = match EphemeralShareGuard::new(&config, &container_name, &host_workspace_dir) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                eprintln!("[run_task] failed to create ephemeral share: {:?}", e);
+                None
+            }
+        };
+        timing.end_ephemeral_create();
+        guard
+    } else {
+        None
+    };
+
+    let (effective_share, effective_container_workspace) = match &ephemeral_guard {
+        Some(guard) => (guard.share_name().to_string(), config.container_share_root.clone()),
+        None => (config.file_share.clone(), container_workspace_dir.clone()),
+    };
+
+    let effective_add_dirs = if ephemeral_guard.is_some() {
+        codex_add_dirs_remote(&host_workspace_dir, &effective_container_workspace)?
+    } else {
+        add_dirs.clone()
+    };
+
+    // Override HOME and CODEX_HOME when using ephemeral shares (files uploaded to share root)
+    if ephemeral_guard.is_some() {
+        env_overrides.push((
+            "HOME".to_string(),
+            effective_container_workspace.to_string_lossy().into_owned(),
+        ));
+        env_overrides.push((
+            "CODEX_HOME".to_string(),
+            format!(
+                "{}/{}",
+                effective_container_workspace.to_string_lossy(),
+                DOCKER_CODEX_HOME_DIR
+            ),
+        ));
+    }
+
     eprintln!(
         "[run_task] azure_aci create container={} resource_group={} image={}",
         container_name, config.resource_group, config.image
@@ -1053,8 +1104,8 @@ fn run_codex_task_azure_aci(
     let execution = run_azure_aci_execution(
         &config,
         &container_name,
-        &container_workspace_dir,
-        &add_dirs,
+        &effective_container_workspace,
+        &effective_add_dirs,
         &remote_exit_code_path,
         &model_name,
         &sandbox_mode,
@@ -1062,6 +1113,8 @@ fn run_codex_task_azure_aci(
         &env_overrides,
         timeout,
         cancel_monitor,
+        &effective_share,
+        &mut timing,
     );
     eprintln!(
         "[run_task] azure_aci delete-request container={} resource_group={}",
@@ -1084,6 +1137,15 @@ fn run_codex_task_azure_aci(
         );
     }
     deregister_aci_container(&container_name);
+
+    if let Some(ref guard) = ephemeral_guard {
+        timing.start_stage();
+        if let Err(e) = guard.download_back() {
+            eprintln!("[run_task] failed to download from ephemeral share: {:?}", e);
+        }
+        timing.end_result_download();
+    }
+
     let output_content = fs::read_to_string(&remote_output_path).unwrap_or_default();
     let exit_status = read_remote_exit_code(&remote_exit_code_path);
     if remote_output_path.exists() {
@@ -1170,6 +1232,8 @@ fn run_codex_task_azure_aci(
     }
     let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
     let _ = trace.finish(exit_status, true, None, token_usage.as_ref());
+
+    TIMING_COLLECTOR.record(timing.finish());
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,
@@ -1296,6 +1360,159 @@ fn map_workspace_to_container(
     Ok(container_share_root.join(relative))
 }
 
+fn use_ephemeral_share() -> bool {
+    env_enabled("RUN_TASK_AZURE_ACI_EPHEMERAL_SHARE")
+}
+
+fn create_ephemeral_share(config: &AzureAciConfig, share_name: &str) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("share")
+        .arg("create")
+        .arg("--name")
+        .arg(share_name)
+        .arg("--account-name")
+        .arg(&config.storage_account)
+        .arg("--account-key")
+        .arg(&config.storage_key)
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage share create --name {} failed:\n{}",
+                share_name,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn delete_ephemeral_share(config: &AzureAciConfig, share_name: &str) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("share")
+        .arg("delete")
+        .arg("--name")
+        .arg(share_name)
+        .arg("--account-name")
+        .arg(&config.storage_account)
+        .arg("--account-key")
+        .arg(&config.storage_key)
+        .arg("--delete-snapshots")
+        .arg("include")
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage share delete --name {} failed:\n{}",
+                share_name,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn upload_workspace_to_share(
+    config: &AzureAciConfig,
+    share_name: &str,
+    workspace_dir: &Path,
+) -> Result<(), RunTaskError> {
+    // Use azcopy for faster parallel uploads
+    let dest_url = format!(
+        "https://{}.file.core.windows.net/{}/",
+        config.storage_account, share_name
+    );
+    let output = Command::new("azcopy")
+        .arg("copy")
+        .arg(format!("{}/*", workspace_dir.display()))
+        .arg(&dest_url)
+        .arg("--recursive")
+        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
+        .env("AZURE_STORAGE_KEY", &config.storage_key)
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "azcopy copy to {} failed:\n{}",
+                dest_url,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn download_workspace_from_share(
+    config: &AzureAciConfig,
+    share_name: &str,
+    workspace_dir: &Path,
+) -> Result<(), RunTaskError> {
+    // Use azcopy for faster parallel downloads
+    let source_url = format!(
+        "https://{}.file.core.windows.net/{}/*",
+        config.storage_account, share_name
+    );
+    let output = Command::new("azcopy")
+        .arg("copy")
+        .arg(&source_url)
+        .arg(workspace_dir)
+        .arg("--recursive")
+        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
+        .env("AZURE_STORAGE_KEY", &config.storage_key)
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "azcopy copy {} failed:\n{}",
+                source_url,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(())
+}
+
+struct EphemeralShareGuard<'a> {
+    config: &'a AzureAciConfig,
+    share_name: String,
+    workspace_dir: PathBuf,
+}
+
+impl<'a> EphemeralShareGuard<'a> {
+    fn new(config: &'a AzureAciConfig, task_id: &str, workspace_dir: &Path) -> Result<Self, RunTaskError> {
+        let share_name = format!("{}{}", EPHEMERAL_SHARE_PREFIX, task_id);
+        create_ephemeral_share(config, &share_name)?;
+        upload_workspace_to_share(config, &share_name, workspace_dir)?;
+        Ok(Self {
+            config,
+            share_name,
+            workspace_dir: workspace_dir.to_path_buf(),
+        })
+    }
+
+    fn share_name(&self) -> &str {
+        &self.share_name
+    }
+
+    fn download_back(&self) -> Result<(), RunTaskError> {
+        download_workspace_from_share(self.config, &self.share_name, &self.workspace_dir)
+    }
+}
+
+impl Drop for EphemeralShareGuard<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = delete_ephemeral_share(self.config, &self.share_name) {
+            eprintln!("[ephemeral_share] failed to delete share {}: {:?}", self.share_name, e);
+        }
+    }
+}
+
 fn map_path_to_container(
     host_path: &Path,
     host_workspace_dir: &Path,
@@ -1336,6 +1553,8 @@ fn run_azure_aci_execution(
     env_overrides: &[(String, String)],
     timeout: Duration,
     cancel_monitor: Option<&ThreadSupersedeMonitor>,
+    file_share: &str,
+    timing: &mut TaskTimingBuilder,
 ) -> Result<AzureAciExecutionArtifacts, RunTaskError> {
     if let Some(reason) = cancel_monitor.and_then(ThreadSupersedeMonitor::supersede_reason) {
         return Err(RunTaskError::Canceled {
@@ -1456,7 +1675,8 @@ exit \"$status\"\n",
     );
 
     let create_command = format!("/bin/bash -lc {}", shell_quote(&script));
-    match create_aci_container(config, container_name, &create_command, env_overrides) {
+    timing.start_stage();
+    match create_aci_container(config, container_name, &create_command, env_overrides, file_share) {
         Ok(()) => {}
         Err(err) if is_aci_quota_error(&err) => {
             eprintln!(
@@ -1477,10 +1697,11 @@ exit \"$status\"\n",
                     );
                 }
             }
-            create_aci_container(config, container_name, &create_command, env_overrides)?;
+            create_aci_container(config, container_name, &create_command, env_overrides, file_share)?;
         }
         Err(err) => return Err(err),
     }
+    timing.end_aci_cold_start();
 
     let elapsed_after_create = execution_started.elapsed();
     if elapsed_after_create >= timeout {
@@ -1494,6 +1715,7 @@ exit \"$status\"\n",
         });
     }
     let poll_timeout = timeout.saturating_sub(elapsed_after_create);
+    timing.start_stage();
     let poll_state = poll_aci_state(
         config,
         container_name,
@@ -1501,6 +1723,7 @@ exit \"$status\"\n",
         poll_timeout,
         cancel_monitor,
     )?;
+    timing.end_codex_execution();
     let logs = fetch_aci_logs(config, container_name).unwrap_or_default();
     let container_show_json = fetch_aci_show_json(config, container_name).ok();
     Ok(AzureAciExecutionArtifacts {
@@ -1672,8 +1895,9 @@ fn create_aci_container(
     container_name: &str,
     create_command: &str,
     env_overrides: &[(String, String)],
+    file_share: &str,
 ) -> Result<(), RunTaskError> {
-    let mut create_cmd = build_aci_create_command(config, container_name, create_command);
+    let mut create_cmd = build_aci_create_command(config, container_name, create_command, file_share);
     let env_overrides = dedupe_env_overrides_last_wins(env_overrides);
     if !env_overrides.is_empty() {
         create_cmd.arg("--environment-variables");
@@ -1707,6 +1931,7 @@ fn build_aci_create_command(
     config: &AzureAciConfig,
     container_name: &str,
     create_command: &str,
+    file_share: &str,
 ) -> Command {
     let mut create_cmd = Command::new("az");
     create_cmd
@@ -1731,7 +1956,7 @@ fn build_aci_create_command(
         .arg("--azure-file-volume-account-key")
         .arg(&config.storage_key)
         .arg("--azure-file-volume-share-name")
-        .arg(&config.file_share)
+        .arg(file_share)
         .arg("--azure-file-volume-mount-path")
         .arg(&config.container_share_root)
         .arg("--command-line")
@@ -3731,6 +3956,7 @@ printf '%s\n' "$@" > "$capture_file"
             "dwz-codex-bright-data-test",
             "/bin/bash -lc 'echo ok'",
             &env_overrides,
+            &config.file_share,
         )
         .expect("create container");
 
@@ -3805,6 +4031,7 @@ printf '%s\n' "$@" > "$capture_file"
             "dwz-codex-env-dedupe-test",
             "/bin/bash -lc 'echo ok'",
             &env_overrides,
+            &config.file_share,
         )
         .expect("create container");
 
@@ -4053,5 +4280,313 @@ printf '%s\n' "$@" > "$capture_file"
 
         // Should return the default path as fallback
         assert_eq!(resolved, default_path);
+    }
+
+    #[test]
+    fn test_use_ephemeral_share_disabled_by_default() {
+        let _lock = env_lock();
+        let _guard = EnvVarGuard::unset("RUN_TASK_AZURE_ACI_EPHEMERAL_SHARE");
+        assert!(!use_ephemeral_share());
+    }
+
+    #[test]
+    fn test_use_ephemeral_share_enabled_with_1() {
+        let _lock = env_lock();
+        let _guard = EnvVarGuard::set("RUN_TASK_AZURE_ACI_EPHEMERAL_SHARE", "1");
+        assert!(use_ephemeral_share());
+    }
+
+    #[test]
+    fn test_use_ephemeral_share_enabled_with_true() {
+        let _lock = env_lock();
+        let _guard = EnvVarGuard::set("RUN_TASK_AZURE_ACI_EPHEMERAL_SHARE", "true");
+        assert!(use_ephemeral_share());
+    }
+
+    #[test]
+    fn test_use_ephemeral_share_disabled_with_0() {
+        let _lock = env_lock();
+        let _guard = EnvVarGuard::set("RUN_TASK_AZURE_ACI_EPHEMERAL_SHARE", "0");
+        assert!(!use_ephemeral_share());
+    }
+
+    #[test]
+    fn test_ephemeral_share_prefix_format() {
+        assert_eq!(EPHEMERAL_SHARE_PREFIX, "task-");
+        let task_id = "dwz-codex-123-456-0";
+        let share_name = format!("{}{}", EPHEMERAL_SHARE_PREFIX, task_id);
+        assert_eq!(share_name, "task-dwz-codex-123-456-0");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_create_ephemeral_share_calls_az_storage_share_create() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let capture_path = temp.path().join("az-args.txt");
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake az");
+        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test.azurecr.io/image:tag".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "teststorage".to_string(),
+            storage_key: "testkey123".to_string(),
+            file_share: "main-share".to_string(),
+            host_share_root: PathBuf::from("/mnt/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        create_ephemeral_share(&config, "task-test-123").expect("create share");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert!(args.contains("storage"));
+        assert!(args.contains("share"));
+        assert!(args.contains("create"));
+        assert!(args.contains("--name"));
+        assert!(args.contains("task-test-123"));
+        assert!(args.contains("--account-name"));
+        assert!(args.contains("teststorage"));
+        assert!(args.contains("--account-key"));
+        assert!(args.contains("testkey123"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_upload_workspace_to_share_calls_azcopy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        let workspace_dir = temp.path().join("workspace");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        fs::write(workspace_dir.join("test.txt"), "test content").expect("write test file");
+
+        let capture_path = temp.path().join("azcopy-args.txt");
+        let azcopy_path = bin_dir.join("azcopy");
+        fs::write(
+            &azcopy_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZCOPY_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake azcopy");
+        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZCOPY_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test.azurecr.io/image:tag".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "teststorage".to_string(),
+            storage_key: "testkey123".to_string(),
+            file_share: "main-share".to_string(),
+            host_share_root: PathBuf::from("/mnt/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        upload_workspace_to_share(&config, "task-test-123", &workspace_dir).expect("upload");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert!(args.contains("copy"));
+        assert!(args.contains("--recursive"));
+        assert!(args.contains("teststorage.file.core.windows.net"));
+        assert!(args.contains("task-test-123"));
+        assert!(args.contains(&workspace_dir.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_download_workspace_from_share_calls_azcopy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        let workspace_dir = temp.path().join("workspace");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+
+        let capture_path = temp.path().join("azcopy-args.txt");
+        let azcopy_path = bin_dir.join("azcopy");
+        fs::write(
+            &azcopy_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZCOPY_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake azcopy");
+        let mut perms = fs::metadata(&azcopy_path).expect("azcopy metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&azcopy_path, perms).expect("chmod fake azcopy");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZCOPY_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test.azurecr.io/image:tag".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "teststorage".to_string(),
+            storage_key: "testkey123".to_string(),
+            file_share: "main-share".to_string(),
+            host_share_root: PathBuf::from("/mnt/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        download_workspace_from_share(&config, "task-test-123", &workspace_dir).expect("download");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert!(args.contains("copy"));
+        assert!(args.contains("--recursive"));
+        assert!(args.contains("teststorage.file.core.windows.net"));
+        assert!(args.contains("task-test-123"));
+        assert!(args.contains(&workspace_dir.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_delete_ephemeral_share_calls_az_storage_share_delete() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let capture_path = temp.path().join("az-args.txt");
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+set -e
+capture_file="${TEST_AZ_CAPTURE_FILE:?}"
+printf '%s\n' "$@" > "$capture_file"
+"#,
+        )
+        .expect("write fake az");
+        let mut perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&az_path, perms).expect("chmod fake az");
+
+        let original_path = env::var("PATH").unwrap_or_default();
+        let path_value = format!("{}:{}", bin_dir.display(), original_path);
+        let capture_value = capture_path.to_string_lossy().to_string();
+        let _guards = vec![
+            EnvVarGuard::set("PATH", &path_value),
+            EnvVarGuard::set("TEST_AZ_CAPTURE_FILE", &capture_value),
+        ];
+
+        let config = AzureAciConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test.azurecr.io/image:tag".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "teststorage".to_string(),
+            storage_key: "testkey123".to_string(),
+            file_share: "main-share".to_string(),
+            host_share_root: PathBuf::from("/mnt/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        delete_ephemeral_share(&config, "task-test-123").expect("delete share");
+
+        let args = fs::read_to_string(&capture_path).expect("read captured args");
+        assert!(args.contains("storage"));
+        assert!(args.contains("share"));
+        assert!(args.contains("delete"));
+        assert!(args.contains("--name"));
+        assert!(args.contains("task-test-123"));
+        assert!(args.contains("--delete-snapshots"));
+        assert!(args.contains("include"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_build_aci_create_command_uses_provided_file_share() {
+        let config = AzureAciConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test.azurecr.io/image:tag".to_string(),
+            location: None,
+            registry_server: None,
+            registry_username: None,
+            registry_password: None,
+            cpu: "1.0".to_string(),
+            memory_gb: "2.0".to_string(),
+            storage_account: "teststorage".to_string(),
+            storage_key: "testkey123".to_string(),
+            file_share: "main-share".to_string(),
+            host_share_root: PathBuf::from("/mnt/share"),
+            container_share_root: PathBuf::from("/mnt/dowhiz-share"),
+        };
+
+        let cmd = build_aci_create_command(&config, "test-container", "echo hello", "task-ephemeral-share");
+        let args: Vec<_> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+
+        assert!(args.contains(&"--azure-file-volume-share-name".to_string()));
+        let share_idx = args.iter().position(|a| a == "--azure-file-volume-share-name").unwrap();
+        assert_eq!(args[share_idx + 1], "task-ephemeral-share");
     }
 }
