@@ -9,6 +9,7 @@ use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{Duration as ChronoDuration, Utc};
 use serde::Deserialize;
 
 use super::browserbase::{
@@ -1416,30 +1417,64 @@ fn delete_ephemeral_share(config: &AzureAciConfig, share_name: &str) -> Result<(
     Ok(())
 }
 
+/// Generate a SAS token for an Azure File share (valid for 1 hour)
+fn generate_share_sas(config: &AzureAciConfig, share_name: &str) -> Result<String, RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("share")
+        .arg("generate-sas")
+        .arg("--name")
+        .arg(share_name)
+        .arg("--account-name")
+        .arg(&config.storage_account)
+        .arg("--account-key")
+        .arg(&config.storage_key)
+        .arg("--permissions")
+        .arg("rwdl") // read, write, delete, list
+        .arg("--expiry")
+        .arg(
+            (Utc::now() + ChronoDuration::hours(1))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string(),
+        )
+        .arg("--output")
+        .arg("tsv")
+        .output()?;
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage share generate-sas failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn upload_workspace_to_share(
     config: &AzureAciConfig,
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    // Use azcopy for faster parallel uploads
+    // Generate SAS token for azcopy auth
+    let sas = generate_share_sas(config, share_name)?;
     let dest_url = format!(
-        "https://{}.file.core.windows.net/{}/",
-        config.storage_account, share_name
+        "https://{}.file.core.windows.net/{}?{}",
+        config.storage_account, share_name, sas
     );
     let output = Command::new("azcopy")
         .arg("copy")
         .arg(format!("{}/*", workspace_dir.display()))
         .arg(&dest_url)
         .arg("--recursive")
-        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
-        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "azcopy copy to {} failed:\n{}",
-                dest_url,
+                "azcopy copy to share {} failed:\n{}",
+                share_name,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -1452,25 +1487,24 @@ fn download_workspace_from_share(
     share_name: &str,
     workspace_dir: &Path,
 ) -> Result<(), RunTaskError> {
-    // Use azcopy for faster parallel downloads
+    // Generate SAS token for azcopy auth
+    let sas = generate_share_sas(config, share_name)?;
     let source_url = format!(
-        "https://{}.file.core.windows.net/{}/*",
-        config.storage_account, share_name
+        "https://{}.file.core.windows.net/{}/*?{}",
+        config.storage_account, share_name, sas
     );
     let output = Command::new("azcopy")
         .arg("copy")
         .arg(&source_url)
         .arg(workspace_dir)
         .arg("--recursive")
-        .env("AZURE_STORAGE_ACCOUNT", &config.storage_account)
-        .env("AZURE_STORAGE_KEY", &config.storage_key)
         .output()?;
     if !output.status.success() {
         return Err(RunTaskError::CodexFailed {
             status: output.status.code(),
             output: format!(
-                "azcopy copy {} failed:\n{}",
-                source_url,
+                "azcopy copy from share {} failed:\n{}",
+                share_name,
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
@@ -4393,6 +4427,23 @@ printf '%s\n' "$@" > "$capture_file"
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
         fs::write(workspace_dir.join("test.txt"), "test content").expect("write test file");
 
+        // Fake az that outputs a fake SAS token when called with generate-sas
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+if echo "$@" | grep -q "generate-sas"; then
+    echo "sv=2022-11-02&ss=f&srt=sco&sp=rwdlc&se=2099-01-01&sig=fakesig"
+else
+    exit 0
+fi
+"#,
+        )
+        .expect("write fake az");
+        let mut az_perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        az_perms.set_mode(0o755);
+        fs::set_permissions(&az_path, az_perms).expect("chmod fake az");
+
         let capture_path = temp.path().join("azcopy-args.txt");
         let azcopy_path = bin_dir.join("azcopy");
         fs::write(
@@ -4453,6 +4504,23 @@ printf '%s\n' "$@" > "$capture_file"
         let workspace_dir = temp.path().join("workspace");
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+
+        // Fake az that outputs a fake SAS token when called with generate-sas
+        let az_path = bin_dir.join("az");
+        fs::write(
+            &az_path,
+            r#"#!/bin/sh
+if echo "$@" | grep -q "generate-sas"; then
+    echo "sv=2022-11-02&ss=f&srt=sco&sp=rwdlc&se=2099-01-01&sig=fakesig"
+else
+    exit 0
+fi
+"#,
+        )
+        .expect("write fake az");
+        let mut az_perms = fs::metadata(&az_path).expect("az metadata").permissions();
+        az_perms.set_mode(0o755);
+        fs::set_permissions(&az_path, az_perms).expect("chmod fake az");
 
         let capture_path = temp.path().join("azcopy-args.txt");
         let azcopy_path = bin_dir.join("azcopy");
