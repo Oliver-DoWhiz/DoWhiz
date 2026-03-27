@@ -64,6 +64,21 @@ pub fn append_timing_to_file(timing: &TaskTiming) {
     }
 }
 
+/// Clear the timing log file, removing all recorded entries.
+/// Returns Ok(()) if successful or if the file doesn't exist.
+pub fn clear_timing_log() -> std::io::Result<()> {
+    let path = timing_log_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+/// Get the path to the timing log file.
+pub fn get_timing_log_path() -> PathBuf {
+    timing_log_path()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TaskTiming {
     pub task_id: String,
