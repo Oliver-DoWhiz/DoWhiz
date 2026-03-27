@@ -1014,7 +1014,7 @@ fn run_codex_task_azure_aci(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
-    let env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
+    let mut env_overrides = dedupe_env_overrides_last_wins(&env_overrides);
 
     let container_name = build_aci_container_name();
     let timeout = run_task_timeout();
@@ -1072,6 +1072,22 @@ fn run_codex_task_azure_aci(
     } else {
         add_dirs.clone()
     };
+
+    // Override HOME and CODEX_HOME when using ephemeral shares (files uploaded to share root)
+    if ephemeral_guard.is_some() {
+        env_overrides.push((
+            "HOME".to_string(),
+            effective_container_workspace.to_string_lossy().into_owned(),
+        ));
+        env_overrides.push((
+            "CODEX_HOME".to_string(),
+            format!(
+                "{}/{}",
+                effective_container_workspace.to_string_lossy(),
+                DOCKER_CODEX_HOME_DIR
+            ),
+        ));
+    }
 
     eprintln!(
         "[run_task] azure_aci create container={} resource_group={} image={}",
