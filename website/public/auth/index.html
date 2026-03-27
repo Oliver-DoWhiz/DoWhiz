@@ -1944,12 +1944,14 @@
       const SUPABASE_URL = 'https://resmseutzmwumflevfqw.supabase.co';
       const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlc21zZXV0em13dW1mbGV2ZnF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxNTQ1MjIsImV4cCI6MjA4NTczMDUyMn0.-QMndwi4m8nBtjMeS5WbDmrHZSe2l1UFY-UQJCl0Frc';
       const isStaging = window.location.hostname.includes('staging') || window.location.hostname.includes('dowhizstaging');
-      const DOWHIZ_API_URL = window.location.hostname === 'localhost'
+      const LOCAL_DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+      const isLocalDevHost = LOCAL_DEV_HOSTNAMES.has(window.location.hostname);
+      const DOWHIZ_API_URL = isLocalDevHost
         ? 'http://localhost:9001'
         : isStaging
           ? 'https://api.staging.dowhiz.com/service'
           : 'https://api.production1.dowhiz.com/service';
-      const DOWHIZ_GATEWAY_URL = window.location.hostname === 'localhost'
+      const DOWHIZ_GATEWAY_URL = isLocalDevHost
         ? 'http://localhost:9100'
         : isStaging
           ? 'https://api.staging.dowhiz.com'
@@ -2371,6 +2373,23 @@
           return 'Password must be at least 6 characters.';
         }
         return message;
+      }
+
+      function normalizeApiFetchError(error, context = 'service') {
+        if (!error) return 'Something went wrong.';
+        const message = error.message || 'Something went wrong.';
+        const lower = message.toLowerCase();
+        const isNetworkError = lower.includes('failed to fetch') || lower.includes('networkerror');
+        if (!isNetworkError) {
+          return message;
+        }
+        if (!isLocalDevHost) {
+          return message;
+        }
+        if (context === 'gateway') {
+          return 'Could not reach the local DoWhiz gateway. Start it with ./DoWhiz_service/scripts/run_gateway_local.sh and try again.';
+        }
+        return 'Could not reach the local DoWhiz service. Make sure MongoDB is running, then start ./DoWhiz_service/scripts/run_employee.sh little_bear 9001 --skip-hook --skip-ngrok and reload this page.';
       }
 
       function normalizeWorkspaceText(value, fallback = 'Not set') {
@@ -3810,7 +3829,7 @@
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
           console.error('Failed to create brief:', err);
-          showMessage(err.message || 'Failed to create brief. Please try again.');
+          showMessage(normalizeApiFetchError(err, 'gateway'));
         } finally {
           if (btn) {
             btn.disabled = false;
@@ -3882,7 +3901,7 @@
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
           console.error('Failed to create 90-day plan:', err);
-          showMessage(err.message || 'Failed to create 90-day plan. Please try again.');
+          showMessage(normalizeApiFetchError(err, 'gateway'));
         } finally {
           if (btn) {
             btn.disabled = false;
@@ -4583,6 +4602,7 @@
 
           showDashboard(session, accountData);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           // On error, show sign-in form with error message
           setDashboardMode(false);
           signinFormContainer.classList.remove('hidden');
@@ -4592,7 +4612,7 @@
             error_type: 'post_auth_signup_failed',
             error: err.message
           });
-          showMessage(err.message);
+          showMessage(displayMessage);
         }
       }
 
@@ -4676,7 +4696,10 @@
           loadWorkspaceSummaryFromStorage();
           renderNextSteps(cachedIdentifiers);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load identifiers:', err);
+          list.innerHTML = `<li class="identifier-item">${escapeHtml(displayMessage)}</li>`;
+          showMessage(displayMessage);
         }
       }
 
@@ -4702,7 +4725,7 @@
           // Refresh tasks to remove tasks from the unlinked channel
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
-          showMessage(err.message);
+          showMessage(normalizeApiFetchError(err));
         }
       }
 
@@ -4723,8 +4746,9 @@
           memoContent.value = data.content;
           cachedMemoContent = data.content || '';
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load memo:', err);
-          memoContent.value = `Error loading memo: ${err.message}`;
+          memoContent.value = `Error loading memory: ${displayMessage}`;
           cachedMemoContent = '';
         }
         loadWorkspaceSummaryFromStorage();
@@ -5387,9 +5411,10 @@
           loadWorkspaceSummaryFromStorage();
           renderNextSteps(cachedIdentifiers);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load tasks:', err);
           cachedTasks = [];
-          taskList.innerHTML = `<li class="task-item" style="text-align: center; color: #ef4444;">Error loading tasks: ${err.message}</li>`;
+          taskList.innerHTML = `<li class="task-item" style="text-align: center; color: #ef4444;">Error loading tasks: ${escapeHtml(displayMessage)}</li>`;
           loadWorkspaceSummaryFromStorage();
           renderNextSteps(cachedIdentifiers);
         } finally {
