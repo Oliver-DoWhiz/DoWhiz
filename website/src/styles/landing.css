@@ -2385,13 +2385,31 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--tool-accent) 28%, var(--glass-border));
-  background: color-mix(in srgb, var(--tool-accent) 12%, #ffffff);
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--tool-accent) 10%, #ffffff);
+  color: color-mix(in srgb, var(--tool-accent) 86%, #121212);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.hero-tool-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.hero-tool-icon-image {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.hero-tool-fallback {
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.06em;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
 }
 
 .hero-tool-action {
