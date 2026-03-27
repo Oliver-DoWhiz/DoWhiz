@@ -19,6 +19,7 @@ use crate::ingestion_queue::{build_queue_from_env, IngestionQueue};
 use crate::message_router::MessageRouter;
 use crate::mongo_store::{
     bootstrap_indexes_from_env, health_check_from_env, mongo_database_name_from_env,
+    MongoStoreError,
 };
 use crate::slack_store::{SlackInstallation, SlackStore};
 use crate::storage_backend::StorageBackend;
@@ -39,18 +40,53 @@ use super::scheduler::start_scheduler_threads;
 use super::state::AppState;
 use super::BoxError;
 
+fn format_mongo_startup_error_message(raw: &str, missing_uri: bool) -> String {
+    if missing_uri {
+        return "MongoDB is required for local auth/dashboard flows, but MONGODB_URI is not set. Add it to DoWhiz_service/.env and retry.".to_string();
+    }
+
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("outofdiskspace") {
+        return "MongoDB is running but refusing requests because the machine is below MongoDB's free-disk threshold. Free at least 500 MB on the volume backing MONGODB_URI, then retry.".to_string();
+    }
+    if lower.contains("server selection timeout")
+        || lower.contains("no available servers")
+        || lower.contains("connection refused")
+    {
+        return "MongoDB is not reachable at the configured MONGODB_URI. Start a local mongod (or point MONGODB_URI at a reachable deployment) before running ./DoWhiz_service/scripts/run_employee.sh.".to_string();
+    }
+
+    format!(
+        "MongoDB health check failed. Ensure MONGODB_URI points to a reachable MongoDB instance with enough free disk space. Original error: {raw}"
+    )
+}
+
+fn format_mongo_startup_error(err: &MongoStoreError) -> String {
+    format_mongo_startup_error_message(
+        &err.to_string(),
+        matches!(err, MongoStoreError::MissingMongoUri),
+    )
+}
+
 pub async fn run_server(
     config: ServiceConfig,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), BoxError> {
     let storage_backend = StorageBackend::from_env();
     if storage_backend.uses_mongo() {
-        task::spawn_blocking(health_check_from_env)
+        let mongo_health = task::spawn_blocking(health_check_from_env)
             .await
-            .map_err(|err| -> BoxError { err.into() })??;
-        task::spawn_blocking(bootstrap_indexes_from_env)
+            .map_err(|err| -> BoxError { err.into() })?;
+        if let Err(err) = mongo_health {
+            return Err(std::io::Error::other(format_mongo_startup_error(&err)).into());
+        }
+
+        let mongo_bootstrap = task::spawn_blocking(bootstrap_indexes_from_env)
             .await
-            .map_err(|err| -> BoxError { err.into() })??;
+            .map_err(|err| -> BoxError { err.into() })?;
+        if let Err(err) = mongo_bootstrap {
+            return Err(std::io::Error::other(format_mongo_startup_error(&err)).into());
+        }
         info!(
             "mongo backend enabled backend={:?} database={}",
             storage_backend,
@@ -264,6 +300,35 @@ pub async fn run_server(
 
     serve_result?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_mongo_startup_error_message;
+
+    #[test]
+    fn mongo_startup_error_mentions_missing_uri() {
+        let message = format_mongo_startup_error_message("mongodb error: missing uri", true);
+        assert!(message.contains("MONGODB_URI"));
+    }
+
+    #[test]
+    fn mongo_startup_error_mentions_reachability() {
+        let message = format_mongo_startup_error_message(
+            "mongodb error: Server selection timeout: No available servers. Topology: { Type: Unknown, Servers: [ { Address: 127.0.0.1:27017, Type: Unknown, Error: Kind: I/O error: Connection refused (os error 61), labels: {} } ] }",
+            false,
+        );
+        assert!(message.contains("not reachable"));
+    }
+
+    #[test]
+    fn mongo_startup_error_mentions_disk_threshold() {
+        let message = format_mongo_startup_error_message(
+            "mongodb error: Command failed: OutOfDiskSpace",
+            false,
+        );
+        assert!(message.contains("500 MB"));
+    }
 }
 
 async fn health() -> impl IntoResponse {

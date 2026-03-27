@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Sign in to DoWhiz and manage your dashboard settings, channels, and tasks." />
+    <meta name="description" content="Sign in to set up Oliver, connect your apps, review tasks, and save the preferences Oliver should remember." />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260311" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260311" />
@@ -12,7 +12,7 @@
     <link rel="manifest" href="/site.webmanifest?v=20260311" />
     <link rel="canonical" href="https://dowhiz.com/auth/" />
     <link rel="stylesheet" href="/legal.css" />
-    <title>Sign In | DoWhiz</title>
+    <title>Set Up Oliver | DoWhiz</title>
     <style>
       .auth-container {
         max-width: 800px;
@@ -865,6 +865,48 @@
         margin-bottom: 1rem;
       }
 
+      .overview-callout {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 0 0 1rem;
+        padding: 1rem;
+        border-radius: 0.95rem;
+        border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 30%, var(--border, #333));
+        background:
+          linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--surface, #1a1a1a) 88%, rgba(56, 189, 248, 0.16)),
+            color-mix(in srgb, var(--surface, #1a1a1a) 96%, rgba(15, 23, 42, 0.42))
+          );
+      }
+
+      .overview-callout-copy {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .overview-kicker {
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--text-muted, #888);
+        font-weight: 700;
+      }
+
+      .overview-callout-copy h3 {
+        margin: 0;
+        font-size: 1.12rem;
+        line-height: 1.3;
+      }
+
+      .overview-callout-copy p {
+        margin: 0;
+        color: var(--text-muted, #888);
+        line-height: 1.5;
+      }
+
       .workspace-recommendation-card {
         display: grid;
         gap: 0.9rem;
@@ -1073,14 +1115,35 @@
         gap: 0.75rem;
       }
 
+      .next-step-section-intro {
+        margin: 0;
+        color: var(--text-muted, #888);
+        font-size: 0.9rem;
+      }
+
+      .next-step-progress {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 86px;
+        padding: 0.35rem 0.7rem;
+        border-radius: 999px;
+        border: 1px solid var(--border, #333);
+        background: color-mix(in srgb, var(--surface, #1a1a1a) 82%, transparent);
+        color: var(--text-muted, #888);
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+
       .next-step-item {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         padding: 1rem;
         border-radius: 0.7rem;
         border: 1px solid var(--border, #333);
         background: color-mix(in srgb, var(--surface, #1a1a1a) 82%, transparent);
+        gap: 0.85rem;
       }
 
       .next-step-info {
@@ -1100,6 +1163,7 @@
 
       .next-step-action {
         margin-left: 1rem;
+        flex-shrink: 0;
       }
 
       .next-step-complete {
@@ -1311,6 +1375,21 @@
       }
 
       @media (max-width: 780px) {
+        .overview-callout,
+        .workspace-recommendation-actions,
+        .next-step-item {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .next-step-action {
+          margin-left: 0;
+        }
+
+        .next-step-progress {
+          width: fit-content;
+        }
+
         .account-grid,
         .workspace-recommendation-grid,
         .workspace-summary-grid,
@@ -1452,10 +1531,10 @@
                 <span class="dashboard-home-link-name">DoWhiz Home</span>
               </span>
             </a>
-            <h1 id="page-title">Sign in to DoWhiz</h1>
+            <h1 id="page-title">Sign in to set up Oliver</h1>
           </div>
           <p class="lead" id="page-subtitle">
-            Open one unified dashboard for team workspace context and personal account controls.
+            Connect your apps, give Oliver one small task, and review the result from one personal setup page.
           </p>
         </section>
 
@@ -1547,15 +1626,15 @@
           <div id="dashboard-container" class="hidden">
             <div class="dashboard-shell">
               <aside class="dashboard-sidebar">
-                <p class="sidebar-eyebrow">Unified Dashboard</p>
-                <h2 class="sidebar-title">Team + Personal</h2>
-                <p class="sidebar-description">One page for workspace context, channels, tasks, memo, and account controls.</p>
+                <p class="sidebar-eyebrow">Your Oliver</p>
+                <h2 class="sidebar-title">Setup and control</h2>
+                <p class="sidebar-description">Connect apps, review tasks, save memory, and decide how Oliver should work for you.</p>
                 <nav class="sidebar-nav" aria-label="Dashboard Sections">
                   <a class="sidebar-link is-active" href="#section-overview">Overview</a>
-                  <a class="sidebar-link" href="#section-workspace">Team Workspace</a>
-                  <a class="sidebar-link" href="#section-channels">Channels</a>
+                  <a class="sidebar-link" href="#section-workspace">Getting Started</a>
+                  <a class="sidebar-link" href="#section-channels">Connected Apps</a>
                   <a class="sidebar-link" href="#section-tasks">Tasks</a>
-                  <a class="sidebar-link" href="#section-memo">Memo</a>
+                  <a class="sidebar-link" href="#section-memo">Memory</a>
                   <a class="sidebar-link" href="#section-settings">Settings</a>
                 </nav>
                 <div class="sidebar-note">
@@ -1570,10 +1649,18 @@
               <div class="dashboard-main">
                 <section id="section-overview" class="legal-card dashboard-section">
                   <div class="dashboard-header">
-                    <h2>Personal Overview</h2>
+                    <h2>Overview</h2>
                     <button id="info-btn" class="auth-btn auth-btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
-                      Add Employee Hours
+                      Billing and usage
                     </button>
+                  </div>
+                  <div class="overview-callout">
+                    <div class="overview-callout-copy">
+                      <span class="overview-kicker">First run</span>
+                      <h3>Help Oliver succeed on one small task first</h3>
+                      <p>Connect one app, try one real request, save a preference, and review the result before you expand the setup.</p>
+                    </div>
+                    <a class="auth-btn auth-btn-primary" href="#section-workspace">Open getting started</a>
                   </div>
                   <div id="achievement-badges" class="achievement-badges">
                     <span class="achievement-badge badge-bronze" data-threshold="1" data-tooltip="Bronze: Awarded for 1+ employee hours">
@@ -1613,14 +1700,14 @@
                       Diamond
                     </span>
                   </div>
-                  <p class="dashboard-overview-copy">Your personal identity and billing controls.</p>
+                  <p class="dashboard-overview-copy">Account basics, usage, and the current state of your Oliver setup.</p>
                   <div class="account-grid">
                     <div class="account-meta-item">
-                      <p class="account-meta-label">Account ID</p>
+                      <p class="account-meta-label">Account</p>
                       <span id="account-id">Loading...</span>
                     </div>
                     <div class="account-meta-item">
-                      <p class="account-meta-label">Primary Email</p>
+                      <p class="account-meta-label">Sign-in email</p>
                       <span id="user-email">Loading...</span>
                     </div>
                   </div>
@@ -1628,38 +1715,44 @@
 
                 <section id="section-workspace" class="legal-card dashboard-section">
                   <div class="dashboard-header">
-                    <h2>Team Workspace</h2>
-                    <a id="update-team-brief-btn" class="auth-btn auth-btn-oauth" href="/start">Update Team Brief</a>
+                    <h2>Getting Started</h2>
+                    <a id="update-team-brief-btn" class="auth-btn auth-btn-oauth" href="#section-settings">Open Connections</a>
                   </div>
                   <p class="dashboard-overview-copy">
-                    Concise team context shared across your channels and task runtime.
+                    Set up the smallest useful loop first: connect one app, give Oliver one real task, review the result, then save what should repeat.
                   </p>
                   <div id="workspace-recommendation-card" class="workspace-recommendation-card">
-                    <div class="workspace-recommendation-empty">Reviewing your workspace for the next best move...</div>
+                    <div class="workspace-recommendation-empty">Reviewing your setup for the clearest next step...</div>
                   </div>
                   <div id="workspace-summary-content" class="workspace-summary-grid">
-                    <div class="workspace-summary-empty">Loading workspace summary...</div>
+                    <div class="workspace-summary-empty">Loading your setup snapshot...</div>
                   </div>
 
                   <div id="workspace-next-steps" class="workspace-next-steps" style="margin-top: 2rem;">
-                    <h3 style="margin-bottom: 1rem;">Next Steps</h3>
+                    <div class="dashboard-header">
+                      <div>
+                        <h3 style="margin-bottom: 0.35rem;">First-run checklist</h3>
+                        <p class="next-step-section-intro">Keep the first win small, personal, and easy to review.</p>
+                      </div>
+                      <span id="next-steps-progress" class="next-step-progress">0 of 4 done</span>
+                    </div>
                     <div id="next-steps-list" class="next-steps-list">
-                      <p style="color: var(--text-muted, #888);">Loading next steps...</p>
+                      <p style="color: var(--text-muted, #888);">Loading your checklist...</p>
                     </div>
                   </div>
                 </section>
 
                 <section id="section-channels" class="legal-card dashboard-section">
-                  <h2>Connected Channels</h2>
-                  <p>Channels currently linked to your unified account workspace.</p>
+                  <h2>Connected Apps</h2>
+                  <p>These are the apps and entry points Oliver can currently work in for you.</p>
                   <ul id="identifier-list" class="identifier-list">
                     <li class="identifier-item">Loading...</li>
                   </ul>
                 </section>
 
                 <section id="section-tasks" class="legal-card dashboard-section">
-                  <h2>Task Center</h2>
-                  <p>Scheduled tasks from all connected channels.</p>
+                  <h2>Tasks</h2>
+                  <p>Tasks that arrive through your connected apps show up here so you can review progress and results.</p>
                   <div class="tasks-header">
                     <div class="tasks-controls">
                       <button id="refresh-tasks-btn" class="auth-btn auth-btn-oauth">
@@ -1678,8 +1771,8 @@
                 </section>
 
                 <section id="section-memo" class="legal-card dashboard-section">
-                  <h2>Unified Memo</h2>
-                  <p>Edit and save the memo shared across your channels.</p>
+                  <h2>Memory</h2>
+                  <p>Save the tone, context, and rules Oliver should remember across tasks.</p>
                   <div id="memo-container" style="margin-top: 1rem;">
                     <textarea id="memo-content" style="
                       background: var(--surface, #1a1a1a);
@@ -1707,12 +1800,12 @@
                 </section>
 
                 <section id="section-settings" class="legal-card dashboard-section">
-                  <h2>Channel Settings</h2>
-                  <p>Connect channels with OAuth, or configure channel IDs manually.</p>
+                  <h2>Settings</h2>
+                  <p>Connect apps, manage entry points, and choose how proactive Oliver should be.</p>
                   <div class="settings-grid">
                     <div class="settings-panel">
-                      <h3>Quick Connect</h3>
-                      <p>Use one-click OAuth for supported channels.</p>
+                      <h3>Connect apps</h3>
+                      <p>Use one-click OAuth for the apps Oliver can already work in.</p>
                       <div class="channel-connect-actions">
                         <button id="discord-oauth-btn" class="auth-btn auth-btn-oauth" style="display: flex; align-items: center; gap: 0.5rem;">
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -1753,8 +1846,8 @@
                     </div>
 
                     <div class="settings-panel">
-                      <h3>Manual Linking</h3>
-                      <p>Link a channel by entering your identifier directly.</p>
+                      <h3>Manual linking</h3>
+                      <p>Add an email, phone number, or chat identifier Oliver should recognize for your account.</p>
                       <form id="link-form" class="auth-form">
                         <select id="link-type" class="auth-input">
                           <option value="email">Email</option>
@@ -1765,16 +1858,16 @@
                         </select>
                         <input type="text" id="link-identifier" class="auth-input" placeholder="e.g., you@example.com" required />
                         <p id="link-help" style="font-size: 0.85rem; color: var(--text-muted, #888); margin: 0;">
-                          Enter the email address you want to link. A verification email will be sent to confirm ownership.
+                          Enter the address or identifier you want Oliver to work through. Verification is required where supported.
                         </p>
-                        <button type="submit" class="auth-btn auth-btn-primary">Link Channel</button>
+                        <button type="submit" class="auth-btn auth-btn-primary">Link connection</button>
                         <div id="link-message" class="auth-message hidden" style="margin-top: 0.5rem; margin-bottom: 0;"></div>
                       </form>
                     </div>
 
                     <div class="settings-panel">
-                      <h3>Chief of Staff</h3>
-                      <p>Choose how proactive DoWhiz should be when it sees a clear next move.</p>
+                      <h3>Oliver guidance</h3>
+                      <p>Choose how proactive Oliver should be when there is a clear next step in your setup or task flow.</p>
                       <div class="proactivity-settings">
                         <label for="proactivity-level-select" class="proactivity-settings-label">Recommendation mode</label>
                         <select id="proactivity-level-select" class="auth-input">
@@ -1784,7 +1877,7 @@
                           <option value="hands_on">Hands-on</option>
                         </select>
                         <p class="settings-panel-note">
-                          Minimal keeps it to one dashboard suggestion at a time. Helpful and Hands-on are stored now so we can expand them safely later.
+                          Minimal keeps it to one clear suggestion at a time. Helpful and Hands-on are stored now so we can expand them safely later.
                         </p>
                         <div id="proactivity-level-status" class="settings-inline-status">Loading saved preference...</div>
                       </div>
@@ -1851,12 +1944,14 @@
       const SUPABASE_URL = 'https://resmseutzmwumflevfqw.supabase.co';
       const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlc21zZXV0em13dW1mbGV2ZnF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxNTQ1MjIsImV4cCI6MjA4NTczMDUyMn0.-QMndwi4m8nBtjMeS5WbDmrHZSe2l1UFY-UQJCl0Frc';
       const isStaging = window.location.hostname.includes('staging') || window.location.hostname.includes('dowhizstaging');
-      const DOWHIZ_API_URL = window.location.hostname === 'localhost'
+      const LOCAL_DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+      const isLocalDevHost = LOCAL_DEV_HOSTNAMES.has(window.location.hostname);
+      const DOWHIZ_API_URL = isLocalDevHost
         ? 'http://localhost:9001'
         : isStaging
           ? 'https://api.staging.dowhiz.com/service'
           : 'https://api.production1.dowhiz.com/service';
-      const DOWHIZ_GATEWAY_URL = window.location.hostname === 'localhost'
+      const DOWHIZ_GATEWAY_URL = isLocalDevHost
         ? 'http://localhost:9100'
         : isStaging
           ? 'https://api.staging.dowhiz.com'
@@ -2070,8 +2165,8 @@
         active_blocker: 'Active blocker',
         first_value_gap: 'First value',
         setup_blocker: 'Setup blocker',
-        continuation_opportunity: 'Continuation',
-        idle_workspace: 'Idle workspace'
+        continuation_opportunity: 'Continue setup',
+        idle_workspace: 'Ready when you are'
       };
       const RECOMMENDATION_PROVIDER_BUTTON_IDS = {
         discord: 'discord-oauth-btn',
@@ -2081,11 +2176,11 @@
         lark: 'lark-oauth-btn'
       };
       const RECOMMENDATION_SECTION_LABELS = {
-        'section-channels': 'Open Channels',
-        'section-memo': 'Open Memo',
+        'section-channels': 'Open Connected Apps',
+        'section-memo': 'Open Memory',
         'section-settings': 'Open Settings',
-        'section-tasks': 'Open Task Center',
-        'section-workspace': 'Open Team Workspace'
+        'section-tasks': 'Open Tasks',
+        'section-workspace': 'Open Getting Started'
       };
       const WORKSPACE_RECOMMENDATION_CACHE_KEY = 'dowhiz_workspace_recommendation_cache_v2';
       const WORKSPACE_RECOMMENDATION_SUPPRESSION_KEY = 'dowhiz_workspace_recommendation_suppression_v1';
@@ -2280,6 +2375,23 @@
         return message;
       }
 
+      function normalizeApiFetchError(error, context = 'service') {
+        if (!error) return 'Something went wrong.';
+        const message = error.message || 'Something went wrong.';
+        const lower = message.toLowerCase();
+        const isNetworkError = lower.includes('failed to fetch') || lower.includes('networkerror');
+        if (!isNetworkError) {
+          return message;
+        }
+        if (!isLocalDevHost) {
+          return message;
+        }
+        if (context === 'gateway') {
+          return 'Could not reach the local DoWhiz gateway. Start it with ./DoWhiz_service/scripts/run_gateway_local.sh and try again.';
+        }
+        return 'Could not reach the local DoWhiz service. Make sure MongoDB is running, then start ./DoWhiz_service/scripts/run_employee.sh little_bear 9001 --skip-hook --skip-ngrok and reload this page.';
+      }
+
       function normalizeWorkspaceText(value, fallback = 'Not set') {
         const normalized = String(value || '').trim();
         return normalized || fallback;
@@ -2334,9 +2446,7 @@
         if (!updateTeamBriefBtn) {
           return;
         }
-        const workspaceBlueprint = loadWorkspaceBlueprintFromStorage();
-        const href = hasSavedTeamBrief(workspaceBlueprint) ? '/start?mode=edit' : '/start';
-        updateTeamBriefBtn.setAttribute('href', href);
+        updateTeamBriefBtn.setAttribute('href', '#section-settings');
       }
 
       function loadWorkspaceSummaryFromStorage() {
@@ -2347,57 +2457,48 @@
         const workspaceBlueprint = loadWorkspaceBlueprintFromStorage();
         updateTeamBriefLinkFromStorage();
 
-        const workspaceName = normalizeWorkspaceText(
-          workspaceBlueprint?.venture?.name,
-          'Personal Workspace'
-        );
-        const founderName = normalizeWorkspaceText(
-          workspaceBlueprint?.founder?.name,
-          'Add your founder name'
-        );
-        const stage = normalizeWorkspaceText(workspaceBlueprint?.venture?.stage, 'Not set');
-        const thesis = normalizeWorkspaceText(
-          workspaceBlueprint?.venture?.thesis,
-          'Add a short founder thesis to personalize your team context.'
-        );
+        const connectedTypes = connectedProviderTypes(cachedIdentifiers);
+        const successfulTaskCount = countSuccessfulTasks(cachedTasks);
+        const taskCount = Array.isArray(cachedTasks) ? cachedTasks.length : 0;
+        const hasMemory = hasSavedMemoryNote();
+        const memoLines = getMemoValue()
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .slice(0, 3);
+        const savedFocus = normalizeWorkspaceList(workspaceBlueprint?.goals_30_90_days).slice(0, 3);
 
-        const goals = normalizeWorkspaceList(workspaceBlueprint?.goals_30_90_days).slice(0, 3);
-        const channels = normalizeWorkspaceList(workspaceBlueprint?.preferred_channels).slice(0, 5);
-        const agents = normalizeWorkspaceAgents(workspaceBlueprint?.requested_agents).slice(0, 4);
-
-        const goalItems = goals.length
-          ? goals.map((goal) => `<li>${escapeHtml(goal)}</li>`).join('')
-          : '<li>Add your top goals in founder intake.</li>';
-
-        const channelItems = channels.length
-          ? channels.map((channel) => `<li>${escapeHtml(channel)}</li>`).join('')
-          : '<li>No channels selected yet.</li>';
-
-        const agentItems = agents.length
-          ? agents.map((agent) => {
-            const owner = agent.owner ? ` (${escapeHtml(agent.owner)})` : '';
-            return `<li>${escapeHtml(agent.role)}${owner}</li>`;
-          }).join('')
-          : '<li>No agent roles defined yet.</li>';
+        const setupSummary = connectedTypes.length
+          ? `${connectedTypes.length} app${connectedTypes.length === 1 ? '' : 's'} connected`
+          : 'Start with one connected app';
+        const connectedItems = connectedTypes.length
+          ? connectedTypes.map((provider) => `<li>${escapeHtml(providerDisplayName(provider))}</li>`).join('')
+          : '<li>Connect the first app where Oliver should receive work.</li>';
+        const memoryItems = hasMemory
+          ? memoLines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')
+          : (savedFocus.length
+            ? savedFocus.map((goal) => `<li>${escapeHtml(goal)}</li>`).join('')
+            : [
+                'Your preferred tone or writing style',
+                'Sensitive actions that should wait for approval',
+                'Recurring context Oliver should remember'
+              ].map((item) => `<li>${escapeHtml(item)}</li>`).join(''));
+        const memoryTitle = hasMemory ? 'Memory preview' : (savedFocus.length ? 'Saved focus' : 'What to save next');
 
         container.innerHTML = `
           <article class="workspace-summary-card">
-            <h3>Snapshot</h3>
-            <p class="workspace-summary-meta"><strong>${escapeHtml(workspaceName)}</strong></p>
-            <p class="workspace-summary-meta">Founder: <strong>${escapeHtml(founderName)}</strong></p>
-            <p class="workspace-summary-meta">Stage: <strong>${escapeHtml(stage)}</strong></p>
-            <p class="workspace-summary-meta">${escapeHtml(thesis)}</p>
+            <h3>Your setup</h3>
+            <p class="workspace-summary-meta"><strong>${escapeHtml(setupSummary)}</strong></p>
+            <p class="workspace-summary-meta">${taskCount} task${taskCount === 1 ? '' : 's'} seen so far${successfulTaskCount > 0 ? `, ${successfulTaskCount} completed successfully` : ''}.</p>
+            <p class="workspace-summary-meta">${hasMemory ? 'Memory is saved and ready to reuse.' : 'Add a short memory note so Oliver can stay consistent.'}</p>
           </article>
           <article class="workspace-summary-card">
-            <h3>Top Goals</h3>
-            <ul class="workspace-summary-list">${goalItems}</ul>
+            <h3>Connected apps</h3>
+            <ul class="workspace-summary-list">${connectedItems}</ul>
           </article>
           <article class="workspace-summary-card">
-            <h3>Team + Channels</h3>
-            <p class="workspace-summary-meta">Agents</p>
-            <ul class="workspace-summary-list">${agentItems}</ul>
-            <p class="workspace-summary-meta">Channels</p>
-            <ul class="workspace-summary-list">${channelItems}</ul>
+            <h3>${memoryTitle}</h3>
+            <ul class="workspace-summary-list">${memoryItems}</ul>
           </article>
         `;
 
@@ -2448,22 +2549,308 @@
           .join(' ');
       }
 
+      function connectedProviderTypes(identifiers = cachedIdentifiers) {
+        const supportedProviders = new Set(Object.keys(RECOMMENDATION_PROVIDER_BUTTON_IDS));
+        return Array.from(
+          new Set(
+            (Array.isArray(identifiers) ? identifiers : [])
+              .map((item) => String(item?.identifier_type || '').trim().toLowerCase())
+              .filter((provider) => supportedProviders.has(provider))
+          )
+        );
+      }
+
+      function providerDisplayName(provider) {
+        const normalized = String(provider || '').trim().toLowerCase();
+        if (normalized === 'github') {
+          return 'GitHub';
+        }
+        return formatRecommendationToken(normalized);
+      }
+
+      function summarizeConnectedProviders(providers = connectedProviderTypes()) {
+        const items = (Array.isArray(providers) ? providers : []).map((provider) => providerDisplayName(provider));
+        if (items.length === 0) {
+          return 'no apps yet';
+        }
+        if (items.length === 1) {
+          return items[0];
+        }
+        if (items.length === 2) {
+          return `${items[0]} and ${items[1]}`;
+        }
+        return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+      }
+
+      function getMemoValue() {
+        const liveValue = document.getElementById('memo-content')?.value;
+        return String(liveValue ?? cachedMemoContent ?? '').trim();
+      }
+
+      function hasSavedMemoryNote() {
+        const memoValue = getMemoValue();
+        if (!memoValue) {
+          return false;
+        }
+        const lowered = memoValue.toLowerCase();
+        return !lowered.startsWith('loading') && !lowered.startsWith('error loading memo');
+      }
+
+      function taskExecutionStatus(task) {
+        return String(task?.execution_status || '').trim().toLowerCase();
+      }
+
+      function countSuccessfulTasks(tasks = cachedTasks) {
+        return (Array.isArray(tasks) ? tasks : []).filter((task) => taskExecutionStatus(task) === 'success').length;
+      }
+
+      function countReviewableTasks(tasks = cachedTasks) {
+        const terminalStatuses = new Set(['success', 'failed', 'failure', 'error', 'complete', 'completed', 'cancelled']);
+        return (Array.isArray(tasks) ? tasks : []).filter((task) => terminalStatuses.has(taskExecutionStatus(task))).length;
+      }
+
+      function buildPreferredProviderOrder(preferredChannels = []) {
+        const baseOrder = ['notion', 'slack', 'github', 'discord', 'lark'];
+        const preferredOrder = [];
+
+        (Array.isArray(preferredChannels) ? preferredChannels : []).forEach((channel) => {
+          const normalized = String(channel || '').toLowerCase();
+          const matchedProvider = baseOrder.find((provider) => normalized.includes(provider));
+          if (matchedProvider && !preferredOrder.includes(matchedProvider)) {
+            preferredOrder.push(matchedProvider);
+          }
+        });
+
+        return preferredOrder.concat(baseOrder.filter((provider) => !preferredOrder.includes(provider)));
+      }
+
+      function createLocalWorkspaceRecommendation(stateSignature, config) {
+        return {
+          source: 'local_dashboard',
+          recommendation_key: `local_${config.key}`,
+          state_signature: stateSignature,
+          trigger_type: config.triggerType,
+          title: config.title,
+          why_now: config.whyNow,
+          outcome: config.outcome,
+          action: config.action
+        };
+      }
+
+      function buildLocalWorkspaceRecommendationResponse(requestPayload) {
+        const connectedTypes = Array.isArray(requestPayload?.connected_types) ? requestPayload.connected_types : [];
+        const hasMemory = Boolean(requestPayload?.has_saved_memory);
+        const taskCount = Number(requestPayload?.task_count || 0);
+        const successfulTaskCount = Number(requestPayload?.successful_task_count || 0);
+        const reviewableTaskCount = Number(requestPayload?.reviewable_task_count || 0);
+        const preferredChannels = Array.isArray(requestPayload?.preferred_channels) ? requestPayload.preferred_channels : [];
+        const providerOrder = buildPreferredProviderOrder(preferredChannels);
+        const unconnectedProviders = providerOrder.filter((provider) => !connectedTypes.includes(provider));
+        const stateSignature = workspaceRecommendationFingerprint({
+          connected_types: connectedTypes,
+          task_count: taskCount,
+          successful_task_count: successfulTaskCount,
+          reviewable_task_count: reviewableTaskCount,
+          has_saved_memory: hasMemory,
+          preferred_channels: preferredChannels
+        });
+        const recommendations = [];
+
+        const pushRecommendation = (config) => {
+          recommendations.push(createLocalWorkspaceRecommendation(stateSignature, config));
+        };
+
+        if (connectedTypes.length === 0) {
+          pushRecommendation({
+            key: 'connect_first_app',
+            triggerType: 'first_value_gap',
+            title: 'Connect one app Oliver can work in',
+            whyNow: 'Oliver becomes useful fastest when he can work where requests already land.',
+            outcome: 'Once one app is connected, you can send a real request and review the result here.',
+            action: unconnectedProviders[0]
+              ? { kind: 'connect_provider', provider: unconnectedProviders[0] }
+              : { kind: 'open_dashboard_section', section: 'section-settings' }
+          });
+          pushRecommendation({
+            key: 'open_settings',
+            triggerType: 'setup_blocker',
+            title: 'Open Settings and choose your first connection',
+            whyNow: 'The first setup step should stay small and reversible.',
+            outcome: 'You can connect one tool without changing the rest of your workflow.',
+            action: { kind: 'open_dashboard_section', section: 'section-settings' }
+          });
+          if (unconnectedProviders[1]) {
+            pushRecommendation({
+              key: `connect_${unconnectedProviders[1]}`,
+              triggerType: 'continuation_opportunity',
+              title: `Connect ${providerDisplayName(unconnectedProviders[1])} first if that is where work lands`,
+              whyNow: 'Pick the app that already receives the requests you care about most.',
+              outcome: 'Your first Oliver task will feel more natural and easier to review.',
+              action: { kind: 'connect_provider', provider: unconnectedProviders[1] }
+            });
+          }
+        } else if (taskCount === 0) {
+          pushRecommendation({
+            key: 'first_task',
+            triggerType: 'first_value_gap',
+            title: 'Give Oliver one small task in a connected app',
+            whyNow: `You already connected ${summarizeConnectedProviders(connectedTypes)}. The next win is one task you can quickly review.`,
+            outcome: 'Your first task will show up in Tasks so you can see the loop from request to result.',
+            action: { kind: 'open_dashboard_section', section: 'section-tasks' }
+          });
+          if (!hasMemory) {
+            pushRecommendation({
+              key: 'save_memory_next',
+              triggerType: 'setup_blocker',
+              title: 'Save one preference in Memory before you scale up',
+              whyNow: 'A short memory note keeps Oliver closer to your tone, context, and approval rules.',
+              outcome: 'Future drafts and follow-ups need less repetition from you.',
+              action: { kind: 'open_dashboard_section', section: 'section-memo' }
+            });
+          }
+          if (unconnectedProviders[0]) {
+            pushRecommendation({
+              key: `connect_second_${unconnectedProviders[0]}`,
+              triggerType: 'continuation_opportunity',
+              title: `Connect ${providerDisplayName(unconnectedProviders[0])} when you are ready`,
+              whyNow: 'A second surface can wait until the first task feels useful.',
+              outcome: 'Oliver can help in more of your day without turning setup into a project.',
+              action: { kind: 'connect_provider', provider: unconnectedProviders[0] }
+            });
+          }
+        } else if (!hasMemory) {
+          pushRecommendation({
+            key: 'save_memory',
+            triggerType: 'setup_blocker',
+            title: 'Save a short memory note before you expand the setup',
+            whyNow: 'A little saved context helps Oliver keep your tone, rules, and recurring details consistent.',
+            outcome: 'The next task will need less re-explaining and less cleanup.',
+            action: { kind: 'open_dashboard_section', section: 'section-memo' }
+          });
+          pushRecommendation({
+            key: 'review_tasks',
+            triggerType: 'continuation_opportunity',
+            title: 'Review the first task result in Tasks',
+            whyNow: 'The fastest way to build trust is to inspect one finished loop end to end.',
+            outcome: 'You will see what Oliver should keep doing and what should stay behind review.',
+            action: { kind: 'open_dashboard_section', section: 'section-tasks' }
+          });
+          if (unconnectedProviders[0]) {
+            pushRecommendation({
+              key: `connect_next_${unconnectedProviders[0]}`,
+              triggerType: 'continuation_opportunity',
+              title: `Keep setup simple and wait on ${providerDisplayName(unconnectedProviders[0])} for now`,
+              whyNow: 'The first reliable workflow matters more than adding every app immediately.',
+              outcome: 'Once the basics work, expanding to another app is much safer.',
+              action: { kind: 'connect_provider', provider: unconnectedProviders[0] }
+            });
+          }
+        } else if (reviewableTaskCount === 0) {
+          pushRecommendation({
+            key: 'review_in_progress',
+            triggerType: 'setup_blocker',
+            title: 'Check Tasks and review the first result before repeating it',
+            whyNow: 'You have work in motion; the next step is to see how Oliver handled it.',
+            outcome: 'Review gives you a clear sense of what should repeat and what should still need approval.',
+            action: { kind: 'open_dashboard_section', section: 'section-tasks' }
+          });
+          pushRecommendation({
+            key: 'refresh_memory',
+            triggerType: 'continuation_opportunity',
+            title: 'Use Memory to capture what "good" looks like',
+            whyNow: 'A short note now will make the next result more predictable.',
+            outcome: 'Oliver can reuse your context instead of starting fresh every time.',
+            action: { kind: 'open_dashboard_section', section: 'section-memo' }
+          });
+          if (unconnectedProviders[0]) {
+            pushRecommendation({
+              key: `hold_${unconnectedProviders[0]}`,
+              triggerType: 'continuation_opportunity',
+              title: `Wait on ${providerDisplayName(unconnectedProviders[0])} until the first loop is clear`,
+              whyNow: 'More surfaces are helpful only after the first one feels trustworthy.',
+              outcome: 'You will expand from a stronger foundation.',
+              action: { kind: 'connect_provider', provider: unconnectedProviders[0] }
+            });
+          }
+        } else if (unconnectedProviders[0]) {
+          pushRecommendation({
+            key: `expand_${unconnectedProviders[0]}`,
+            triggerType: 'continuation_opportunity',
+            title: `Connect ${providerDisplayName(unconnectedProviders[0])} next`,
+            whyNow: 'You already have a working loop. A second app adds reach without much extra complexity.',
+            outcome: 'Oliver can help in more of the places where requests already arrive.',
+            action: { kind: 'connect_provider', provider: unconnectedProviders[0] }
+          });
+          pushRecommendation({
+            key: 'tune_guidance',
+            triggerType: 'continuation_opportunity',
+            title: 'Adjust how proactive Oliver should be',
+            whyNow: 'Once the basics work, you can decide how often Oliver should nudge you.',
+            outcome: 'Your setup feels more intentional instead of noisier.',
+            action: { kind: 'open_dashboard_section', section: 'section-settings' }
+          });
+          pushRecommendation({
+            key: 'strengthen_memory',
+            triggerType: 'continuation_opportunity',
+            title: 'Add one more preference to Memory',
+            whyNow: 'A little more context helps Oliver stay consistent across tools.',
+            outcome: 'Less repeated prompting and easier approvals.',
+            action: { kind: 'open_dashboard_section', section: 'section-memo' }
+          });
+        } else {
+          pushRecommendation({
+            key: 'keep_focus',
+            triggerType: 'idle_workspace',
+            title: 'Keep Oliver focused on work you want repeated',
+            whyNow: 'You already have connected apps, task history, and saved memory in place.',
+            outcome: 'The next improvement is usually a tighter memory note or clearer approval rule, not more setup.',
+            action: { kind: 'open_dashboard_section', section: 'section-memo' }
+          });
+          pushRecommendation({
+            key: 'review_recent_tasks',
+            triggerType: 'continuation_opportunity',
+            title: 'Review recent task results and tighten the loop',
+            whyNow: 'Past work is the fastest source of signal for what Oliver should do more often.',
+            outcome: 'You can spot what is worth repeating and what needs a different boundary.',
+            action: { kind: 'open_dashboard_section', section: 'section-tasks' }
+          });
+          pushRecommendation({
+            key: 'check_settings',
+            triggerType: 'continuation_opportunity',
+            title: 'Revisit Settings only if you want broader coverage',
+            whyNow: 'More connections help only when they support work you already trust Oliver with.',
+            outcome: 'Expansion stays deliberate instead of noisy.',
+            action: { kind: 'open_dashboard_section', section: 'section-settings' }
+          });
+        }
+
+        return {
+          source: 'local_dashboard',
+          recommendation: recommendations[0] || null,
+          alternatives: recommendations.slice(1, 3)
+        };
+      }
+
+      function isLocalWorkspaceRecommendation(recommendation) {
+        return Boolean(recommendation?.source === 'local_dashboard' || String(recommendation?.recommendation_key || '').startsWith('local_'));
+      }
+
       function recommendationPrimaryActionLabel(recommendation) {
         const actionKind = recommendationActionKind(recommendation);
         if (actionKind === 'connect_provider') {
-          return `Connect ${formatRecommendationToken(recommendation?.action?.provider)}`;
+          return `Connect ${providerDisplayName(recommendation?.action?.provider)}`;
         }
         if (actionKind === 'open_dashboard_section') {
           return RECOMMENDATION_SECTION_LABELS[recommendation?.action?.section] || 'Open section';
         }
         if (actionKind === 'trigger_create_brief') {
-          return 'Create Startup Brief';
+          return 'Open Getting Started';
         }
         if (actionKind === 'trigger_create_plan') {
-          return 'Create Action Plan';
+          return 'Open Tasks';
         }
         if (actionKind === 'update_team_brief') {
-          return 'Update Team Brief';
+          return 'Open Settings';
         }
         return 'Do it';
       }
@@ -2504,25 +2891,27 @@
       function describeProactivityLevel(level) {
         switch (String(level || '').trim()) {
           case 'off':
-            return 'Off: no dashboard recommendation card until you turn it back on.';
+            return 'Off: no Oliver suggestion card until you turn it back on.';
           case 'helpful':
-            return 'Helpful: saved for your account as we expand beyond the dashboard card.';
+            return 'Helpful: saved for your account as we expand beyond the current dashboard nudge.';
           case 'hands_on':
             return 'Hands-on: saved for your account for future deeper proactivity.';
           case 'minimal':
           default:
-            return 'Minimal: one dashboard recommendation at a time.';
+            return 'Minimal: one clear setup suggestion at a time.';
         }
       }
 
       function buildWorkspaceRecommendationRequest() {
         const blueprint = loadWorkspaceBlueprintFromStorage();
-        if (!hasSavedTeamBrief(blueprint)) {
-          return null;
-        }
-
         return {
-          blueprint,
+          connected_types: connectedProviderTypes(cachedIdentifiers),
+          task_count: Array.isArray(cachedTasks) ? cachedTasks.length : 0,
+          successful_task_count: countSuccessfulTasks(cachedTasks),
+          reviewable_task_count: countReviewableTasks(cachedTasks),
+          has_saved_memory: hasSavedMemoryNote(),
+          preferred_channels: normalizeWorkspaceList(blueprint?.preferred_channels).map((item) => item.toLowerCase()).slice(0, 5),
+          has_legacy_context: hasSavedTeamBrief(blueprint),
           client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
           current_surface: 'dashboard'
         };
@@ -2547,7 +2936,12 @@
       function workspaceRecommendationFingerprint(requestPayload) {
         try {
           return hashWorkspaceRecommendationFingerprint(JSON.stringify({
-            blueprint: requestPayload?.blueprint || null,
+            connected_types: requestPayload?.connected_types || [],
+            task_count: requestPayload?.task_count || 0,
+            successful_task_count: requestPayload?.successful_task_count || 0,
+            reviewable_task_count: requestPayload?.reviewable_task_count || 0,
+            has_saved_memory: requestPayload?.has_saved_memory || false,
+            preferred_channels: requestPayload?.preferred_channels || [],
             current_surface: requestPayload?.current_surface || null,
             proactivity_level: proactivityLevelSelect?.value || 'minimal'
           }));
@@ -2723,7 +3117,7 @@
         if (workspaceRecommendationStatus === 'loading') {
           workspaceRecommendationCard.innerHTML = `
             <div class="workspace-recommendation-empty">
-              Reviewing your saved brief, connected tools, and recent tasks for the clearest next move...
+              Reviewing your connected apps, memory, and recent tasks for the clearest next move...
             </div>
           `;
           return;
@@ -2732,16 +3126,16 @@
         if (workspaceRecommendationStatus === 'needs_brief') {
           workspaceRecommendationCard.innerHTML = `
             <div class="workspace-recommendation-helper">
-              <p><strong>Finish your team brief</strong></p>
-              <p>Once your founder thesis and top goals are saved, DoWhiz can start suggesting the next best move here.</p>
+              <p><strong>Start with one connection</strong></p>
+              <p>Once Oliver has one approved app and one small task, this card will start surfacing the clearest next step automatically.</p>
             </div>
             <div class="workspace-recommendation-actions">
-              <button id="workspace-recommendation-edit-brief" class="auth-btn auth-btn-primary">Open Team Brief</button>
-              <span class="workspace-recommendation-status">Recommendations turn on automatically after your brief is ready.</span>
+              <button id="workspace-recommendation-edit-brief" class="auth-btn auth-btn-primary">Open Settings</button>
+              <span class="workspace-recommendation-status">Recommendations turn on automatically as your setup becomes more complete.</span>
             </div>
           `;
           document.getElementById('workspace-recommendation-edit-brief')?.addEventListener('click', () => {
-            window.location.href = updateTeamBriefBtn?.getAttribute('href') || '/start';
+            openDashboardSection('section-settings');
           });
           return;
         }
@@ -2771,8 +3165,8 @@
           const emptyMessage = workspaceRecommendationDismissedForDay
             ? 'You dismissed today\'s recommendation. Refresh anytime or check back tomorrow.'
             : currentLevel === 'off'
-              ? 'Proactive suggestions are off. Turn them back on in Settings whenever you want a clear “what next?” nudge.'
-              : 'No proactive recommendation right now. As soon as DoWhiz sees a clear next move, it will show up here.';
+              ? 'Proactive suggestions are off. Turn them back on in Settings whenever you want a clear next-step nudge.'
+              : 'No proactive suggestion right now. As soon as Oliver sees a clear next step, it will show up here.';
           workspaceRecommendationCard.innerHTML = `
             <div class="workspace-recommendation-empty">${escapeHtml(emptyMessage)}</div>
             ${(canManualRefresh || freshnessMessage) ? `
@@ -2819,7 +3213,7 @@
         const whyHtml = workspaceRecommendationWhyVisible
           ? `
             <div class="workspace-recommendation-why">
-              <p>We only surface one recommendation at a time, using your saved brief, connected tools, and recent task outcomes.</p>
+              <p>We only surface one recommendation at a time, using your connected apps, saved memory, and recent task outcomes.</p>
               <p>This one is showing because it matches the <strong>${escapeHtml(triggerLabel)}</strong> trigger class. Choosing “Not now” hides it for the rest of today unless you manually refresh.</p>
             </div>
           `
@@ -2828,7 +3222,7 @@
         workspaceRecommendationCard.innerHTML = `
           <div class="workspace-recommendation-header">
             <div class="workspace-recommendation-kicker">
-              <span class="workspace-recommendation-badge">Chief of Staff</span>
+              <span class="workspace-recommendation-badge">Oliver guidance</span>
               <span class="workspace-recommendation-trigger">${escapeHtml(triggerLabel)}</span>
             </div>
           </div>
@@ -2966,21 +3360,20 @@
       async function loadWorkspaceRecommendation(accessToken, options = {}) {
         const { force = false } = options;
         const requestPayload = buildWorkspaceRecommendationRequest();
-        const requestFingerprint = requestPayload ? workspaceRecommendationFingerprint(requestPayload) : '';
+        const requestFingerprint = workspaceRecommendationFingerprint(requestPayload);
         workspaceRecommendationRequestNonce += 1;
         const requestNonce = workspaceRecommendationRequestNonce;
         workspaceRecommendationErrorMessage = '';
+        const currentLevel = proactivityLevelSelect?.value || 'minimal';
 
-        if (!requestPayload) {
-          clearWorkspaceRecommendationCache();
-          clearWorkspaceRecommendationSuppression();
+        if (currentLevel === 'off') {
           workspaceRecommendationResponse = null;
           workspaceRecommendationSelectedKey = null;
           workspaceRecommendationAlternativesVisible = false;
           workspaceRecommendationWhyVisible = false;
           workspaceRecommendationLastFetchedAt = null;
           workspaceRecommendationDismissedForDay = false;
-          workspaceRecommendationStatus = 'needs_brief';
+          workspaceRecommendationStatus = 'ready';
           renderWorkspaceRecommendationCard();
           return null;
         }
@@ -3020,20 +3413,7 @@
         renderWorkspaceRecommendationCard();
 
         try {
-          const res = await fetch(`${DOWHIZ_API_URL}/api/workspace/recommendation`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestPayload)
-          });
-
-          if (!res.ok) {
-            throw new Error(await readApiErrorMessage(res, 'Failed to load workspace recommendation.'));
-          }
-
-          const data = await res.json();
+          const data = buildLocalWorkspaceRecommendationResponse(requestPayload);
           if (requestNonce !== workspaceRecommendationRequestNonce) {
             return data;
           }
@@ -3066,6 +3446,10 @@
       }
 
       async function recordWorkspaceRecommendationFeedback(accessToken, recommendation, feedback) {
+        if (isLocalWorkspaceRecommendation(recommendation)) {
+          return;
+        }
+
         const res = await fetch(`${DOWHIZ_API_URL}/api/workspace/recommendation-feedback`, {
           method: 'POST',
           headers: {
@@ -3244,21 +3628,17 @@
         }
 
         if (actionKind === 'trigger_create_brief') {
-          await createBrief({
-            source: 'workspace_recommendation'
-          });
+          openDashboardSection('section-workspace');
           return;
         }
 
         if (actionKind === 'trigger_create_plan') {
-          await create90DayPlan({
-            source: 'workspace_recommendation'
-          });
+          openDashboardSection('section-tasks');
           return;
         }
 
         if (actionKind === 'update_team_brief') {
-          window.location.href = updateTeamBriefBtn?.getAttribute('href') || '/start';
+          openDashboardSection('section-settings');
           return;
         }
 
@@ -3372,16 +3752,16 @@
       const ADMIN_TASKS_CONFIG = [
         {
           id: 'add-oliver-slack',
-          title: 'Add Oliver to Slack Workspace',
-          description: 'Invite Oliver to your Slack workspace.',
+          title: 'Add Oliver to Slack',
+          description: 'Make Oliver available in your Slack for follow-ups and task handoffs.',
           channelKey: 'slack',
           externalUrl: 'https://slack.com/oauth/v2/authorize?client_id=5584751405762.10556678065461&scope=channels:history,chat:write,groups:history,im:history,mpim:history,users:read,app_mentions:read&user_scope=',
           actionLabel: 'Add'
         },
         {
           id: 'add-oliver-discord',
-          title: 'Add Oliver to Discord Server',
-          description: 'Invite Oliver to your Discord server.',
+          title: 'Add Oliver to Discord',
+          description: 'Make Oliver available in your Discord for shared requests and quick follow-through.',
           channelKey: 'discord',
           externalUrl: 'https://discord.com/oauth2/authorize?client_id=1475574666830680175&permissions=68608&integration_type=0&scope=bot',
           actionLabel: 'Add'
@@ -3449,7 +3829,7 @@
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
           console.error('Failed to create brief:', err);
-          showMessage(err.message || 'Failed to create brief. Please try again.');
+          showMessage(normalizeApiFetchError(err, 'gateway'));
         } finally {
           if (btn) {
             btn.disabled = false;
@@ -3521,7 +3901,7 @@
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
           console.error('Failed to create 90-day plan:', err);
-          showMessage(err.message || 'Failed to create 90-day plan. Please try again.');
+          showMessage(normalizeApiFetchError(err, 'gateway'));
         } finally {
           if (btn) {
             btn.disabled = false;
@@ -3556,80 +3936,127 @@
         const container = document.getElementById('next-steps-list');
         if (!container) return;
 
-        const blueprint = loadWorkspaceBlueprintFromStorage();
-        const preferredChannels = (blueprint?.preferred_channels || []).map(c => c.toLowerCase());
-        const horizonDays = blueprint?.plan_horizon_days || 90;
-        const planTask = PLAN_TASKS_BY_HORIZON[horizonDays] || PLAN_TASKS_BY_HORIZON[90];
-        const productTasks = [...PRODUCT_TASKS_BASE, planTask];
+        const progress = document.getElementById('next-steps-progress');
+        const connectedTypes = connectedProviderTypes(identifiers);
+        const hasAnyConnected = connectedTypes.length > 0;
+        const taskCount = Array.isArray(cachedTasks) ? cachedTasks.length : 0;
+        const successfulTaskCount = countSuccessfulTasks(cachedTasks);
+        const reviewableTaskCount = countReviewableTasks(cachedTasks);
+        const hasMemory = hasSavedMemoryNote();
+        const completedChecklistCount = [
+          hasAnyConnected,
+          taskCount > 0,
+          hasMemory,
+          reviewableTaskCount > 0
+        ].filter(Boolean).length;
 
-        // Filter OAuth tasks based on preferred channels
-        const relevantOAuthTasks = OAUTH_TASKS.filter(task =>
-          preferredChannels.some(c => c.includes(task.channelKey))
-        );
+        if (progress) {
+          progress.textContent = `${completedChecklistCount} of 4 done`;
+        }
 
-        // Filter Admin tasks based on preferred channels
-        const relevantAdminTasks = ADMIN_TASKS_CONFIG.filter(task =>
-          preferredChannels.some(c => c.includes(task.channelKey))
-        );
+        const preferredChannels = normalizeWorkspaceList(loadWorkspaceBlueprintFromStorage()?.preferred_channels).map((item) => item.toLowerCase());
+        const providerOrder = buildPreferredProviderOrder(preferredChannels);
+        const suggestedConnections = providerOrder
+          .filter((provider) => !connectedTypes.includes(provider))
+          .map((provider) => OAUTH_TASKS.find((task) => task.identifierType === provider))
+          .filter(Boolean)
+          .slice(0, 3);
+        const optionalExtensions = ADMIN_TASKS_CONFIG.filter((task) => connectedTypes.includes(task.channelKey));
 
-        // Helper to render a single task item
-        function renderTaskItem(task) {
-          let actionHtml;
+        const checklistTasks = [
+          {
+            id: 'connect-one-app',
+            title: 'Connect one app',
+            description: 'Start with the first app where Oliver should receive or complete work.',
+            status: hasAnyConnected ? 'complete' : 'pending',
+            completeLabel: `${connectedTypes.length} connected`,
+            actionLabel: 'Open Settings',
+            href: '#section-settings'
+          },
+          {
+            id: 'try-first-task',
+            title: 'Try one starter task',
+            description: hasAnyConnected
+              ? 'Send Oliver one small request in a connected app so it appears in Tasks.'
+              : 'Connect an app first, then send Oliver one small request from there.',
+            status: taskCount > 0 ? (reviewableTaskCount > 0 ? 'complete' : 'in_progress') : 'pending',
+            completeLabel: `${taskCount} task${taskCount === 1 ? '' : 's'} started`,
+            pendingLabel: 'Waiting for first result',
+            actionLabel: 'Open Tasks',
+            href: '#section-tasks'
+          },
+          {
+            id: 'save-memory',
+            title: 'Save preferences in Memory',
+            description: 'Add tone, recurring context, or approval rules Oliver should remember.',
+            status: hasMemory ? 'complete' : 'pending',
+            completeLabel: 'Saved',
+            actionLabel: 'Open Memory',
+            href: '#section-memo'
+          },
+          {
+            id: 'review-result',
+            title: 'Review the result',
+            description: taskCount > 0
+              ? 'Use Tasks to review the first result before expanding the workflow.'
+              : 'Once a task runs, review the result here before you repeat it.',
+            status: reviewableTaskCount > 0 ? 'complete' : 'pending',
+            completeLabel: successfulTaskCount > 0
+              ? `${successfulTaskCount} successful`
+              : `${reviewableTaskCount} result${reviewableTaskCount === 1 ? '' : 's'} ready`,
+            actionLabel: 'Open Tasks',
+            href: '#section-tasks'
+          }
+        ];
 
-          if (task.storageKey) {
-            const status = localStorage.getItem(task.storageKey) || 'not_started';
+        function renderCompleteBadge(label) {
+          return `<span class="next-step-complete"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> ${escapeHtml(label)}</span>`;
+        }
 
-            if (status === 'complete' || status === 'pending') {
-              const isComplete = status === 'complete';
-              const statusIcon = isComplete
-                ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`
-                : `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
-              const statusText = isComplete ? 'Complete' : 'In Progress';
-              const statusClass = isComplete ? 'next-step-complete' : 'next-step-pending-text';
-              const messageKey = task.storageKey.replace('_status', '_message');
-              const storedMessage = !isComplete ? localStorage.getItem(messageKey) : null;
-              const manualCheckbox = task.autoTracked ? '' : `
-                  <label class="next-step-checkbox-label">
-                    <input type="checkbox" ${isComplete ? 'checked' : ''} onchange="markWorkflowTaskComplete('${task.storageKey}', this.checked)">
-                    ${isComplete ? 'Completed' : 'Mark as complete'}
-                  </label>`;
-              const resetBtn = `<button class="next-step-reset-btn" onclick="resetWorkflowTask('${task.storageKey}')">Reset</button>`;
-              actionHtml = `
-                <div class="next-step-pending">
-                  <span class="${statusClass}">
-                    ${statusIcon}
-                    ${statusText}
-                  </span>
-                  ${storedMessage ? `<p class="next-step-inline-message">${escapeHtml(storedMessage)}</p>` : ''}
-                  ${manualCheckbox}
-                  ${resetBtn}
-                </div>`;
-            } else {
-              actionHtml = `<button class="auth-btn auth-btn-primary" data-action="${task.action}" onclick="${task.action}()">${task.actionLabel}</button>`;
-            }
-          } else if (task.externalUrl) {
-            // Check if admin task is already completed
-            const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
-            if (completedTasks.includes(task.id)) {
-              actionHtml = `<span class="next-step-complete"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> Added</span>`;
-            } else if (task.id === 'add-oliver-discord') {
-              // Discord bot install needs dynamic state param for user tracking
-              actionHtml = `<a href="#" class="auth-btn auth-btn-primary" onclick="openDiscordBotAuth(event)">${task.actionLabel}</a>`;
-            } else if (task.id === 'add-oliver-slack') {
-              // Slack bot install needs dynamic state param for user tracking
-              actionHtml = `<a href="#" class="auth-btn auth-btn-primary" onclick="openSlackBotAuth(event)">${task.actionLabel}</a>`;
-            } else {
-              actionHtml = `<a href="${task.externalUrl}" target="_blank" rel="noopener noreferrer" class="auth-btn auth-btn-primary">${task.actionLabel}</a>`;
-            }
-          } else {
-            const isComplete = identifiers.some(id => id.identifier_type === task.identifierType);
-            if (isComplete) {
-              actionHtml = `<span class="next-step-complete"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> Connected</span>`;
-            } else {
-              actionHtml = `<button class="auth-btn auth-btn-oauth" onclick="document.getElementById('${task.oauthButtonId}').click()">Connect</button>`;
-            }
+        function renderPendingBadge(label) {
+          return `<span class="next-step-pending-text"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> ${escapeHtml(label)}</span>`;
+        }
+
+        function renderTaskAction(task) {
+          if (task.status === 'complete') {
+            return renderCompleteBadge(task.completeLabel || 'Complete');
           }
 
+          if (task.status === 'in_progress') {
+            return `
+              <div class="next-step-pending">
+                ${renderPendingBadge(task.pendingLabel || 'In progress')}
+                <a class="auth-btn auth-btn-oauth" href="${task.href || '#section-tasks'}">${escapeHtml(task.actionLabel || 'Open')}</a>
+              </div>
+            `;
+          }
+
+          if (task.href) {
+            return `<a class="auth-btn auth-btn-oauth" href="${task.href}">${escapeHtml(task.actionLabel || 'Open')}</a>`;
+          }
+
+          if (task.oauthButtonId) {
+            return `<button class="auth-btn auth-btn-oauth" onclick="document.getElementById('${task.oauthButtonId}').click()">${escapeHtml(task.actionLabel || 'Connect')}</button>`;
+          }
+
+          if (task.externalUrl) {
+            const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
+            if (completedTasks.includes(task.id)) {
+              return renderCompleteBadge('Added');
+            }
+            if (task.id === 'add-oliver-discord') {
+              return `<a href="#" class="auth-btn auth-btn-primary" onclick="openDiscordBotAuth(event)">${escapeHtml(task.actionLabel || 'Add')}</a>`;
+            }
+            if (task.id === 'add-oliver-slack') {
+              return `<a href="#" class="auth-btn auth-btn-primary" onclick="openSlackBotAuth(event)">${escapeHtml(task.actionLabel || 'Add')}</a>`;
+            }
+            return `<a href="${task.externalUrl}" target="_blank" rel="noopener noreferrer" class="auth-btn auth-btn-primary">${escapeHtml(task.actionLabel || 'Open')}</a>`;
+          }
+
+          return `<a class="auth-btn auth-btn-oauth" href="#section-settings">Open Settings</a>`;
+        }
+
+        function renderTaskItem(task) {
           return `
             <div class="next-step-item" data-task-id="${task.id}">
               <div class="next-step-info">
@@ -3637,29 +4064,44 @@
                 <p class="next-step-description">${escapeHtml(task.description)}</p>
               </div>
               <div class="next-step-action">
-                ${actionHtml}
+                ${renderTaskAction(task)}
               </div>
             </div>
           `;
         }
 
-        // Helper to render a section with subheader
-        function renderSection(title, tasks, emptyMessage) {
+        function renderSection(title, intro, tasks, emptyMessage) {
           const tasksHtml = tasks.length > 0
             ? tasks.map(renderTaskItem).join('')
-            : `<p class="next-step-empty">${emptyMessage}</p>`;
+            : `<p class="next-step-empty">${escapeHtml(emptyMessage)}</p>`;
           return `
             <div class="next-step-section">
-              <h4 class="next-step-subheader">${title}</h4>
+              <h4 class="next-step-subheader">${escapeHtml(title)}</h4>
+              <p class="next-step-section-intro">${escapeHtml(intro)}</p>
               ${tasksHtml}
             </div>
           `;
         }
 
         let html = '';
-        html += renderSection('Product', productTasks, 'No product tasks available.');
-        html += renderSection('Integrations', relevantOAuthTasks, 'No integrations selected. Update your team brief to add channels.');
-        html += renderSection('Admin', relevantAdminTasks, 'No admin tasks at this moment.');
+        html += renderSection(
+          'Checklist',
+          'These four steps matter most for a clean first run with Oliver.',
+          checklistTasks,
+          'No checklist items right now.'
+        );
+        html += renderSection(
+          'Suggested connections',
+          'Only add the next app when it supports a real task you already want Oliver to handle.',
+          suggestedConnections,
+          'You already connected the currently supported apps.'
+        );
+        html += renderSection(
+          'Optional extensions',
+          'Use these only after the matching app connection is already in place.',
+          optionalExtensions,
+          'No optional extensions to show right now.'
+        );
 
         container.innerHTML = html;
       }
@@ -3892,6 +4334,8 @@
       document.getElementById('signout-btn').addEventListener('click', async () => {
         stopTaskPolling();
         cachedIdentifiers = [];
+        cachedTasks = [];
+        cachedMemoContent = '';
         workspaceRecommendationResponse = null;
         workspaceRecommendationStatus = 'idle';
         workspaceRecommendationErrorMessage = '';
@@ -4158,6 +4602,7 @@
 
           showDashboard(session, accountData);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           // On error, show sign-in form with error message
           setDashboardMode(false);
           signinFormContainer.classList.remove('hidden');
@@ -4167,7 +4612,7 @@
             error_type: 'post_auth_signup_failed',
             error: err.message
           });
-          showMessage(err.message);
+          showMessage(displayMessage);
         }
       }
 
@@ -4180,8 +4625,8 @@
         passwordResetContainer.classList.add('hidden');
         hideExistingAccountOptions();
         dashboardContainer.classList.remove('hidden');
-        pageTitle.textContent = 'Your Dashboard';
-        pageSubtitle.textContent = 'Manage team workspace context and personal account operations from one dashboard.';
+        pageTitle.textContent = 'Your Oliver setup';
+        pageSubtitle.textContent = 'Connect apps, review tasks, save memory, and decide how Oliver should work for you.';
 
         document.getElementById('account-id').textContent = accountData.account_id;
         document.getElementById('user-email').textContent = session.user.email;
@@ -4199,6 +4644,7 @@
           loadWorkspaceRecommendationPreferences(session.access_token),
           loadBalanceAndBadges(session.access_token)
         ]);
+        loadWorkspaceSummaryFromStorage();
         await loadWorkspaceRecommendation(session.access_token);
 
         // Start polling for task updates
@@ -4244,13 +4690,16 @@
               });
             });
           } else {
-            list.innerHTML = '<li class="identifier-item">No channels linked yet.</li>';
+            list.innerHTML = '<li class="identifier-item">No apps connected yet.</li>';
           }
 
-          // Render next steps based on connected channels
+          loadWorkspaceSummaryFromStorage();
           renderNextSteps(cachedIdentifiers);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load identifiers:', err);
+          list.innerHTML = `<li class="identifier-item">${escapeHtml(displayMessage)}</li>`;
+          showMessage(displayMessage);
         }
       }
 
@@ -4271,12 +4720,12 @@
             throw new Error(err.error || 'Failed to unlink');
           }
 
-          showMessage('Channel unlinked successfully!', 'success');
+          showMessage('Connection removed successfully!', 'success');
           await loadIdentifiers(accessToken);
           // Refresh tasks to remove tasks from the unlinked channel
           await loadTasks(accessToken, { refreshRecommendation: true });
         } catch (err) {
-          showMessage(err.message);
+          showMessage(normalizeApiFetchError(err));
         }
       }
 
@@ -4295,10 +4744,15 @@
 
           const data = await res.json();
           memoContent.value = data.content;
+          cachedMemoContent = data.content || '';
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load memo:', err);
-          memoContent.value = `Error loading memo: ${err.message}`;
+          memoContent.value = `Error loading memory: ${displayMessage}`;
+          cachedMemoContent = '';
         }
+        loadWorkspaceSummaryFromStorage();
+        renderNextSteps(cachedIdentifiers);
       }
 
       // Save memo
@@ -4327,6 +4781,10 @@
 
           memoStatus.textContent = 'Saved!';
           memoStatus.style.color = '#22c55e';
+          cachedMemoContent = content;
+          loadWorkspaceSummaryFromStorage();
+          renderNextSteps(cachedIdentifiers);
+          await loadWorkspaceRecommendation(accessToken, { force: true });
           setTimeout(() => { memoStatus.textContent = ''; }, 3000);
         } catch (err) {
           console.error('Failed to save memo:', err);
@@ -4451,7 +4909,7 @@
               console.error('Failed to restore session:', e);
             }
           }
-          showMessage('Oliver has been added to your Discord server!', 'success');
+          showMessage('Oliver is now available in Discord.', 'success');
           // Mark task as completed in local storage
           const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
           if (!completedTasks.includes('add-oliver-discord')) {
@@ -4501,7 +4959,7 @@
               console.error('Failed to restore session:', e);
             }
           }
-          showMessage('Oliver has been added to your Slack workspace!', 'success');
+          showMessage('Oliver is now available in Slack.', 'success');
           // Mark task as completed in local storage
           const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
           if (!completedTasks.includes('add-oliver-slack')) {
@@ -4852,6 +5310,8 @@
       // Task polling state
       let taskPollingInterval = null;
       let cachedIdentifiers = [];
+      let cachedTasks = [];
+      let cachedMemoContent = '';
       let cachedBalance = null;
 
       async function loadBalanceAndBadges(accessToken) {
@@ -4895,7 +5355,10 @@
 
           if (!res.ok) {
             if (res.status === 404) {
-              taskList.innerHTML = '<li class="task-item" style="text-align: center; color: var(--text-muted, #888);">No tasks scheduled yet.</li>';
+              cachedTasks = [];
+              taskList.innerHTML = '<li class="task-item" style="text-align: center; color: var(--text-muted, #888);">No tasks yet. Send Oliver one request from a connected app and it will show up here.</li>';
+              loadWorkspaceSummaryFromStorage();
+              renderNextSteps(cachedIdentifiers);
               return;
             }
             throw new Error(`HTTP ${res.status}`);
@@ -4903,6 +5366,7 @@
 
           const data = await res.json();
           const allTasks = data.tasks || [];
+          cachedTasks = allTasks;
 
           // Sort by created_at descending (newest first)
           allTasks.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -4938,15 +5402,21 @@
           }
 
           if (allTasks.length === 0) {
-            taskList.innerHTML = '<li class="task-item" style="text-align: center; color: var(--text-muted, #888);">No tasks scheduled yet.</li>';
+            taskList.innerHTML = '<li class="task-item" style="text-align: center; color: var(--text-muted, #888);">No tasks yet. Send Oliver one request from a connected app and it will show up here.</li>';
           } else {
             taskList.innerHTML = allTasks.map(task => renderTask(task)).join('');
           }
 
           tasksStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+          loadWorkspaceSummaryFromStorage();
+          renderNextSteps(cachedIdentifiers);
         } catch (err) {
+          const displayMessage = normalizeApiFetchError(err);
           console.error('Failed to load tasks:', err);
-          taskList.innerHTML = `<li class="task-item" style="text-align: center; color: #ef4444;">Error loading tasks: ${err.message}</li>`;
+          cachedTasks = [];
+          taskList.innerHTML = `<li class="task-item" style="text-align: center; color: #ef4444;">Error loading tasks: ${escapeHtml(displayMessage)}</li>`;
+          loadWorkspaceSummaryFromStorage();
+          renderNextSteps(cachedIdentifiers);
         } finally {
           if (refreshRecommendation) {
             await loadWorkspaceRecommendation(accessToken, { force: true });

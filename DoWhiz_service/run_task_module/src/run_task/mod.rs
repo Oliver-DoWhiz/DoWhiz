@@ -9,12 +9,17 @@ mod errors;
 mod github_auth;
 mod prompt;
 mod scheduled;
+pub mod timing;
 mod trace;
 mod types;
 mod utils;
 mod workspace;
 
 pub use codex::cleanup_all_aci_containers;
+pub use timing::{
+    QueueLatencyCollector, StageStats, TaskTiming, TaskTimingBuilder, TimingStats,
+    QUEUE_LATENCY_COLLECTOR, TIMING_COLLECTOR,
+};
 pub use core::run_task;
 pub use errors::RunTaskError;
 pub use trace::RUN_TASK_TRACE_DIRNAME;

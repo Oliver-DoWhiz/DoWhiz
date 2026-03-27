@@ -4,6 +4,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use run_task_module::QUEUE_LATENCY_COLLECTOR;
+use time::OffsetDateTime;
+
 use azure_core::{auth::Secret, error::Error as AzureError, HttpClient};
 use azure_messaging_servicebus::prelude::QueueClient;
 use azure_messaging_servicebus::service_bus::{
@@ -168,6 +171,15 @@ impl ServiceBusIngestionQueue {
                 .block_on(response.unlock_message())
                 .map_err(map_service_bus_error)?;
             return Ok(None);
+        }
+        if let Some(props) = response.broker_properties() {
+            if let Some(enqueued_time) = props.enqueued_time_utc {
+                let now = OffsetDateTime::now_utc();
+                let latency = now - enqueued_time;
+                if let Ok(std_duration) = latency.try_into() {
+                    QUEUE_LATENCY_COLLECTOR.record(std_duration);
+                }
+            }
         }
         let handle_id = Uuid::new_v4();
         let response = Arc::new(response);

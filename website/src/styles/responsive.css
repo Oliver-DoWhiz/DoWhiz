@@ -81,6 +81,31 @@
     text-align: left;
   }
 
+  .hero-panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .step-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .use-case-grid,
+  .surface-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .control-card-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-steps-card {
+    position: static;
+  }
+
   .hero-pillar-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -194,6 +219,61 @@
 
   .hero-secondary-actions {
     width: 100%;
+  }
+
+  .hero-cta-row {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-cta-row .btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .hero-spotlight-card,
+  .hero-onboarding-card,
+  .step-card,
+  .use-case-card,
+  .surface-card,
+  .control-card,
+  .control-steps-card {
+    padding: 1rem;
+  }
+
+  .hero-spotlight-head {
+    align-items: flex-start;
+  }
+
+  .hero-portrait-wrap {
+    width: 72px;
+    height: 72px;
+    border-radius: 1rem;
+  }
+
+  .hero-panel-grid,
+  .step-grid,
+  .use-case-grid,
+  .surface-grid,
+  .control-card-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-onboarding-item,
+  .control-step-item {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .hero-step-index,
+  .control-step-index {
+    width: 34px;
+    height: 34px;
+    font-size: 0.76rem;
+  }
+
+  .control-layout {
+    gap: 0.9rem;
   }
 
   .hero-secondary-cta {
@@ -346,6 +426,10 @@
     grid-template-columns: 1fr;
   }
 
+  .hero-task-list li {
+    padding: 0.75rem 0.85rem;
+  }
+
   .safety-access-layout {
     grid-template-columns: 1fr;
   }
@@ -467,7 +551,9 @@
   .hero-title,
   .hero-subtitle,
   .hero-intake-panel,
-  .hero-secondary-actions {
+  .hero-secondary-actions,
+  .hero-spotlight-card,
+  .hero-onboarding-card {
     animation: none;
     opacity: 1;
   }
