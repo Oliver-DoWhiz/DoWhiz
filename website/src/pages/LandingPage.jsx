@@ -27,6 +27,9 @@ const LOGO_URL = `${SITE_URL}/assets/DoWhiz.svg`;
 const SUPPORT_EMAIL = 'admin@dowhiz.com';
 const ORG_NAME = 'DoWhiz';
 const CN_PATH_PREFIX = '/cn';
+const LANDING_PAGE_OVERRIDE_PARAM = 'view';
+const LANDING_PAGE_OVERRIDE_VALUE = 'landing';
+const LANDING_PAGE_OVERRIDE_SUFFIX = `?${LANDING_PAGE_OVERRIDE_PARAM}=${LANDING_PAGE_OVERRIDE_VALUE}`;
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
 
 const isCnPath = (pathname = '/') =>
@@ -35,9 +38,43 @@ const isCnPath = (pathname = '/') =>
 const getLocalizedAuthPath = (suffix = '', pathname = typeof window !== 'undefined' ? window.location.pathname : '/') =>
   `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/auth/index.html${suffix}`;
 
+const getLocalizedLandingPagePath = (
+  pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
+) => `${isCnPath(pathname) ? CN_PATH_PREFIX : ''}/${LANDING_PAGE_OVERRIDE_SUFFIX}`;
+
 const getLocalizedDashboardPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => getLocalizedAuthPath(LANDING_DASHBOARD_SUFFIX, pathname);
+
+const hasSameOriginReferrer = () => {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.referrer) {
+    return false;
+  }
+
+  try {
+    return new URL(document.referrer, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+};
+
+const shouldStayOnLandingPage = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const { hash, search } = window.location;
+  const searchParams = new URLSearchParams(search);
+  if (searchParams.get(LANDING_PAGE_OVERRIDE_PARAM) === LANDING_PAGE_OVERRIDE_VALUE) {
+    return true;
+  }
+
+  if (search || hash) {
+    return true;
+  }
+
+  return hasSameOriginReferrer();
+};
 
 const updateMetaContent = (selector, content) => {
   if (typeof document === 'undefined' || !content) {
@@ -66,7 +103,6 @@ function LandingPage({ locale }) {
   const pageLocale = locale || (isCnPath(pathname) ? 'zh-CN' : 'en-US');
   const isChinesePage = pageLocale === 'zh-CN';
   const content = getLandingContent(pageLocale);
-  const localizedHomePath = content.nav.homePath;
   const [theme, setTheme] = useState(() => getThemeForLocalTime());
   const [enableMouseField, setEnableMouseField] = useState(false);
   const [user, setUser] = useState(null);
@@ -76,6 +112,8 @@ function LandingPage({ locale }) {
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
   const authRedirectStartedRef = useRef(false);
+  const localizedHomePath =
+    authStatus === 'authenticated' ? getLocalizedLandingPagePath(pathname) : content.nav.homePath;
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -188,7 +226,11 @@ function LandingPage({ locale }) {
 
       if (currentUser) {
         setAuthStatus('authenticated');
-        if (!authRedirectStartedRef.current && typeof window !== 'undefined') {
+        if (
+          !authRedirectStartedRef.current &&
+          typeof window !== 'undefined' &&
+          !shouldStayOnLandingPage()
+        ) {
           authRedirectStartedRef.current = true;
           window.location.replace(getLocalizedDashboardPath(window.location.pathname));
         }

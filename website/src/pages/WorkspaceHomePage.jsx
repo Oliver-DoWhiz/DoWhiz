@@ -97,7 +97,7 @@ function WorkspaceHomePage() {
           <Link className="btn btn-secondary" to="/start">
             Edit team brief
           </Link>
-          <Link className="btn btn-secondary" to="/">
+          <Link className="btn btn-secondary" to="/?view=landing">
             Back to landing
           </Link>
         </div>

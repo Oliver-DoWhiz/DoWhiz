@@ -312,7 +312,7 @@ function StartupIntakePage() {
                 <a className="btn btn-secondary" href={DASHBOARD_PATH}>
                   Open dashboard
                 </a>
-                <Link className="btn btn-secondary" to="/">
+                <Link className="btn btn-secondary" to="/?view=landing">
                   Back to landing
                 </Link>
               </div>
@@ -374,7 +374,7 @@ function StartupIntakePage() {
               <a className="btn btn-secondary" href={DASHBOARD_PATH}>
                 Open dashboard
               </a>
-              <Link className="btn btn-secondary" to="/">
+              <Link className="btn btn-secondary" to="/?view=landing">
                 Back to landing
               </Link>
             </>
