@@ -21,6 +21,7 @@ use super::auth::{extract_bearer_token, validate_supabase_token};
 
 const DEFAULT_RANGE_DAYS: i64 = 30;
 const MAX_RANGE_DAYS: i64 = 365;
+const TRAILING_LOOKBACK_DAYS: i64 = 30;
 
 #[derive(Clone)]
 pub struct AnalyticsState {
@@ -457,6 +458,7 @@ pub async fn get_dashboard(
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
         }
     };
+    let trailing_lookback_start = end - Duration::days(TRAILING_LOOKBACK_DAYS);
 
     let store = state.account_store.clone();
     let env = state.environment.clone();
@@ -464,32 +466,56 @@ pub async fn get_dashboard(
         let events = store.list_analytics_events_between(start, end)?;
         let accounts = store.list_accounts_created_between(start, end)?;
         let payments = store.list_payments_between(start, end)?;
-        Ok::<_, crate::account_store::AccountStoreError>((events, accounts, payments))
+        let trailing_lookback_events = if start <= trailing_lookback_start {
+            events.clone()
+        } else {
+            store.list_analytics_events_between(trailing_lookback_start, end)?
+        };
+        let trailing_lookback_payments = if start <= trailing_lookback_start {
+            payments.clone()
+        } else {
+            store.list_payments_between(trailing_lookback_start, end)?
+        };
+        Ok::<_, crate::account_store::AccountStoreError>((
+            events,
+            accounts,
+            payments,
+            trailing_lookback_events,
+            trailing_lookback_payments,
+        ))
     })
     .await;
 
-    let (mut events, accounts, payments) = match fetched {
-        Ok(Ok(values)) => values,
-        Ok(Err(err)) => {
-            error!("analytics.dashboard query error: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to query analytics data" })),
-            )
-                .into_response();
-        }
-        Err(err) => {
-            error!("analytics.dashboard join error: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to query analytics data" })),
-            )
-                .into_response();
-        }
-    };
+    let (mut events, accounts, payments, trailing_lookback_events, trailing_lookback_payments) =
+        match fetched {
+            Ok(Ok(values)) => values,
+            Ok(Err(err)) => {
+                error!("analytics.dashboard query error: {}", err);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to query analytics data" })),
+                )
+                    .into_response();
+            }
+            Err(err) => {
+                error!("analytics.dashboard join error: {}", err);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to query analytics data" })),
+                )
+                    .into_response();
+            }
+        };
 
     augment_with_backfilled_events(&mut events, &accounts, &payments, &env);
-    let response = build_dashboard_response(start, end, &events, &payments);
+    let response = build_dashboard_response(
+        start,
+        end,
+        &events,
+        &payments,
+        &trailing_lookback_events,
+        &trailing_lookback_payments,
+    );
     info!(
         "analytics.dashboard generated for admin={} range={}..{} events={}",
         email,
@@ -693,6 +719,8 @@ fn build_dashboard_response(
     end: DateTime<Utc>,
     events: &[AnalyticsEventRecord],
     payments: &[Payment],
+    trailing_lookback_events: &[AnalyticsEventRecord],
+    trailing_lookback_payments: &[Payment],
 ) -> DashboardResponse {
     let mut sorted_events: Vec<&AnalyticsEventRecord> = events.iter().collect();
     sorted_events.sort_by(|a, b| a.event_timestamp.cmp(&b.event_timestamp));
@@ -705,6 +733,7 @@ fn build_dashboard_response(
                 .map(|identity| EventWithIdentity { event, identity })
         })
         .collect::<Vec<_>>();
+    let stickiness_identity_event_log = build_identity_event_log(trailing_lookback_events);
 
     let mut identity_events: HashMap<String, HashMap<String, DateTime<Utc>>> = HashMap::new();
     let mut identity_event_log: HashMap<String, Vec<(&str, DateTime<Utc>)>> = HashMap::new();
@@ -916,9 +945,8 @@ fn build_dashboard_response(
         .iter()
         .map(|payment| payment.amount_cents as f64 / 100.0)
         .sum();
-    let active_paid_accounts_30d: i64 = payments
+    let active_paid_accounts_30d: i64 = trailing_lookback_payments
         .iter()
-        .filter(|payment| payment.created_at >= end - Duration::days(30))
         .map(|payment| payment.account_id)
         .collect::<HashSet<_>>()
         .len() as i64;
@@ -964,6 +992,7 @@ fn build_dashboard_response(
         &identities,
         &identity_events,
         &identity_event_log,
+        &stickiness_identity_event_log,
         &daily_active_users,
         &daily_active_workspaces,
     );
@@ -988,6 +1017,28 @@ fn build_dashboard_response(
         implemented_events: implemented_events(),
         deferred_events: deferred_events(),
     }
+}
+
+fn build_identity_event_log<'a>(
+    events: &'a [AnalyticsEventRecord],
+) -> HashMap<String, Vec<(&'a str, DateTime<Utc>)>> {
+    let mut sorted_events: Vec<&AnalyticsEventRecord> = events.iter().collect();
+    sorted_events.sort_by(|a, b| a.event_timestamp.cmp(&b.event_timestamp));
+
+    let anon_to_known = build_anon_identity_map(&sorted_events);
+    let mut identity_event_log: HashMap<String, Vec<(&'a str, DateTime<Utc>)>> = HashMap::new();
+
+    for event in sorted_events {
+        let Some(identity) = canonical_identity(event, &anon_to_known) else {
+            continue;
+        };
+        identity_event_log
+            .entry(identity)
+            .or_default()
+            .push((&event.event_name, event.event_timestamp));
+    }
+
+    identity_event_log
 }
 
 fn build_anon_identity_map(events: &[&AnalyticsEventRecord]) -> HashMap<String, String> {
@@ -1435,6 +1486,7 @@ fn build_retention_summary(
     identities: &[String],
     identity_events: &HashMap<String, HashMap<String, DateTime<Utc>>>,
     identity_event_log: &HashMap<String, Vec<(&str, DateTime<Utc>)>>,
+    stickiness_identity_event_log: &HashMap<String, Vec<(&str, DateTime<Utc>)>>,
     daily_active_users: &HashMap<String, HashSet<String>>,
     daily_active_workspaces: &HashMap<String, HashSet<Uuid>>,
 ) -> RetentionSummary {
@@ -1448,13 +1500,12 @@ fn build_retention_summary(
     let active_workspaces_trend = build_daily_workspace_trend(start, end, daily_active_workspaces);
 
     let dau =
-        distinct_usage_identities(identities, identity_event_log, end - Duration::days(1), end);
+        distinct_usage_identities(stickiness_identity_event_log, end - Duration::days(1), end);
     let wau =
-        distinct_usage_identities(identities, identity_event_log, end - Duration::days(7), end);
+        distinct_usage_identities(stickiness_identity_event_log, end - Duration::days(7), end);
     let mau = distinct_usage_identities(
-        identities,
-        identity_event_log,
-        end - Duration::days(30),
+        stickiness_identity_event_log,
+        end - Duration::days(TRAILING_LOOKBACK_DAYS),
         end,
     );
 
@@ -1609,22 +1660,16 @@ fn build_daily_workspace_trend(
 }
 
 fn distinct_usage_identities(
-    identities: &[String],
     identity_event_log: &HashMap<String, Vec<(&str, DateTime<Utc>)>>,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> i64 {
-    identities
-        .iter()
-        .filter(|identity| {
-            identity_event_log
-                .get(*identity)
-                .map(|events| {
-                    events
-                        .iter()
-                        .any(|(name, ts)| is_usage_event(name) && *ts >= start && *ts < end)
-                })
-                .unwrap_or(false)
+    identity_event_log
+        .values()
+        .filter(|events| {
+            events
+                .iter()
+                .any(|(name, ts)| is_usage_event(name) && *ts >= start && *ts < end)
         })
         .count() as i64
 }
@@ -2329,4 +2374,90 @@ fn deferred_events() -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ts(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn sample_event(
+        event_name: &str,
+        event_timestamp: DateTime<Utc>,
+        account_id: Option<Uuid>,
+    ) -> AnalyticsEventRecord {
+        AnalyticsEventRecord {
+            event_name: event_name.to_string(),
+            source: "test".to_string(),
+            event_timestamp,
+            account_id,
+            auth_user_id: None,
+            anonymous_id: None,
+            session_id: None,
+            workspace_id: account_id.map(|id| id.to_string()),
+            org_id: None,
+            plan_type: None,
+            environment: Some("test".to_string()),
+            app_version: None,
+            page_path: None,
+            route_path: None,
+            referrer: None,
+            utm_source: None,
+            utm_medium: None,
+            utm_campaign: None,
+            utm_term: None,
+            utm_content: None,
+            device_type: None,
+            browser: None,
+            os: None,
+            event_key: None,
+            properties: json!({}),
+        }
+    }
+
+    fn sample_payment(account_id: Uuid, created_at: DateTime<Utc>) -> Payment {
+        Payment {
+            stripe_session_id: format!("sess_{account_id}"),
+            account_id,
+            amount_cents: 5000,
+            hours_purchased: 5.0,
+            created_at,
+        }
+    }
+
+    #[test]
+    fn active_paid_accounts_uses_trailing_30_day_payments_not_selected_range_only() {
+        let start = ts("2026-03-24T00:00:00Z");
+        let end = ts("2026-03-31T00:00:00Z");
+        let account_id = Uuid::new_v4();
+        let trailing_payment = sample_payment(account_id, ts("2026-03-10T12:00:00Z"));
+
+        let response = build_dashboard_response(start, end, &[], &[], &[], &[trailing_payment]);
+
+        assert_eq!(response.kpis.active_paid_accounts_30d, 1);
+    }
+
+    #[test]
+    fn stickiness_uses_trailing_30_day_events_for_mau() {
+        let start = ts("2026-03-24T00:00:00Z");
+        let end = ts("2026-03-31T00:00:00Z");
+        let account_id = Uuid::new_v4();
+        let trailing_usage = sample_event(
+            "task_succeeded",
+            ts("2026-03-12T08:00:00Z"),
+            Some(account_id),
+        );
+
+        let response = build_dashboard_response(start, end, &[], &[], &[trailing_usage], &[]);
+
+        assert_eq!(response.retention.stickiness.mau, 1);
+        assert_eq!(response.retention.stickiness.wau, 0);
+        assert_eq!(response.retention.stickiness.dau, 0);
+    }
 }

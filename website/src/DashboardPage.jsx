@@ -22,6 +22,26 @@ const formatNumber = (value) => {
 
 const formatPercent = (value) => `${(clampPercent(value) * 100).toFixed(1)}%`;
 
+const formatOptionalPercent = (value) => {
+  if (value === null || value === undefined) return 'N/A';
+  return formatPercent(value);
+};
+
+const formatDeferredAwareCount = (value, dashboard, eventNames) => {
+  const zeroish = !Number.isFinite(value) || value === 0;
+  const deferredEvents = new Set(dashboard?.deferred_events || []);
+  const implementedEvents = new Set(dashboard?.implemented_events || []);
+  const allDeferred = eventNames.every(
+    (eventName) => deferredEvents.has(eventName) && !implementedEvents.has(eventName)
+  );
+
+  if (zeroish && allDeferred) {
+    return 'N/A';
+  }
+
+  return formatNumber(value);
+};
+
 const formatHours = (value) => {
   if (!Number.isFinite(value)) return 'N/A';
   return `${value.toFixed(1)}h`;
@@ -39,8 +59,10 @@ const formatCurrency = (value) => {
 const METRIC_HELP = {
   unique_visitors: 'Distinct identities that triggered landing_page_view in the selected window.',
   signup_conversion: 'signup_completed identities / unique visitor identities.',
+  signup_to_activation: 'Identities with first successful task / identities with signup_completed.',
   activation_rate: 'Identities with first successful task / identities with signup_completed.',
   activation_to_paid: 'Paid identities (payment_succeeded or subscription_activated) / activated identities.',
+  visitor_to_paid: 'Paid identities (payment_succeeded or subscription_activated) / unique visitor identities.',
   time_to_first_value: 'Median hours from signup_completed to first_task_succeeded.',
   d7_retention: 'Eligible signup_completed identities with a usage event 7-8 days later.',
   active_workspaces: 'Distinct workspace/account ids associated with tracked identities in the selected window.',
@@ -64,6 +86,8 @@ const METRIC_HELP = {
     'Signup_completed identities connected to 2+ channel/tool types / signup_completed identities.',
   d1_retention: 'Eligible signup_completed identities with a usage event 1-2 days later.',
   d30_retention: 'Eligible signup_completed identities with a usage event 30-31 days later.',
+  repeat_value_rate:
+    'Identities with second_successful_task within 7 days of first_task_succeeded / identities with first_task_succeeded.',
   repeat_successful_task_rate:
     'Identities with second_successful_task within 7 days of first_task_succeeded / identities with first_task_succeeded.',
   dau_wau: 'Distinct active users today / distinct active users in trailing 7 days.',
@@ -75,6 +99,7 @@ const METRIC_HELP = {
   integration_failure_rate:
     '(channel_connect_failed + tool_connect_failed + integration_error) / connection attempts, when attempts telemetry is present.',
   checkout_failure_rate: 'checkout_error / checkout_started, when checkout_started > 0.',
+  trial_to_paid_rate: 'payment_succeeded / trial_started, when trial_started telemetry is present.',
   avg_latency_ms: 'Average latency in milliseconds across latency_metric_logged events for each endpoint/workflow.',
   p95_latency_ms: '95th percentile latency in milliseconds across latency_metric_logged events for each endpoint/workflow.',
   cohort_users: 'Number of signup_completed identities in the cohort week.',
@@ -457,15 +482,21 @@ function DashboardPage() {
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
-                    <MetricHeading label="Activation rate" help={METRIC_HELP.activation_rate} />
+                    <MetricHeading label="Signup -> activation" help={METRIC_HELP.signup_to_activation} />
                   </h3>
-                  <p>{formatPercent(dashboard.kpis.activation_rate)}</p>
+                  <p>{formatOptionalPercent(dashboard.kpis.signup_to_activation_rate ?? dashboard.kpis.activation_rate)}</p>
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
                     <MetricHeading label="Activation -> paid conversion" help={METRIC_HELP.activation_to_paid} />
                   </h3>
                   <p>{formatPercent(dashboard.kpis.activation_to_paid_rate)}</p>
+                </article>
+                <article className="dash-kpi-card">
+                  <h3>
+                    <MetricHeading label="Visitor -> paid conversion" help={METRIC_HELP.visitor_to_paid} />
+                  </h3>
+                  <p>{formatOptionalPercent(dashboard.kpis.visitor_to_paid_rate)}</p>
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
@@ -478,6 +509,12 @@ function DashboardPage() {
                     <MetricHeading label="D7 retention" help={METRIC_HELP.d7_retention} />
                   </h3>
                   <p>{formatPercent(dashboard.kpis.d7_retention_rate)}</p>
+                </article>
+                <article className="dash-kpi-card">
+                  <h3>
+                    <MetricHeading label="Repeat-value rate" help={METRIC_HELP.repeat_value_rate} />
+                  </h3>
+                  <p>{formatOptionalPercent(dashboard.kpis.repeat_value_rate)}</p>
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
@@ -648,7 +685,7 @@ function DashboardPage() {
                   <h3>
                     <MetricHeading label="Pricing page views" help={METRIC_HELP.pricing_page_views} />
                   </h3>
-                  <p>{formatNumber(dashboard.monetization?.pricing_page_views || 0)}</p>
+                  <p>{formatDeferredAwareCount(dashboard.monetization?.pricing_page_views, dashboard, ['pricing_page_view'])}</p>
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
@@ -690,13 +727,27 @@ function DashboardPage() {
                   <h3>
                     <MetricHeading label="Subscription renewals" help={METRIC_HELP.subscription_renewals} />
                   </h3>
-                  <p>{formatNumber(dashboard.monetization?.subscription_renewed || 0)}</p>
+                  <p>
+                    {formatDeferredAwareCount(dashboard.monetization?.subscription_renewed, dashboard, [
+                      'subscription_renewed'
+                    ])}
+                  </p>
                 </article>
                 <article className="dash-kpi-card">
                   <h3>
                     <MetricHeading label="Subscription canceled" help={METRIC_HELP.subscription_canceled} />
                   </h3>
-                  <p>{formatNumber(dashboard.monetization?.subscription_canceled || 0)}</p>
+                  <p>
+                    {formatDeferredAwareCount(dashboard.monetization?.subscription_canceled, dashboard, [
+                      'subscription_canceled'
+                    ])}
+                  </p>
+                </article>
+                <article className="dash-kpi-card">
+                  <h3>
+                    <MetricHeading label="Trial -> paid rate" help={METRIC_HELP.trial_to_paid_rate} />
+                  </h3>
+                  <p>{formatOptionalPercent(dashboard.monetization?.trial_to_paid_rate)}</p>
                 </article>
               </div>
 
