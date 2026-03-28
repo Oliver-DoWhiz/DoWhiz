@@ -69,7 +69,26 @@ pub(super) fn build_prompt(
                 "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Do not use HTML or markdown. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
             }
             "lark" | "feishu" => {
-                "2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Lark supports basic markdown: **bold**, *italic*, ~~strikethrough~~, `code`. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it."
+                r#"2. After finishing the task (step one), write a plain text reply in reply_message.txt in the workspace root. Keep the reply concise and conversational. Lark supports basic markdown: **bold**, *italic*, ~~strikethrough~~, `code`. If there are files to attach, put them in reply_attachments/ and mention them in the reply. Do not pretend the job has been done without actually doing it.
+
+LARK TOOLS (use lark_cli for Lark operations):
+- Do NOT use browser automation or OAuth flows for Lark operations.
+- Use the `lark_cli` command-line tool for Lark Docs, Sheets, Bitable, and Drive.
+- The CLI authenticates automatically using environment variables (LARK_APP_ID, LARK_APP_SECRET).
+
+Available commands:
+- Docs: `lark_cli get-doc`, `lark_cli read-doc`, `lark_cli create-doc`
+- Sheets: `lark_cli get-sheet`, `lark_cli read-range`, `lark_cli write-range`, `lark_cli append-rows`
+- Bitable (database): `lark_cli list-tables`, `lark_cli get-table`, `lark_cli query-records`, `lark_cli create-record`, `lark_cli update-record`, `lark_cli delete-record`
+- Drive: `lark_cli list-files`, `lark_cli get-file`, `lark_cli create-folder`
+
+Example usage:
+- List files: `lark_cli list-files`
+- Create doc: `lark_cli create-doc --title "My Document"`
+- Read sheet range: `lark_cli read-range --spreadsheet-id "shtXXX" --sheet-id "Sheet1" --range "A1:C10"`
+- Query bitable records: `lark_cli query-records --app-token "appXXX" --table-id "tblYYY"`
+
+See `.agents/skills/lark/SKILL.md` for complete command reference."#
             }
             "notion" => {
                 r#"2. After finishing the task (step one), you MUST reply directly to the Notion comment using the Notion API CLI.
