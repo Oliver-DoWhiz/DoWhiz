@@ -768,7 +768,8 @@ function LandingPage({ locale }) {
           </div>
         </nav>
 
-        <section id="channels" className="hero-section">
+        <main>
+          <section id="channels" className="hero-section">
           {enableMouseField ? <MouseField theme={theme} /> : null}
           <div className="halo-effect"></div>
           <div className="container hero-content hero-showcase-layout">
@@ -932,7 +933,7 @@ function LandingPage({ locale }) {
           </div>
         </section>
 
-        <section id="watch" className="section demo-showcase-section">
+          <section id="watch" className="section demo-showcase-section">
           <div className="container">
             <div className="section-heading-shell">
               <span className="section-kicker">{content.demo.eyebrow}</span>
@@ -1002,7 +1003,7 @@ function LandingPage({ locale }) {
           </div>
         </section>
 
-        <section id="examples" className="section example-showcase-section">
+          <section id="examples" className="section example-showcase-section">
           <div className="container story-stack">
             <div className="section-heading-shell">
               <span className="section-kicker">{content.examples.eyebrow}</span>
@@ -1012,58 +1013,64 @@ function LandingPage({ locale }) {
 
             <div className="example-card-grid">
               {content.examples.cards.map((item) => (
-                <article key={item.title} className="example-card">
+                <a
+                  key={item.title}
+                  className={`example-card${item.href ? ' example-card-link' : ''}`}
+                  href={item.href || undefined}
+                >
                   <span className="example-card-tag">{item.tag}</span>
                   <h3>{item.title}</h3>
                   <p>{item.description}</p>
-                </article>
+                  {item.ctaLabel ? <span className="example-card-cta">{item.ctaLabel}</span> : null}
+                </a>
               ))}
             </div>
           </div>
         </section>
 
-        <section id="faq" className="section faq-section">
-          <div className="container">
-            <div className="section-heading-shell">
-              <span className="section-kicker">{content.labels.faqEyebrow}</span>
-              <h2 className="section-title section-title-left">{content.labels.faqTitle}</h2>
-              <p className="section-intro section-intro-left">{content.labels.faqIntro}</p>
+          <section id="faq" className="section faq-section">
+            <div className="container">
+              <div className="section-heading-shell">
+                <span className="section-kicker">{content.labels.faqEyebrow}</span>
+                <h2 className="section-title section-title-left">{content.labels.faqTitle}</h2>
+                <p className="section-intro section-intro-left">{content.labels.faqIntro}</p>
+              </div>
+              <div className="faq-accordion faq-compact">
+                {content.faqItems.map((item, idx) => {
+                  const isOpen = openFaq === idx;
+                  return (
+                    <article key={item.question} className={`faq-accordion-item ${isOpen ? 'open' : ''}`}>
+                      <button
+                        type="button"
+                        className="faq-accordion-header"
+                        onClick={() => toggleFaq(idx)}
+                        aria-expanded={isOpen}
+                        aria-controls={`faq-panel-${idx}`}
+                      >
+                        <span className="faq-question">{item.question}</span>
+                        <span className="faq-toggle" aria-hidden="true">
+                          {isOpen ? '−' : '+'}
+                        </span>
+                      </button>
+                      <div
+                        id={`faq-panel-${idx}`}
+                        className="faq-accordion-panel"
+                        style={{ display: isOpen ? 'block' : 'none' }}
+                      >
+                        <p>{item.answer}</p>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="faq-link-row">
+                <a className="faq-text-link" href="/help-center/">
+                  {content.labels.faqLinkLabel}
+                </a>
+              </div>
             </div>
-            <div className="faq-accordion faq-compact">
-              {content.faqItems.map((item, idx) => {
-                const isOpen = openFaq === idx;
-                return (
-                  <article key={item.question} className={`faq-accordion-item ${isOpen ? 'open' : ''}`}>
-                    <button
-                      type="button"
-                      className="faq-accordion-header"
-                      onClick={() => toggleFaq(idx)}
-                      aria-expanded={isOpen}
-                      aria-controls={`faq-panel-${idx}`}
-                    >
-                      <span className="faq-question">{item.question}</span>
-                      <span className="faq-toggle" aria-hidden="true">
-                        {isOpen ? '−' : '+'}
-                      </span>
-                    </button>
-                    <div
-                      id={`faq-panel-${idx}`}
-                      className="faq-accordion-panel"
-                      style={{ display: isOpen ? 'block' : 'none' }}
-                    >
-                      <p>{item.answer}</p>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-            <div className="faq-link-row">
-              <a className="faq-text-link" href="https://www.dowhiz.com/help-center/">
-                {content.labels.faqLinkLabel}
-              </a>
-            </div>
-          </div>
-        </section>
+          </section>
+        </main>
 
         <footer className="site-footer">
           <div className="container footer-content">

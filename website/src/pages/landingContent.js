@@ -1,8 +1,8 @@
 const EN_LANDING_CONTENT = {
   metadata: {
-    title: 'DoWhiz | Oliver works in your tools',
+    title: 'DoWhiz | AI digital employees in email, Slack, and GitHub',
     description:
-      'Start with Oliver in email, Slack, or Discord without logging in first. GitHub, Notion, and Lark work can start with a real request now and connect later when you want saved workflows.',
+      'Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools.',
     canonicalUrl: 'https://dowhiz.com/',
     ogLocale: 'en_US',
     themeColor: '#2C2C2E',
@@ -161,32 +161,44 @@ const EN_LANDING_CONTENT = {
       {
         tag: 'Research',
         title: 'Deep research briefs',
-        description: 'Compare options and return a concise decision memo.'
+        description: 'Compare options and return a concise decision memo.',
+        href: '/agents/oliver/',
+        ctaLabel: 'Meet Oliver'
       },
       {
         tag: 'Inbox',
         title: 'Email triage and drafts',
-        description: 'Draft replies and keep follow-ups moving.'
+        description: 'Draft replies and keep follow-ups moving.',
+        href: '/solutions/email-task-automation/',
+        ctaLabel: 'Explore email workflows'
       },
       {
         tag: 'Writing',
         title: 'Study and drafting support',
-        description: 'Outline, revise, and tighten documents.'
+        description: 'Outline, revise, and tighten documents.',
+        href: '/solutions/google-docs-automation/',
+        ctaLabel: 'Open docs workflow'
       },
       {
         tag: 'Tax prep',
         title: 'Document organization',
-        description: 'Sort filing materials and flag what is missing.'
+        description: 'Sort filing materials and flag what is missing.',
+        href: '/help-center/',
+        ctaLabel: 'Read the FAQ'
       },
       {
         tag: 'Content',
         title: 'Posts with approval',
-        description: 'Draft and schedule posts for review.'
+        description: 'Draft and schedule posts for review.',
+        href: '/agents/rachel/',
+        ctaLabel: 'Meet Rachel'
       },
       {
         tag: 'GitHub',
         title: 'Repo follow-up',
-        description: 'Summarize issues and keep code-adjacent work moving.'
+        description: 'Summarize issues and keep code-adjacent work moving.',
+        href: '/solutions/github-issue-automation/',
+        ctaLabel: 'See GitHub workflow'
       }
     ]
   },
@@ -232,6 +244,7 @@ const EN_LANDING_CONTENT = {
     { href: '/terms/', label: 'Terms of Service' },
     { href: '/trust-safety/', label: 'Trust & Safety' },
     { href: '/integrations/', label: 'Integrations' },
+    { href: '/blog/', label: 'Blog' },
     { href: 'https://www.dowhiz.com/help-center/', label: 'Help Center' },
     { href: '/user-guide/', label: 'User Guide' }
   ]
@@ -239,9 +252,9 @@ const EN_LANDING_CONTENT = {
 
 const ZH_LANDING_CONTENT = {
   metadata: {
-    title: 'DoWhiz 中文 | Oliver 在你的工具里工作',
+    title: 'DoWhiz 中文 | Email、Slack、GitHub 里的 AI 数字员工',
     description:
-      '认识 Oliver。你不需要先登录再开始：现在就可以直接通过 Email、Slack 或 Discord 开始使用。GitHub、Notion 和 Lark 相关任务也可以先发出真实请求，之后再决定是否连接。',
+      '先从 Email、Slack 或 Discord 里的 Oliver 开始。DoWhiz 会把真实请求推进到 GitHub、文档和更多协作工具里，直接返回完成结果。',
     canonicalUrl: 'https://dowhiz.com/cn',
     ogLocale: 'zh_CN',
     themeColor: '#2C2C2E',
@@ -400,32 +413,44 @@ const ZH_LANDING_CONTENT = {
       {
         tag: 'Research',
         title: 'Deep research 简报',
-        description: '比较方案，最后给你一份能直接判断的结果。'
+        description: '比较方案，最后给你一份能直接判断的结果。',
+        href: '/agents/oliver/',
+        ctaLabel: '认识 Oliver'
       },
       {
         tag: 'Inbox',
         title: '邮件整理和回复起草',
-        description: '起草回复，同时把后续动作继续往前推。'
+        description: '起草回复，同时把后续动作继续往前推。',
+        href: '/solutions/email-task-automation/',
+        ctaLabel: '查看邮件工作流'
       },
       {
         tag: 'Writing',
         title: '学习支持和文稿起草',
-        description: '做提纲、改写、收紧结构。'
+        description: '做提纲、改写、收紧结构。',
+        href: '/solutions/google-docs-automation/',
+        ctaLabel: '打开文档工作流'
       },
       {
         tag: 'Tax prep',
         title: '材料整理',
-        description: '整理报税前的文件并指出还缺什么。'
+        description: '整理报税前的文件并指出还缺什么。',
+        href: '/help-center/',
+        ctaLabel: '查看常见问题'
       },
       {
         tag: 'Content',
         title: '发帖前的草稿与排期',
-        description: '先起草和排期，最终仍由你确认。'
+        description: '先起草和排期，最终仍由你确认。',
+        href: '/agents/rachel/',
+        ctaLabel: '认识 Rachel'
       },
       {
         tag: 'GitHub',
         title: 'Repo 跟进',
-        description: '整理 issue 上下文，推进和代码相关的后续工作。'
+        description: '整理 issue 上下文，推进和代码相关的后续工作。',
+        href: '/solutions/github-issue-automation/',
+        ctaLabel: '查看 GitHub 工作流'
       }
     ]
   },
@@ -471,6 +496,7 @@ const ZH_LANDING_CONTENT = {
     { href: '/terms/', label: '服务条款' },
     { href: '/trust-safety/', label: 'Trust & Safety' },
     { href: '/integrations/', label: '集成' },
+    { href: '/blog/', label: '博客' },
     { href: 'https://www.dowhiz.com/help-center/', label: '帮助中心' },
     { href: '/user-guide/', label: '使用指南' }
   ]
