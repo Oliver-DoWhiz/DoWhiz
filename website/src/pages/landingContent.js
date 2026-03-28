@@ -24,43 +24,54 @@ const EN_LANDING_CONTENT = {
   },
   hero: {
     eyebrow: 'Start with a real request',
-    title: 'Use Oliver in a channel you already have open.',
+    title: 'Use Oliver where you already work',
     subtitle:
-      'Start in email, Slack, or Discord right away. For GitHub, Notion, or Lark work, send the first request now and connect the app later only if it helps.',
-    caption:
-      'Get first value before setup. Oliver can guide linking, saved memory, and deeper app access inside the conversation when needed.',
-    primaryCta: 'Email Oliver now',
-    secondaryCta: 'See real examples',
-    manageAnonymous: 'Manage setup later',
+      'Start in email, Slack, or Discord right away. GitHub, Notion, and Lark can start with a real request and connect later if it helps',
+    primaryCta: 'Get DoWhiz free',
+    secondaryCta: 'See example',
+    manageAnonymous: 'Manage setup',
     manageAuthenticated: 'Open your setup',
     contactSubject: 'A first task for Oliver',
     contactBody:
       'Hi Oliver,\n\nHere is the first task I want help with:\n\n- Context:\n- What done looks like:\n- Any deadline:\n\nThanks!',
-    toolsEyebrow: 'Where Oliver works today',
+    toolsEyebrow: 'Choose a channel',
     toolsHintAnonymous:
-      'Slack and Discord open public add flows. GitHub, Notion, and Lark start with a real request first, then connect later if you want saved access.',
-    toolsHintAuthenticated: 'If you are signed in, these buttons start the real connect flow.',
+      'Hover to pause. Click a channel to start. GitHub, Notion, and Lark can begin from email first.',
+    toolsHintAuthenticated: 'Hover to pause. Signed-in channels can open direct connect flows when needed.',
     toolsFootnote:
-      'Sign in only when you want saved memory, linked identities, or deeper app access. It does not need to be your first step.',
-    directEyebrow: 'Fastest first move',
-    directTitle: 'Email is still the simplest first move.',
-    directDescription:
-      'If you want the lightest no-login start, send the first request by email and let Oliver guide any later setup in context.',
-    directBadge: 'Fastest no-login path',
-    directSubnote: 'Best for a brand-new request, a follow-up, or any drafting-heavy task.',
-    directActionLabel: 'Compose email',
+      'Start in a channel now. Use setup only when you want saved memory or deeper app access.',
+    autoplayLabel: 'Autoplay',
+    pausedLabel: 'Paused',
+    entryEyebrow: 'Fastest start',
+    previewEyebrow: 'What it looks like',
+    youLabel: 'You',
     actionLabels: {
       connect: 'Connect',
       loading: 'Opening...'
     },
     tools: [
       {
+        key: 'email',
+        label: 'Email',
+        anonymousStatus: 'Direct compose',
+        authenticatedStatus: 'Direct compose',
+        anonymousActionLabel: 'Send request',
+        authenticatedActionLabel: 'Send request',
+        description: 'Send the request you already have in mind',
+        samplePrompt: 'Turn these notes into a concise follow-up email',
+        sampleReply: 'I can draft the reply, tighten the tone, and point out what is still missing',
+        accent: '#ff8a3d'
+      },
+      {
         key: 'slack',
         label: 'Slack',
         anonymousStatus: 'Public install',
         authenticatedStatus: 'Connect workspace',
         anonymousActionLabel: 'Add bot',
-        description: 'Add Oliver to a workspace in one click, then ask the first thing you need handled in Slack.',
+        authenticatedActionLabel: 'Connect',
+        description: 'Install Oliver and ask in Slack',
+        samplePrompt: 'Summarize this channel and list the next three actions',
+        sampleReply: 'I can pull the thread context and return a clean action list',
         accent: '#36c58b'
       },
       {
@@ -69,7 +80,10 @@ const EN_LANDING_CONTENT = {
         anonymousStatus: 'Public invite',
         authenticatedStatus: 'Connect server',
         anonymousActionLabel: 'Add bot',
-        description: 'Invite Oliver into your server and start with a real request there.',
+        authenticatedActionLabel: 'Connect',
+        description: 'Invite Oliver and start in your server',
+        samplePrompt: 'Read this discussion and turn it into a plan for the week',
+        sampleReply: 'I can organize the thread into owners, deadlines, and a reply-ready summary',
         accent: '#6c78ff'
       },
       {
@@ -78,7 +92,10 @@ const EN_LANDING_CONTENT = {
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect repo access',
         anonymousActionLabel: 'Send request',
-        description: 'Send repo context right away, then connect GitHub later for saved repo-side follow-up.',
+        authenticatedActionLabel: 'Connect',
+        description: 'Start with repo context, connect later if needed',
+        samplePrompt: 'Review these issues and tell me what should be fixed first',
+        sampleReply: 'I can rank the work, flag blockers, and draft the next follow-up',
         accent: '#2c2c2e'
       },
       {
@@ -87,7 +104,10 @@ const EN_LANDING_CONTENT = {
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect docs access',
         anonymousActionLabel: 'Send request',
-        description: 'Start with a docs or notes request now, then connect Notion when you want workspace context.',
+        authenticatedActionLabel: 'Connect',
+        description: 'Start with docs or notes work, connect later if helpful',
+        samplePrompt: 'Turn these notes into a clean study outline',
+        sampleReply: 'I can organize the draft, tighten the structure, and flag what still needs research',
         accent: '#6f6b63'
       },
       {
@@ -96,22 +116,25 @@ const EN_LANDING_CONTENT = {
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect workspace',
         anonymousActionLabel: 'Send request',
-        description: 'Start ops and coordination work now, then connect Lark when you want persistent access.',
+        authenticatedActionLabel: 'Connect',
+        description: 'Start ops follow-up now, connect later if needed',
+        samplePrompt: 'Draft a follow-up plan from this meeting summary',
+        sampleReply: 'I can turn it into owners, deadlines, and an update you can send',
         accent: '#3f88ff'
       }
     ]
   },
   demo: {
-    eyebrow: 'Real product examples',
-    title: 'Watch the request-to-result loop before you change your workflow.',
-    intro: 'One longer walkthrough and three faster mobile examples.',
+    eyebrow: 'Examples',
+    title: 'See Oliver in action',
+    intro: 'One full demo and three quick examples.',
     desktopTitle: 'Desktop walkthrough',
-    desktopDescription: 'See the request-to-result loop in one flow.',
+    desktopDescription: 'A full request-to-result walkthrough.',
     desktopVideoId: 'IsSOTSYIIIY',
     desktopVideoHref: 'https://youtu.be/IsSOTSYIIIY',
     desktopCta: 'Open on YouTube',
     shortsTitle: 'Mobile quick looks',
-    shortsDescription: 'Short examples built for a faster scan.',
+    shortsDescription: 'Quick mobile demos.',
     shorts: [
       {
         title: 'Mobile demo 01',
@@ -132,8 +155,8 @@ const EN_LANDING_CONTENT = {
   },
   examples: {
     eyebrow: 'What you can ask',
-    title: 'Start with something concrete, not a toy prompt.',
-    intro: 'Good first requests are real, bounded, and worth handing off for a first pass.',
+    title: 'Start with real work',
+    intro: 'Real, bounded requests work best.',
     cards: [
       {
         tag: 'Research',
@@ -167,15 +190,6 @@ const EN_LANDING_CONTENT = {
       }
     ]
   },
-  control: {
-    eyebrow: 'Control and trust',
-    title: 'Oliver can help first while you stay in control.',
-    points: [
-      'Start in the channel that already fits the request',
-      'Keep sensitive work reviewable before anything final is sent',
-      'Save setup and memory only when you want Oliver to keep context'
-    ]
-  },
   faqItems: [
     {
       question: 'What is the fastest way to start?',
@@ -205,8 +219,8 @@ const EN_LANDING_CONTENT = {
   ],
   labels: {
     faqEyebrow: 'Questions',
-    faqTitle: 'The essentials before you start',
-    faqIntro: 'Short answers about starting without login, choosing a real channel first, and deciding later which connections are worth saving.',
+    faqTitle: 'Before you start',
+    faqIntro: 'Short answers before you begin.',
     faqLinkLabel: 'Open the Help Center',
     footerTitle: 'Resources',
     footerTagline: 'Oliver helps turn requests into finished work.',
@@ -249,43 +263,54 @@ const ZH_LANDING_CONTENT = {
   },
   hero: {
     eyebrow: '先从一个真实请求开始',
-    title: '在你已经打开的渠道里直接开始用 Oliver。',
+    title: '在你常用的渠道里用 Oliver',
     subtitle:
-      '你现在就可以直接通过 Email、Slack 或 Discord 开始。对于 GitHub、Notion 或 Lark 相关任务，也可以先发出第一个请求，只有在真正有帮助时再连接 app。',
-    caption:
-      '先拿到第一轮价值，再决定要不要 setup。真正需要的时候，Oliver 可以在对话里继续引导账号绑定、memory 和更深的 app 接入。',
-    primaryCta: '现在给 Oliver 发邮件',
-    secondaryCta: '看真实例子',
-    manageAnonymous: '稍后再管理 setup',
+      '现在就可以从 Email、Slack 或 Discord 开始，GitHub、Notion 和 Lark 相关工作也可以先从一个真实请求开始，之后再按需连接',
+    primaryCta: '免费开始用 DoWhiz',
+    secondaryCta: '看示例',
+    manageAnonymous: '管理 setup',
     manageAuthenticated: '打开你的 setup',
     contactSubject: '给 Oliver 的第一个任务',
     contactBody:
       '你好 Oliver，\n\n这是我想先让你帮忙处理的第一个任务：\n\n- 背景：\n- 什么算完成：\n- 截止时间：\n\n谢谢！',
-    toolsEyebrow: 'Oliver 现在可工作的渠道',
+    toolsEyebrow: '选择一个渠道',
     toolsHintAnonymous:
-      'Slack 和 Discord 会直接打开公开安装入口。GitHub、Notion 和 Lark 则可以先发出真实请求，之后如果你希望保存访问权限，再去连接。',
-    toolsHintAuthenticated: '如果你已经登录，这些按钮会直接启动真实连接流程。',
+      '悬停会暂停轮播，点击就直接开始。GitHub、Notion 和 Lark 可以先从邮件请求开始。',
+    toolsHintAuthenticated: '悬停会暂停轮播。登录后，这些入口也可以在需要时直接启动连接流程。',
     toolsFootnote:
-      '只有当你希望 Oliver 记住更多上下文、绑定身份、或接入更深的 app 权限时，才需要登录进入 setup。',
-    directEyebrow: '最快的第一步',
-    directTitle: 'Email 仍然是最轻的第一步。',
-    directDescription:
-      '如果你想用最轻的无登录方式开始，先直接发邮件就可以。后续真的有帮助时，再让 Oliver 在对话里引导 setup。',
-    directBadge: '最快的无登录入口',
-    directSubnote: '尤其适合第一次尝试、后续追问，或任何需要起草的任务。',
-    directActionLabel: '写邮件给 Oliver',
+      '现在就先在一个渠道里开始。只有当你想保存 memory 或接入更深权限时，再进入 setup。',
+    autoplayLabel: '自动播放',
+    pausedLabel: '已暂停',
+    entryEyebrow: '最快开始方式',
+    previewEyebrow: '交互会是什么样',
+    youLabel: '你',
     actionLabels: {
       connect: '连接',
       loading: '打开中...'
     },
     tools: [
       {
+        key: 'email',
+        label: 'Email',
+        anonymousStatus: '直接写邮件',
+        authenticatedStatus: '直接写邮件',
+        anonymousActionLabel: '发送请求',
+        authenticatedActionLabel: '发送请求',
+        description: '把你已经想好的请求直接发出去',
+        samplePrompt: '把这些要点整理成一封简洁的跟进邮件',
+        sampleReply: '我可以先起草回复、收紧语气，并指出还缺什么信息',
+        accent: '#ff8a3d'
+      },
+      {
         key: 'slack',
         label: 'Slack',
         anonymousStatus: '公开安装',
         authenticatedStatus: '连接工作区',
         anonymousActionLabel: '添加机器人',
-        description: '一键把 Oliver 加进 Slack workspace，然后直接在里面发出第一个请求。',
+        authenticatedActionLabel: '连接',
+        description: '装好 Oliver 后直接在 Slack 里开始',
+        samplePrompt: '帮我总结这个频道，并列出接下来三件事',
+        sampleReply: '我可以把线程上下文整理成清晰的行动清单',
         accent: '#36c58b'
       },
       {
@@ -294,7 +319,10 @@ const ZH_LANDING_CONTENT = {
         anonymousStatus: '公开邀请',
         authenticatedStatus: '连接服务器',
         anonymousActionLabel: '添加机器人',
-        description: '把 Oliver 邀请进你的 server，然后直接在那里开始真实任务。',
+        authenticatedActionLabel: '连接',
+        description: '邀请 Oliver 后直接在 server 里开始',
+        samplePrompt: '读一下这段讨论，并把它整理成本周执行计划',
+        sampleReply: '我可以把讨论整理成负责人、截止时间和可直接发送的总结',
         accent: '#6c78ff'
       },
       {
@@ -303,7 +331,10 @@ const ZH_LANDING_CONTENT = {
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接仓库权限',
         anonymousActionLabel: '发送请求',
-        description: '先把 repo 上下文发给 Oliver，之后如果你希望它持续跟进，再连接 GitHub。',
+        authenticatedActionLabel: '连接',
+        description: '先带着 repo 上下文开始，需要时再连接',
+        samplePrompt: '看看这些 issues，告诉我应该先修哪几个',
+        sampleReply: '我可以帮你排优先级、指出 blocker，并起草下一步跟进',
         accent: '#2c2c2e'
       },
       {
@@ -312,7 +343,10 @@ const ZH_LANDING_CONTENT = {
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接文档权限',
         anonymousActionLabel: '发送请求',
-        description: '先从文档或笔记相关请求开始，等你希望 Oliver 进入 workspace 上下文时再连接 Notion。',
+        authenticatedActionLabel: '连接',
+        description: '先从文档或笔记任务开始，有需要再连接',
+        samplePrompt: '把这些笔记整理成一份清楚的学习提纲',
+        sampleReply: '我可以先整理结构、收紧逻辑，并指出还要补哪些研究',
         accent: '#6f6b63'
       },
       {
@@ -321,22 +355,25 @@ const ZH_LANDING_CONTENT = {
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接工作区',
         anonymousActionLabel: '发送请求',
-        description: '先从协作运营或跟进型任务开始，之后如果需要持续权限，再连接 Lark。',
+        authenticatedActionLabel: '连接',
+        description: '先从协作跟进任务开始，需要时再连接',
+        samplePrompt: '根据这次会议总结，起草一个后续推进计划',
+        sampleReply: '我可以把它整理成负责人、时间点和一段可直接发送的更新',
         accent: '#3f88ff'
       }
     ]
   },
   demo: {
-    eyebrow: '真实产品演示',
-    title: '先看 Oliver 如何把请求变成结果，而不是先看一整套流程说明。',
-    intro: '一个较完整的桌面演示，加上三个更短的移动端例子。',
+    eyebrow: '示例',
+    title: '看看 Oliver 怎么工作',
+    intro: '一个完整演示，外加三个快速示例。',
     desktopTitle: '桌面完整演示',
-    desktopDescription: '一条龙看完从请求到结果的过程。',
+    desktopDescription: '完整看一遍从请求到结果。',
     desktopVideoId: 'IsSOTSYIIIY',
     desktopVideoHref: 'https://youtu.be/IsSOTSYIIIY',
     desktopCta: '去 YouTube 看',
     shortsTitle: '移动端快速演示',
-    shortsDescription: '更短、更适合快速浏览的几个例子。',
+    shortsDescription: '几个更短的移动端示例。',
     shorts: [
       {
         title: '移动端演示 01',
@@ -357,8 +394,8 @@ const ZH_LANDING_CONTENT = {
   },
   examples: {
     eyebrow: '你可以怎么问',
-    title: '第一条消息最好是真实任务，而不是试玩 prompt。',
-    intro: '最好的第一次请求，通常都具体、可复核，而且值得先让 Oliver 做一版。',
+    title: '先从真实任务开始',
+    intro: '真实、具体的请求最适合第一次开始。',
     cards: [
       {
         tag: 'Research',
@@ -392,15 +429,6 @@ const ZH_LANDING_CONTENT = {
       }
     ]
   },
-  control: {
-    eyebrow: '控制与信任',
-    title: 'Oliver 可以先开始帮忙，而你仍然掌控节奏。',
-    points: [
-      '先在最适合任务的那个渠道里开始',
-      '敏感动作仍然可以保持可审阅、可确认',
-      '只有当你希望保留上下文时，再保存 setup 和 memory'
-    ]
-  },
   faqItems: [
     {
       question: '最快怎么开始？',
@@ -430,8 +458,8 @@ const ZH_LANDING_CONTENT = {
   ],
   labels: {
     faqEyebrow: '常见问题',
-    faqTitle: '开始之前真正需要知道的几件事',
-    faqIntro: '只回答最关键的问题：如何无登录开始、先用哪个真实渠道，以及哪些连接值得以后再保存。',
+    faqTitle: '开始之前',
+    faqIntro: '开始前先看这几条短答案。',
     faqLinkLabel: '打开帮助中心',
     footerTitle: '资源',
     footerTagline: 'Oliver 帮你把请求变成结果。',

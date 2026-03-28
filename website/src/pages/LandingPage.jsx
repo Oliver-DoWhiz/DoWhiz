@@ -23,7 +23,8 @@ const CN_PATH_PREFIX = '/cn';
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
 const LANDING_SETTINGS_SUFFIX = '#section-settings';
 const AUTHENTICATED_SETTINGS_SUFFIX = '?loggedIn=true#section-settings';
-const LANDING_PAGE_VARIANT = 'oliver_channel_first_v1';
+const LANDING_PAGE_VARIANT = 'oliver_channel_showcase_v2';
+const HERO_SHOWCASE_INTERVAL_MS = 4200;
 const PUBLIC_CHANNEL_URLS = {
   slack:
     'https://slack.com/oauth/v2/authorize?client_id=5584751405762.10556678065461&scope=app_mentions:read,channels:history,channels:read,chat:write,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,users:read&user_scope=',
@@ -70,10 +71,30 @@ function NotionIcon({ className }) {
   );
 }
 
-function HeroToolIcon({ toolKey, label }) {
+function EmailIcon({ className }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M4.5 7l7.5 6 7.5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ToolFallbackIcon({ className }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect x="4.5" y="4.5" width="15" height="15" rx="4" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+function HeroToolIcon({ toolKey }) {
   const iconClassName = 'hero-tool-icon';
 
   switch (toolKey) {
+    case 'email':
+      return <EmailIcon className={iconClassName} />;
     case 'slack':
       return <SlackIcon className={iconClassName} />;
     case 'discord':
@@ -85,7 +106,7 @@ function HeroToolIcon({ toolKey, label }) {
     case 'lark':
       return <img src="/svgs/lark.svg" alt="" className={`${iconClassName} hero-tool-icon-image`} aria-hidden="true" />;
     default:
-      return <span className={`${iconClassName} hero-tool-fallback`}>{label.slice(0, 1)}</span>;
+      return <ToolFallbackIcon className={iconClassName} />;
   }
 }
 
@@ -132,13 +153,18 @@ function LandingPage({ locale }) {
   const [enableMouseField, setEnableMouseField] = useState(false);
   const [user, setUser] = useState(null);
   const [authStatus, setAuthStatus] = useState('checking');
-  const [activeToolKey, setActiveToolKey] = useState(null);
+  const [loadingToolKey, setLoadingToolKey] = useState(null);
+  const [activeShowcaseIndex, setActiveShowcaseIndex] = useState(0);
+  const [showcasePaused, setShowcasePaused] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [navHidden, setNavHidden] = useState(false);
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
   const localizedHomePath = content.nav.homePath;
   const isAuthenticated = authStatus === 'authenticated' && Boolean(user);
+  const heroTools = content.hero.tools;
+  const activeHeroTool = heroTools[activeShowcaseIndex] || heroTools[0];
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -358,6 +384,45 @@ function LandingPage({ locale }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const syncMotionPreference = (event) => {
+      setPrefersReducedMotion(event.matches);
+    };
+
+    setPrefersReducedMotion(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncMotionPreference);
+      return () => mediaQuery.removeEventListener('change', syncMotionPreference);
+    }
+
+    mediaQuery.addListener(syncMotionPreference);
+    return () => mediaQuery.removeListener(syncMotionPreference);
+  }, []);
+
+  useEffect(() => {
+    setActiveShowcaseIndex(0);
+  }, [pageLocale]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || heroTools.length <= 1 || showcasePaused || prefersReducedMotion) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setActiveShowcaseIndex((currentIndex) => (currentIndex + 1) % heroTools.length);
+    }, HERO_SHOWCASE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [heroTools.length, prefersReducedMotion, showcasePaused]);
+
   const buildMailtoLink = (email, subject, body) => {
     const encodedSubject = encodeURIComponent(subject);
     const encodedBody = encodeURIComponent(body);
@@ -445,13 +510,15 @@ function LandingPage({ locale }) {
   };
 
   const oliverContactHref = buildMailtoLink('oliver@dowhiz.com', content.hero.contactSubject, content.hero.contactBody);
+  const heroPrimaryHref = isAuthenticated
+    ? getLocalizedDashboardPath(pathname)
+    : getLocalizedAuthPath('', pathname);
   const settingsHref = isAuthenticated
     ? getLocalizedAuthPath(AUTHENTICATED_SETTINGS_SUFFIX, pathname)
     : getLocalizedAuthPath(LANDING_SETTINGS_SUFFIX, pathname);
   const manageSetupLabel = isAuthenticated
     ? content.hero.manageAuthenticated
     : content.hero.manageAnonymous;
-  const toolHint = isAuthenticated ? content.hero.toolsHintAuthenticated : content.hero.toolsHintAnonymous;
 
   const trackCtaClick = (eventName, properties) => {
     trackAnalyticsEvent(eventName, properties);
@@ -486,36 +553,62 @@ function LandingPage({ locale }) {
       window.location.href = data.redirect_url;
     } catch (error) {
       console.error(`Landing: failed to start ${provider} connect flow`, error);
-      setActiveToolKey(null);
+      setLoadingToolKey(null);
       window.location.href = settingsHref;
     }
   };
 
   const getHeroToolActionLabel = (tool) => {
-    if (activeToolKey === tool.key) {
+    if (loadingToolKey === tool.key) {
       return content.hero.actionLabels.loading;
     }
 
-    return isAuthenticated ? content.hero.actionLabels.connect : tool.anonymousActionLabel;
+    if (tool.key === 'email') {
+      return tool.authenticatedActionLabel || tool.anonymousActionLabel;
+    }
+
+    if (isAuthenticated) {
+      return tool.authenticatedActionLabel || content.hero.actionLabels.connect;
+    }
+
+    return tool.anonymousActionLabel;
   };
 
   const getHeroToolStatus = (tool) => {
     return isAuthenticated ? tool.authenticatedStatus : tool.anonymousStatus;
   };
 
-  const handleHeroToolAction = async (tool) => {
-    if (activeToolKey) {
+  const getHeroToolAction = (tool) => {
+    if (tool.key === 'email') {
+      return {
+        href: oliverContactHref,
+        type: 'mailto',
+        openInNewTab: false
+      };
+    }
+
+    if (!isAuthenticated) {
+      return getAnonymousHeroToolAction(tool);
+    }
+
+    return {
+      type: 'oauth',
+      provider: tool.key
+    };
+  };
+
+  const handleHeroToolAction = async (tool, ctaLocation = 'hero_channel_widget') => {
+    if (loadingToolKey) {
       return;
     }
 
-    const anonymousAction = isAuthenticated ? null : getAnonymousHeroToolAction(tool);
-    const actionType = isAuthenticated ? 'oauth' : anonymousAction?.type || 'tool_trial_email';
+    const action = getHeroToolAction(tool);
 
     trackCtaClick('hero_tool_action_click', {
-      cta_location: 'hero_tool_grid',
+      cta_location: ctaLocation,
       cta_text: tool.label,
       tool: tool.key,
-      action_type: actionType,
+      action_type: action.type,
       landing_page_variant: LANDING_PAGE_VARIANT
     });
 
@@ -523,16 +616,16 @@ function LandingPage({ locale }) {
       return;
     }
 
-    if (!isAuthenticated) {
-      if (anonymousAction?.openInNewTab) {
-        openExternalHref(anonymousAction.href);
-      } else if (anonymousAction?.href) {
-        window.location.href = anonymousAction.href;
+    if (action.type !== 'oauth') {
+      if (action.openInNewTab) {
+        openExternalHref(action.href);
+      } else if (action.href) {
+        window.location.href = action.href;
       }
       return;
     }
 
-    setActiveToolKey(tool.key);
+    setLoadingToolKey(tool.key);
     await startProviderConnect(tool.key);
   };
 
@@ -678,18 +771,18 @@ function LandingPage({ locale }) {
         <section id="channels" className="hero-section">
           {enableMouseField ? <MouseField theme={theme} /> : null}
           <div className="halo-effect"></div>
-          <div className="container hero-content hero-shell">
-            <div className="hero-copy hero-copy-compact">
+          <div className="container hero-content hero-showcase-layout">
+            <div className="hero-copy hero-copy-showcase">
               <p className="hero-eyebrow">{content.hero.eyebrow}</p>
               <h1 className="hero-title">{content.hero.title}</h1>
               <p className="hero-subtitle">{content.hero.subtitle}</p>
               <div className="hero-cta-row">
                 <a
                   className="btn btn-primary hero-primary-cta"
-                  href={oliverContactHref}
+                  href={heroPrimaryHref}
                   onClick={() =>
                     trackCtaClick('primary_cta_click', {
-                      cta_location: 'hero_primary_email',
+                      cta_location: 'hero_primary_get_dowhiz_free',
                       cta_text: content.hero.primaryCta,
                       landing_page_variant: LANDING_PAGE_VARIANT
                     })
@@ -711,14 +804,27 @@ function LandingPage({ locale }) {
                   {content.hero.secondaryCta}
                 </a>
               </div>
-              <p className="hero-caption">{content.hero.caption}</p>
             </div>
 
-            <div className="hero-product-card">
-              <div className="hero-product-head">
-                <div className="hero-product-heading">
+            <div
+              className={`hero-channel-showcase${showcasePaused || prefersReducedMotion ? ' is-paused' : ''}`}
+              onMouseEnter={() => setShowcasePaused(true)}
+              onMouseLeave={() => setShowcasePaused(false)}
+              onFocusCapture={() => setShowcasePaused(true)}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  setShowcasePaused(false);
+                }
+              }}
+            >
+              <div className="hero-showcase-topbar">
+                <div className="hero-showcase-heading">
                   <span className="hero-panel-kicker">{content.hero.toolsEyebrow}</span>
-                  <p>{toolHint}</p>
+                  <span className="hero-showcase-mode">
+                    {showcasePaused || prefersReducedMotion
+                      ? content.hero.pausedLabel
+                      : content.hero.autoplayLabel}
+                  </span>
                 </div>
                 <div className="hero-operator-chip">
                   <div className="hero-operator-portrait">
@@ -731,55 +837,81 @@ function LandingPage({ locale }) {
                 </div>
               </div>
 
-              <article className="hero-direct-card">
-                <div className="hero-direct-copy">
-                  <span className="hero-panel-kicker">{content.hero.directEyebrow}</span>
-                  <h2>{content.hero.directTitle}</h2>
-                  <p>{content.hero.directDescription}</p>
-                  <div className="hero-direct-meta">
-                    <span className="hero-direct-badge">{content.hero.directBadge}</span>
-                    <span className="hero-direct-subnote">{content.hero.directSubnote}</span>
-                  </div>
-                </div>
-                <a
-                  className="btn btn-primary hero-direct-cta"
-                  href={oliverContactHref}
-                  onClick={() =>
-                    trackCtaClick('primary_cta_click', {
-                      cta_location: 'hero_direct_email',
-                      cta_text: content.hero.directActionLabel,
-                      landing_page_variant: LANDING_PAGE_VARIANT
-                    })
-                  }
-                >
-                  {content.hero.directActionLabel}
-                </a>
-              </article>
-
-              <div className="hero-tool-grid" role="group" aria-label={content.hero.toolsEyebrow}>
-                {content.hero.tools.map((tool) => (
+              <div className="hero-channel-dock" role="group" aria-label={content.hero.toolsEyebrow}>
+                {heroTools.map((tool, index) => (
                   <button
                     key={tool.key}
                     type="button"
-                    className="hero-tool-card"
+                    className={`hero-channel-pill${index === activeShowcaseIndex ? ' is-active' : ''}`}
                     style={{ '--tool-accent': tool.accent }}
-                    onClick={() => handleHeroToolAction(tool)}
-                    disabled={Boolean(activeToolKey)}
+                    onMouseEnter={() => setActiveShowcaseIndex(index)}
+                    onFocus={() => setActiveShowcaseIndex(index)}
+                    onClick={() => handleHeroToolAction(tool, 'hero_channel_pill')}
+                    disabled={Boolean(loadingToolKey)}
                   >
-                    <div className="hero-tool-card-top">
-                      <span className="hero-tool-badge" aria-hidden="true">
-                        <HeroToolIcon toolKey={tool.key} label={tool.label} />
+                    <span className="hero-channel-pill-main">
+                      <span className="hero-tool-badge hero-tool-badge-pill" aria-hidden="true">
+                        <HeroToolIcon toolKey={tool.key} />
                       </span>
-                      <span className="hero-tool-action">{getHeroToolActionLabel(tool)}</span>
-                    </div>
-                    <div className="hero-tool-card-copy">
-                      <strong>{tool.label}</strong>
-                      <span className="hero-tool-status">{getHeroToolStatus(tool)}</span>
-                      <span>{tool.description}</span>
-                    </div>
+                      <span className="hero-channel-pill-copy">
+                        <strong>{tool.label}</strong>
+                        <span>{tool.anonymousActionLabel}</span>
+                      </span>
+                    </span>
+                    <span className="hero-channel-pill-progress" aria-hidden="true">
+                      <span className="hero-channel-pill-progress-fill"></span>
+                    </span>
                   </button>
                 ))}
               </div>
+
+              {activeHeroTool ? (
+                <article
+                  key={activeHeroTool.key}
+                  className="hero-channel-stage"
+                  style={{ '--tool-accent': activeHeroTool.accent }}
+                >
+                  <div className="hero-channel-stage-head">
+                    <div className="hero-channel-stage-title">
+                      <span className="hero-tool-badge hero-tool-badge-stage" aria-hidden="true">
+                        <HeroToolIcon toolKey={activeHeroTool.key} />
+                      </span>
+                      <div className="hero-channel-stage-copy">
+                        <h2>{activeHeroTool.label}</h2>
+                        <p>{getHeroToolStatus(activeHeroTool)}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary hero-stage-action"
+                      onClick={() => handleHeroToolAction(activeHeroTool, 'hero_channel_stage')}
+                      disabled={Boolean(loadingToolKey)}
+                    >
+                      {getHeroToolActionLabel(activeHeroTool)}
+                    </button>
+                  </div>
+
+                  <div className="hero-channel-stage-grid">
+                    <div className="hero-stage-entry-card">
+                      <span className="hero-preview-label">{content.hero.entryEyebrow}</span>
+                      <strong>{getHeroToolActionLabel(activeHeroTool)}</strong>
+                      <p>{activeHeroTool.description}</p>
+                    </div>
+
+                    <div className="hero-stage-thread" aria-label={content.hero.previewEyebrow}>
+                      <span className="hero-preview-label">{content.hero.previewEyebrow}</span>
+                      <div className="hero-thread-bubble hero-thread-user">
+                        <span className="hero-thread-role">{content.hero.youLabel}</span>
+                        <p>{activeHeroTool.samplePrompt}</p>
+                      </div>
+                      <div className="hero-thread-bubble hero-thread-oliver">
+                        <span className="hero-thread-role">Oliver</span>
+                        <p>{activeHeroTool.sampleReply}</p>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ) : null}
 
               <div className="hero-channel-footnote">
                 <p>{content.hero.toolsFootnote}</p>
@@ -887,18 +1019,6 @@ function LandingPage({ locale }) {
                 </article>
               ))}
             </div>
-
-            <aside className="control-band">
-              <div className="control-band-copy">
-                <span className="section-kicker">{content.control.eyebrow}</span>
-                <h3>{content.control.title}</h3>
-              </div>
-              <ul className="control-band-list">
-                {content.control.points.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            </aside>
           </div>
         </section>
 
