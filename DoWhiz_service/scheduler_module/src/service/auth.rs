@@ -12,7 +12,9 @@ use tokio::task;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::account_store::{AccountStore, AccountStoreError, AnalyticsEventInsert};
+use crate::account_store::{
+    AccountStore, AccountStoreError, AnalyticsEventInsert, ChannelInstallOnboardingState,
+};
 use crate::blob_store::BlobStore;
 use crate::google_auth::GoogleAuthConfig;
 use crate::notion_store::{NotionCredential, NotionStore};
@@ -20,6 +22,12 @@ use crate::slack_store::{SlackInstallation, SlackStore};
 use crate::user_store::UserStore;
 use crate::{load_tasks_with_status, TaskStatusSummary};
 
+use super::onboarding::{
+    run_install_onboarding, AccountStoreInstallOnboardingStateStore,
+    DiscordInstallOnboardingClient, InstallOnboardingConfig, InstallOnboardingRequest,
+    InstallOnboardingRunResult, InstallOnboardingTrigger, InstallPlatform,
+    SlackInstallOnboardingClient,
+};
 use super::startup_workspace::{
     derive_provider_capabilities, derive_provider_connections, evaluate_workspace_recommendations,
     generate_startup_intake_chat_response, LinkedIdentifierSnapshot, ProactivityLevel,
@@ -40,6 +48,7 @@ pub struct AuthState {
     pub discord_client_id: Option<String>,
     pub discord_client_secret: Option<String>,
     pub discord_redirect_uri: Option<String>,
+    pub discord_bot_token: Option<String>,
     // Slack OAuth config
     pub slack_client_id: Option<String>,
     pub slack_client_secret: Option<String>,
@@ -58,6 +67,7 @@ pub struct AuthState {
     pub lark_redirect_uri: Option<String>,
     // Frontend URL for redirects after OAuth
     pub frontend_url: String,
+    pub install_onboarding_config: InstallOnboardingConfig,
     // User store and paths for task lookups
     pub user_store: Option<Arc<UserStore>>,
     pub users_root: Option<std::path::PathBuf>,
@@ -214,6 +224,275 @@ fn track_auth_event(
         properties,
     };
     store.record_analytics_event_detached(insert, "auth");
+}
+
+fn install_onboarding_identifier_type(platform: InstallPlatform) -> &'static str {
+    match platform {
+        InstallPlatform::Slack => "slack",
+        InstallPlatform::Discord => "discord",
+    }
+}
+
+fn load_linked_owner_identifier(
+    store: &AccountStore,
+    account_id: Uuid,
+    platform: InstallPlatform,
+) -> Result<Option<String>, AccountStoreError> {
+    let identifier_type = install_onboarding_identifier_type(platform);
+    Ok(store
+        .list_identifiers(account_id)?
+        .into_iter()
+        .find(|identifier| {
+            identifier.verified
+                && identifier
+                    .identifier_type
+                    .eq_ignore_ascii_case(identifier_type)
+        })
+        .map(|identifier| identifier.identifier))
+}
+
+fn linked_owner_identifier_source(linked_owner_identifier: &Option<String>) -> Option<String> {
+    linked_owner_identifier
+        .as_ref()
+        .map(|_| "linked_account_owner".to_string())
+}
+
+fn build_slack_install_onboarding_request(
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    installation: &SlackInstallation,
+    linked_owner_identifier: Option<String>,
+) -> InstallOnboardingRequest {
+    InstallOnboardingRequest {
+        account_id,
+        auth_user_id: Some(auth_user_id),
+        platform: InstallPlatform::Slack,
+        workspace_id: installation.team_id.clone(),
+        workspace_name: installation.team_name.clone(),
+        installer_identifier: None,
+        installer_identifier_source: None,
+        linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
+        linked_owner_identifier,
+        public_channel_hint: None,
+        event_key: Some(format!(
+            "slack_bot_installed:{}:{}",
+            account_id, installation.team_id
+        )),
+        route_path: Some("/auth/slack/bot-callback".to_string()),
+        trigger: InstallOnboardingTrigger::InstallSuccess,
+        force: false,
+    }
+}
+
+fn build_discord_install_onboarding_request(
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    guild_id: &str,
+    guild_name: Option<String>,
+    linked_owner_identifier: Option<String>,
+) -> InstallOnboardingRequest {
+    InstallOnboardingRequest {
+        account_id,
+        auth_user_id: Some(auth_user_id),
+        platform: InstallPlatform::Discord,
+        workspace_id: guild_id.to_string(),
+        workspace_name: guild_name,
+        installer_identifier: None,
+        installer_identifier_source: None,
+        linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
+        linked_owner_identifier,
+        public_channel_hint: None,
+        event_key: Some(format!("discord_bot_installed:{}:{}", account_id, guild_id)),
+        route_path: Some("/auth/discord/bot-callback".to_string()),
+        trigger: InstallOnboardingTrigger::InstallSuccess,
+        force: false,
+    }
+}
+
+fn build_manual_resend_install_onboarding_request(
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    platform: InstallPlatform,
+    state: &ChannelInstallOnboardingState,
+    linked_owner_identifier: Option<String>,
+    force: bool,
+) -> InstallOnboardingRequest {
+    InstallOnboardingRequest {
+        account_id,
+        auth_user_id: Some(auth_user_id),
+        platform,
+        workspace_id: state.workspace_id.clone(),
+        workspace_name: state.workspace_name.clone(),
+        installer_identifier: state.installer_identifier.clone(),
+        installer_identifier_source: state.installer_identifier_source.clone(),
+        linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
+        linked_owner_identifier,
+        public_channel_hint: state.public_channel_id.clone(),
+        event_key: Some(format!(
+            "manual_resend:{}:{}:{}",
+            platform.as_str(),
+            state.workspace_id,
+            Uuid::new_v4()
+        )),
+        route_path: Some("/api/channel-install-onboarding/resend".to_string()),
+        trigger: InstallOnboardingTrigger::ManualResend,
+        force,
+    }
+}
+
+fn execute_slack_install_onboarding(
+    state: &AuthState,
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    installation: SlackInstallation,
+) -> Result<InstallOnboardingRunResult, String> {
+    let linked_owner_identifier =
+        load_linked_owner_identifier(&state.account_store, account_id, InstallPlatform::Slack)
+            .map_err(|err| format!("failed to resolve linked Slack owner: {err}"))?;
+    let request = build_slack_install_onboarding_request(
+        account_id,
+        auth_user_id,
+        &installation,
+        linked_owner_identifier,
+    );
+    let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
+    let client = SlackInstallOnboardingClient::new(installation);
+    run_install_onboarding(
+        &state.install_onboarding_config,
+        &state_store,
+        &state.account_store,
+        &client,
+        request,
+    )
+}
+
+fn execute_discord_install_onboarding(
+    state: &AuthState,
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    guild_id: String,
+    guild_name: Option<String>,
+) -> Result<InstallOnboardingRunResult, String> {
+    let bot_token = state
+        .discord_bot_token
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "discord bot token not configured".to_string())?;
+    let linked_owner_identifier =
+        load_linked_owner_identifier(&state.account_store, account_id, InstallPlatform::Discord)
+            .map_err(|err| format!("failed to resolve linked Discord owner: {err}"))?;
+    let request = build_discord_install_onboarding_request(
+        account_id,
+        auth_user_id,
+        &guild_id,
+        guild_name.clone(),
+        linked_owner_identifier,
+    );
+    let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
+    let client = DiscordInstallOnboardingClient::new(guild_id, guild_name, bot_token);
+    run_install_onboarding(
+        &state.install_onboarding_config,
+        &state_store,
+        &state.account_store,
+        &client,
+        request,
+    )
+}
+
+fn execute_manual_install_onboarding_resend(
+    state: &AuthState,
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    platform: InstallPlatform,
+    workspace_id: &str,
+    force: bool,
+) -> Result<InstallOnboardingRunResult, (StatusCode, String)> {
+    let onboarding_state = state
+        .account_store
+        .get_channel_install_onboarding_state(account_id, platform.as_str(), workspace_id)
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load onboarding state: {err}"),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!(
+                    "no onboarding state found for {} workspace {}",
+                    platform.as_str(),
+                    workspace_id
+                ),
+            )
+        })?;
+
+    let linked_owner_identifier =
+        load_linked_owner_identifier(&state.account_store, account_id, platform).map_err(
+            |err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to resolve linked owner identifier: {err}"),
+                )
+            },
+        )?;
+    let request = build_manual_resend_install_onboarding_request(
+        account_id,
+        auth_user_id,
+        platform,
+        &onboarding_state,
+        linked_owner_identifier,
+        force,
+    );
+    let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
+
+    match platform {
+        InstallPlatform::Slack => {
+            let installation = state
+                .slack_store
+                .get_installation_or_env(&onboarding_state.workspace_id)
+                .map_err(|err| {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        format!("failed to resolve Slack installation: {err}"),
+                    )
+                })?;
+            let client = SlackInstallOnboardingClient::new(installation);
+            run_install_onboarding(
+                &state.install_onboarding_config,
+                &state_store,
+                &state.account_store,
+                &client,
+                request,
+            )
+            .map_err(|err| (StatusCode::BAD_GATEWAY, err))
+        }
+        InstallPlatform::Discord => {
+            let bot_token = state
+                .discord_bot_token
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "discord bot token not configured".to_string(),
+                    )
+                })?;
+            let client = DiscordInstallOnboardingClient::new(
+                onboarding_state.workspace_id.clone(),
+                onboarding_state.workspace_name.clone(),
+                bot_token,
+            );
+            run_install_onboarding(
+                &state.install_onboarding_config,
+                &state_store,
+                &state.account_store,
+                &client,
+                request,
+            )
+            .map_err(|err| (StatusCode::BAD_GATEWAY, err))
+        }
+    }
 }
 
 fn json_error_response(status: StatusCode, message: &str) -> Response {
@@ -2642,8 +2921,8 @@ pub async fn discord_bot_callback(
     };
 
     // Get guild_id - either from params directly or by exchanging code
-    let guild_id = if let Some(gid) = params.guild_id.clone() {
-        gid
+    let (guild_id, guild_name) = if let Some(gid) = params.guild_id.clone() {
+        (gid, None)
     } else {
         // Check if Discord OAuth is configured
         let (client_id, client_secret, redirect_uri) = match (
@@ -2680,20 +2959,22 @@ pub async fn discord_bot_callback(
             .await;
 
         match token_res {
-            Ok(res) if res.status().is_success() => {
-                match res.json::<DiscordBotOAuthResponse>().await {
-                    Ok(data) => data
-                        .guild
-                        .map(|g| g.id)
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    Err(e) => {
-                        error!("Failed to parse Discord response: {}", e);
-                        return redirect_to(
-                            "/auth/index.html?discord_bot=error&reason=parse_error",
-                        );
+            Ok(res) if res.status().is_success() => match res
+                .json::<DiscordBotOAuthResponse>()
+                .await
+            {
+                Ok(data) => {
+                    if let Some(guild) = data.guild {
+                        (guild.id, guild.name)
+                    } else {
+                        ("unknown".to_string(), None)
                     }
                 }
-            }
+                Err(e) => {
+                    error!("Failed to parse Discord response: {}", e);
+                    return redirect_to("/auth/index.html?discord_bot=error&reason=parse_error");
+                }
+            },
             Ok(res) => {
                 error!("Discord token exchange failed: {}", res.status());
                 return redirect_to(
@@ -2716,10 +2997,49 @@ pub async fn discord_bot_callback(
         Some(format!("discord_bot_installed:{}:{}", account.id, guild_id)),
         Some("/auth/discord/bot-callback"),
         serde_json::json!({
-            "guild_id": guild_id,
+            "guild_id": guild_id.clone(),
+            "guild_name": guild_name.clone(),
             "permissions": params.permissions,
         }),
     );
+
+    let onboarding_state = state.clone();
+    let onboarding_guild_id = guild_id.clone();
+    let onboarding_guild_name = guild_name.clone();
+    let onboarding_result = task::spawn_blocking(move || {
+        execute_discord_install_onboarding(
+            &onboarding_state,
+            account.id,
+            account.auth_user_id,
+            onboarding_guild_id,
+            onboarding_guild_name,
+        )
+    })
+    .await;
+
+    match onboarding_result {
+        Ok(Ok(result)) => {
+            info!(
+                "Discord install onboarding finished for account {} guild {} (public={}, dm={})",
+                account.id,
+                guild_id,
+                result.public_status.as_str(),
+                result.dm_status.as_str()
+            );
+        }
+        Ok(Err(err)) => {
+            warn!(
+                "Discord install onboarding failed for account {} guild {}: {}",
+                account.id, guild_id, err
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Discord install onboarding task join failed for account {} guild {}: {}",
+                account.id, guild_id, err
+            );
+        }
+    }
 
     info!(
         "Discord bot installed for account {} in guild {}",
@@ -3292,6 +3612,42 @@ pub async fn slack_bot_callback(
             "bot_user_id": installation.bot_user_id.clone(),
         }),
     );
+
+    let onboarding_state = state.clone();
+    let onboarding_installation = installation.clone();
+    let onboarding_result = task::spawn_blocking(move || {
+        execute_slack_install_onboarding(
+            &onboarding_state,
+            account.id,
+            account.auth_user_id,
+            onboarding_installation,
+        )
+    })
+    .await;
+
+    match onboarding_result {
+        Ok(Ok(result)) => {
+            info!(
+                "Slack install onboarding finished for account {} team {} (public={}, dm={})",
+                account.id,
+                installation.team_id,
+                result.public_status.as_str(),
+                result.dm_status.as_str()
+            );
+        }
+        Ok(Err(err)) => {
+            warn!(
+                "Slack install onboarding failed for account {} team {}: {}",
+                account.id, installation.team_id, err
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Slack install onboarding task join failed for account {} team {}: {}",
+                account.id, installation.team_id, err
+            );
+        }
+    }
 
     info!(
         "Slack bot installed for account {} in team {}",
@@ -4120,25 +4476,23 @@ pub async fn lark_oauth_callback(
         .await;
 
     let app_access_token = match app_token_res {
-        Ok(res) if res.status().is_success() => {
-            match res.json::<LarkAppTokenResponse>().await {
-                Ok(t) if t.code == 0 => match t.app_access_token {
-                    Some(token) => token,
-                    None => {
-                        error!("Lark app token response missing token");
-                        return redirect_to("/auth/index.html?lark=error&reason=app_token_missing");
-                    }
-                },
-                Ok(t) => {
-                    error!("Lark app token error {}: {:?}", t.code, t.msg);
-                    return redirect_to("/auth/index.html?lark=error&reason=app_token_error");
+        Ok(res) if res.status().is_success() => match res.json::<LarkAppTokenResponse>().await {
+            Ok(t) if t.code == 0 => match t.app_access_token {
+                Some(token) => token,
+                None => {
+                    error!("Lark app token response missing token");
+                    return redirect_to("/auth/index.html?lark=error&reason=app_token_missing");
                 }
-                Err(e) => {
-                    error!("Failed to parse Lark app token response: {}", e);
-                    return redirect_to("/auth/index.html?lark=error&reason=app_token_parse_error");
-                }
+            },
+            Ok(t) => {
+                error!("Lark app token error {}: {:?}", t.code, t.msg);
+                return redirect_to("/auth/index.html?lark=error&reason=app_token_error");
             }
-        }
+            Err(e) => {
+                error!("Failed to parse Lark app token response: {}", e);
+                return redirect_to("/auth/index.html?lark=error&reason=app_token_parse_error");
+            }
+        },
         Ok(res) => {
             error!("Lark app token request failed: {}", res.status());
             return redirect_to("/auth/index.html?lark=error&reason=app_token_request_failed");
@@ -4161,25 +4515,23 @@ pub async fn lark_oauth_callback(
         .await;
 
     let user_access_token = match user_token_res {
-        Ok(res) if res.status().is_success() => {
-            match res.json::<LarkUserTokenResponse>().await {
-                Ok(t) if t.code == 0 => match t.data {
-                    Some(data) => data.access_token,
-                    None => {
-                        error!("Lark user token response missing data");
-                        return redirect_to("/auth/index.html?lark=error&reason=user_token_missing");
-                    }
-                },
-                Ok(t) => {
-                    error!("Lark user token error {}: {:?}", t.code, t.msg);
-                    return redirect_to("/auth/index.html?lark=error&reason=user_token_error");
+        Ok(res) if res.status().is_success() => match res.json::<LarkUserTokenResponse>().await {
+            Ok(t) if t.code == 0 => match t.data {
+                Some(data) => data.access_token,
+                None => {
+                    error!("Lark user token response missing data");
+                    return redirect_to("/auth/index.html?lark=error&reason=user_token_missing");
                 }
-                Err(e) => {
-                    error!("Failed to parse Lark user token response: {}", e);
-                    return redirect_to("/auth/index.html?lark=error&reason=user_token_parse_error");
-                }
+            },
+            Ok(t) => {
+                error!("Lark user token error {}: {:?}", t.code, t.msg);
+                return redirect_to("/auth/index.html?lark=error&reason=user_token_error");
             }
-        }
+            Err(e) => {
+                error!("Failed to parse Lark user token response: {}", e);
+                return redirect_to("/auth/index.html?lark=error&reason=user_token_parse_error");
+            }
+        },
         Ok(res) => {
             error!("Lark user token exchange failed: {}", res.status());
             return redirect_to("/auth/index.html?lark=error&reason=token_exchange_failed");
@@ -4198,25 +4550,23 @@ pub async fn lark_oauth_callback(
         .await;
 
     let lark_user = match user_res {
-        Ok(res) if res.status().is_success() => {
-            match res.json::<LarkUserInfoResponse>().await {
-                Ok(r) if r.code == 0 => match r.data {
-                    Some(user) => user,
-                    None => {
-                        error!("Lark user info response missing data");
-                        return redirect_to("/auth/index.html?lark=error&reason=user_info_missing");
-                    }
-                },
-                Ok(r) => {
-                    error!("Lark user info error {}: {:?}", r.code, r.msg);
-                    return redirect_to("/auth/index.html?lark=error&reason=user_info_error");
+        Ok(res) if res.status().is_success() => match res.json::<LarkUserInfoResponse>().await {
+            Ok(r) if r.code == 0 => match r.data {
+                Some(user) => user,
+                None => {
+                    error!("Lark user info response missing data");
+                    return redirect_to("/auth/index.html?lark=error&reason=user_info_missing");
                 }
-                Err(e) => {
-                    error!("Failed to parse Lark user info response: {}", e);
-                    return redirect_to("/auth/index.html?lark=error&reason=user_parse_error");
-                }
+            },
+            Ok(r) => {
+                error!("Lark user info error {}: {:?}", r.code, r.msg);
+                return redirect_to("/auth/index.html?lark=error&reason=user_info_error");
             }
-        }
+            Err(e) => {
+                error!("Failed to parse Lark user info response: {}", e);
+                return redirect_to("/auth/index.html?lark=error&reason=user_parse_error");
+            }
+        },
         Ok(res) => {
             error!("Lark user info request failed: {}", res.status());
             return redirect_to("/auth/index.html?lark=error&reason=user_request_failed");
@@ -4257,10 +4607,9 @@ pub async fn lark_oauth_callback(
     // Step 5: Link Lark open_id to account
     let store = state.account_store.clone();
     let lark_open_id = lark_user.open_id.clone();
-    let link_result = task::spawn_blocking(move || {
-        store.create_identifier(account.id, "lark", &lark_open_id)
-    })
-    .await;
+    let link_result =
+        task::spawn_blocking(move || store.create_identifier(account.id, "lark", &lark_open_id))
+            .await;
 
     match link_result {
         Ok(Ok(_identifier)) => {
@@ -4732,6 +5081,108 @@ pub async fn get_account_tasks(
     (StatusCode::OK, Json(TasksResponse { tasks })).into_response()
 }
 
+#[derive(Debug, Deserialize)]
+struct InstallOnboardingResendRequest {
+    platform: InstallPlatform,
+    workspace_id: String,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct InstallOnboardingResendResponse {
+    platform: InstallPlatform,
+    workspace_id: String,
+    #[serde(flatten)]
+    result: InstallOnboardingRunResult,
+}
+
+/// POST /api/channel-install-onboarding/resend
+/// Re-runs install onboarding for a previously recorded Slack workspace or Discord guild.
+async fn resend_install_onboarding(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(request): Json<InstallOnboardingResendRequest>,
+) -> impl IntoResponse {
+    let token = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return json_error_response(StatusCode::UNAUTHORIZED, "Missing Authorization header");
+        }
+    };
+
+    let auth_user = match validate_supabase_token(&state.supabase_url, &token).await {
+        Ok(user) => user,
+        Err((status, message)) => return json_error_response(status, &message),
+    };
+
+    let workspace_id = request.workspace_id.trim().to_string();
+    if workspace_id.is_empty() {
+        return json_error_response(StatusCode::BAD_REQUEST, "workspace_id is required");
+    }
+
+    let store = state.account_store.clone();
+    let account_result =
+        task::spawn_blocking(move || store.get_account_by_auth_user(auth_user.id)).await;
+
+    let account = match account_result {
+        Ok(Ok(Some(account))) => account,
+        Ok(Ok(None)) => {
+            return json_error_response(StatusCode::NOT_FOUND, "Account not found");
+        }
+        Ok(Err(err)) => {
+            error!(
+                "Failed to get account for manual onboarding resend: {}",
+                err
+            );
+            return json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to get account");
+        }
+        Err(err) => {
+            error!(
+                "spawn_blocking panicked during manual onboarding resend account lookup: {}",
+                err
+            );
+            return json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal error");
+        }
+    };
+
+    let platform = request.platform;
+    let force = request.force;
+    let onboarding_state = state.clone();
+    let workspace_id_for_task = workspace_id.clone();
+    let resend_result = task::spawn_blocking(move || {
+        execute_manual_install_onboarding_resend(
+            &onboarding_state,
+            account.id,
+            account.auth_user_id,
+            platform,
+            &workspace_id_for_task,
+            force,
+        )
+    })
+    .await;
+
+    match resend_result {
+        Ok(Ok(result)) => (
+            StatusCode::OK,
+            Json(InstallOnboardingResendResponse {
+                platform,
+                workspace_id,
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(Err((status, message))) => json_error_response(status, &message),
+        Err(err) => {
+            error!(
+                "spawn_blocking panicked during manual onboarding resend execution: {}",
+                err
+            );
+            json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        }
+    }
+}
+
 // ============================================================================
 // Router
 // ============================================================================
@@ -4757,6 +5208,10 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/notion/callback", get(notion_oauth_callback))
         .route("/auth/lark", get(lark_oauth_start))
         .route("/auth/lark/callback", get(lark_oauth_callback))
+        .route(
+            "/api/channel-install-onboarding/resend",
+            post(resend_install_onboarding),
+        )
         .route(
             "/api/startup-workspace/intake-chat",
             post(startup_workspace_intake_chat),
@@ -4994,7 +5449,8 @@ mod tests {
 
     #[test]
     fn lark_user_info_response_deserializes_correctly() {
-        let json = r#"{"code":0,"msg":"success","data":{"open_id":"ou_abc123","name":"Test User"}}"#;
+        let json =
+            r#"{"code":0,"msg":"success","data":{"open_id":"ou_abc123","name":"Test User"}}"#;
         let parsed: LarkUserInfoResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.code, 0);
         assert!(parsed.data.is_some());
@@ -5029,5 +5485,133 @@ mod tests {
         assert!(url.contains("app_id=cli_test123"));
         assert!(url.contains("redirect_uri=https%3A%2F%2Fapi.dowhiz.com%2Fauth%2Flark%2Fcallback"));
         assert!(url.contains("state=encoded_state"));
+    }
+
+    #[test]
+    fn slack_install_onboarding_request_uses_install_success_wiring() {
+        let account_id = Uuid::new_v4();
+        let auth_user_id = Uuid::new_v4();
+        let installation = SlackInstallation {
+            team_id: "T123".to_string(),
+            team_name: Some("Acme".to_string()),
+            bot_token: "xoxb-test".to_string(),
+            bot_user_id: "Ubot".to_string(),
+            installed_at: Utc::now(),
+        };
+
+        let request = build_slack_install_onboarding_request(
+            account_id,
+            auth_user_id,
+            &installation,
+            Some("Uowner".to_string()),
+        );
+
+        assert_eq!(request.platform, InstallPlatform::Slack);
+        assert_eq!(request.trigger, InstallOnboardingTrigger::InstallSuccess);
+        assert_eq!(request.workspace_id, "T123");
+        assert_eq!(request.workspace_name.as_deref(), Some("Acme"));
+        assert_eq!(request.installer_identifier, None);
+        assert_eq!(request.linked_owner_identifier.as_deref(), Some("Uowner"));
+        assert_eq!(
+            request.linked_owner_identifier_source.as_deref(),
+            Some("linked_account_owner")
+        );
+        let expected_event_key = format!("slack_bot_installed:{}:T123", account_id);
+        assert_eq!(
+            request.event_key.as_deref(),
+            Some(expected_event_key.as_str())
+        );
+        assert_eq!(
+            request.route_path.as_deref(),
+            Some("/auth/slack/bot-callback")
+        );
+    }
+
+    #[test]
+    fn discord_install_onboarding_request_uses_guild_context_and_safe_dm_fallback() {
+        let account_id = Uuid::new_v4();
+        let auth_user_id = Uuid::new_v4();
+        let request = build_discord_install_onboarding_request(
+            account_id,
+            auth_user_id,
+            "987654321",
+            Some("Launchpad".to_string()),
+            None,
+        );
+
+        assert_eq!(request.platform, InstallPlatform::Discord);
+        assert_eq!(request.trigger, InstallOnboardingTrigger::InstallSuccess);
+        assert_eq!(request.workspace_id, "987654321");
+        assert_eq!(request.workspace_name.as_deref(), Some("Launchpad"));
+        assert_eq!(request.installer_identifier, None);
+        assert_eq!(request.linked_owner_identifier, None);
+        assert_eq!(request.linked_owner_identifier_source, None);
+        let expected_event_key = format!("discord_bot_installed:{}:987654321", account_id);
+        assert_eq!(
+            request.event_key.as_deref(),
+            Some(expected_event_key.as_str())
+        );
+        assert_eq!(
+            request.route_path.as_deref(),
+            Some("/auth/discord/bot-callback")
+        );
+    }
+
+    #[test]
+    fn manual_resend_request_reuses_persisted_state_fields() {
+        let account_id = Uuid::new_v4();
+        let auth_user_id = Uuid::new_v4();
+        let state = ChannelInstallOnboardingState {
+            account_id,
+            platform: "slack".to_string(),
+            workspace_id: "T999".to_string(),
+            workspace_name: Some("Workspace".to_string()),
+            installer_identifier: Some("Uinstaller".to_string()),
+            installer_identifier_source: Some("installer".to_string()),
+            public_channel_id: Some("C123".to_string()),
+            public_channel_name: Some("general".to_string()),
+            dm_recipient_identifier: Some("Uinstaller".to_string()),
+            dm_recipient_source: Some("installer".to_string()),
+            last_event_key: Some("slack_bot_installed".to_string()),
+            last_public_status: Some("sent".to_string()),
+            last_public_error: None,
+            last_dm_status: Some("sent".to_string()),
+            last_dm_error: None,
+            last_skip_reason: None,
+            last_attempted_at: None,
+            last_succeeded_at: None,
+            last_manual_resend_at: None,
+        };
+
+        let request = build_manual_resend_install_onboarding_request(
+            account_id,
+            auth_user_id,
+            InstallPlatform::Slack,
+            &state,
+            Some("Uowner".to_string()),
+            true,
+        );
+
+        assert_eq!(request.platform, InstallPlatform::Slack);
+        assert_eq!(request.trigger, InstallOnboardingTrigger::ManualResend);
+        assert!(request.force);
+        assert_eq!(request.workspace_id, "T999");
+        assert_eq!(request.workspace_name.as_deref(), Some("Workspace"));
+        assert_eq!(request.installer_identifier.as_deref(), Some("Uinstaller"));
+        assert_eq!(request.public_channel_hint.as_deref(), Some("C123"));
+        assert_eq!(request.linked_owner_identifier.as_deref(), Some("Uowner"));
+        assert_eq!(
+            request.linked_owner_identifier_source.as_deref(),
+            Some("linked_account_owner")
+        );
+        assert_eq!(
+            request.route_path.as_deref(),
+            Some("/api/channel-install-onboarding/resend")
+        );
+        assert!(request
+            .event_key
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("manual_resend:slack:T999:"));
     }
 }
