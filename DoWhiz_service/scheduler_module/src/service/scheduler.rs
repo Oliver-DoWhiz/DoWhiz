@@ -539,6 +539,17 @@ fn execute_due_task(
     };
 
     let mut scheduler = Scheduler::load(&tasks_db_path, ModuleExecutor::default())?;
+
+    // Check for existing running execution in MongoDB.
+    // This prevents duplicate executions when the worker restarts and loses in-memory claims.
+    if let Ok(true) = scheduler.has_running_execution(&task_ref.task_id) {
+        info!(
+            "scheduler skipping task {} for user {} - already has running execution in MongoDB",
+            task_ref.task_id, task_ref.user_id
+        );
+        return Ok(());
+    }
+
     let now = Utc::now();
     let summary = summarize_tasks(scheduler.tasks(), now);
     log_task_snapshot(&task_ref.user_id, "before_execute", &summary);
