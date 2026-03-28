@@ -1019,18 +1019,6 @@ function LandingPage({ locale }) {
                 </article>
               ))}
             </div>
-
-            <aside className="control-band">
-              <div className="control-band-copy">
-                <span className="section-kicker">{content.control.eyebrow}</span>
-                <h3>{content.control.title}</h3>
-              </div>
-              <ul className="control-band-list">
-                {content.control.points.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            </aside>
           </div>
         </section>
 

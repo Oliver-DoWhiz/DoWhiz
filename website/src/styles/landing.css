@@ -2604,7 +2604,6 @@
 .demo-feature-card,
 .demo-short-rail,
 .story-step-card,
-.control-band,
 .example-card {
   border: 1px solid color-mix(in srgb, var(--glass-border) 94%, transparent);
   border-radius: 1.45rem;
@@ -2731,7 +2730,7 @@
 
 .section-title-left {
   margin-bottom: 0;
-  max-width: 16ch;
+  max-width: 20ch;
   text-align: left;
 }
 
@@ -2899,49 +2898,6 @@
   font-weight: 700;
 }
 
-.control-band {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  gap: 1rem;
-  align-items: center;
-  padding: 1.15rem;
-}
-
-.control-band-copy h3 {
-  margin: 0.45rem 0 0;
-  font-size: clamp(1.34rem, 2.3vw, 1.86rem);
-  line-height: 1.12;
-  max-width: 16ch;
-}
-
-.control-band-list {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.control-band-list li {
-  position: relative;
-  padding: 0.84rem 0.92rem 0.84rem 1.95rem;
-  border-radius: 1rem;
-  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  line-height: 1.52;
-}
-
-.control-band-list li::before {
-  content: '';
-  position: absolute;
-  left: 0.92rem;
-  top: 1.12rem;
-  width: 0.48rem;
-  height: 0.48rem;
-  border-radius: var(--radius-full);
-  background: var(--brand-primary);
-}
-
 .examples-heading {
   margin-top: 0.5rem;
 }
@@ -3012,8 +2968,7 @@
 }
 
 @media (max-width: 1180px) {
-  .demo-showcase-grid,
-  .control-band {
+  .demo-showcase-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3032,10 +2987,6 @@
   }
 
   .story-step-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .control-band-list {
     grid-template-columns: 1fr;
   }
 }
@@ -3058,7 +3009,6 @@
   .demo-feature-card,
   .demo-short-rail,
   .story-step-card,
-  .control-band,
   .example-card {
     padding: 1rem;
   }
