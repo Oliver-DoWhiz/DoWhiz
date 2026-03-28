@@ -9,35 +9,349 @@
     <link rel="manifest" href="/site.webmanifest?v=20260311" />
     <meta
       name="description"
-      content="Multi-channel, tool-native digital employee team for daily operations. Trigger work from email, chat, GitHub, and shared docs with shared memory across platforms."
+      content="Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools."
     />
     <meta name="robots" content="index, follow" />
     <meta name="application-name" content="DoWhiz" />
     <meta name="theme-color" content="#2C2C2E" />
     <link rel="canonical" href="https://dowhiz.com/" />
+    <link rel="alternate" hreflang="en" href="https://dowhiz.com/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://dowhiz.com/cn" />
+    <link rel="alternate" hreflang="x-default" href="https://dowhiz.com/" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta property="og:title" content="DoWhiz" />
+    <meta property="og:title" content="DoWhiz | AI digital employees in email, Slack, and GitHub" />
     <meta
       property="og:description"
-      content="Multi-channel, tool-native digital employee team for daily operations. Trigger work from email, chat, GitHub, and shared docs with shared memory across platforms."
+      content="Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://dowhiz.com/" />
     <meta property="og:site_name" content="DoWhiz" />
     <meta property="og:locale" content="en_US" />
-    <meta property="og:image" content="/assets/DoWhiz.svg" />
+    <meta property="og:image" content="https://dowhiz.com/assets/DoWhiz.svg" />
     <meta property="og:image:alt" content="DoWhiz digital employee team" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="DoWhiz" />
+    <meta name="twitter:title" content="DoWhiz | AI digital employees in email, Slack, and GitHub" />
     <meta
       name="twitter:description"
-      content="Multi-channel, tool-native digital employee team for daily operations. Trigger work from email, chat, GitHub, and shared docs with shared memory across platforms."
+      content="Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools."
     />
-    <meta name="twitter:image" content="/assets/DoWhiz.svg" />
-    <title>DoWhiz | Multi-Channel Tool-Native Digital Employees</title>
+    <meta name="twitter:image" content="https://dowhiz.com/assets/DoWhiz.svg" />
+    <title>DoWhiz | AI digital employees in email, Slack, and GitHub</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top, rgba(255, 189, 123, 0.24), transparent 38%),
+          linear-gradient(180deg, #fff7ee 0%, #f8f2ea 52%, #f4efe8 100%);
+        color: #1f1f22;
+      }
+
+      .landing-static-fallback {
+        max-width: 72rem;
+        margin: 0 auto;
+        padding: 2rem 1.5rem 3rem;
+      }
+
+      .landing-static-header,
+      .landing-static-grid,
+      .landing-static-faq {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .landing-static-header {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        align-items: start;
+        margin-bottom: 2rem;
+      }
+
+      .landing-static-brand,
+      .landing-static-card a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .landing-static-brand {
+        font-size: 1.1rem;
+        font-weight: 700;
+      }
+
+      .landing-static-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1rem;
+        justify-content: flex-end;
+      }
+
+      .landing-static-nav a,
+      .landing-static-links a {
+        color: #8d3b16;
+        font-weight: 600;
+        text-decoration: none;
+      }
+
+      .landing-static-hero,
+      .landing-static-card,
+      .landing-static-faq article {
+        border: 1px solid rgba(154, 121, 96, 0.18);
+        border-radius: 1.35rem;
+        background: rgba(255, 255, 255, 0.84);
+        box-shadow: 0 20px 50px -36px rgba(47, 33, 19, 0.35);
+      }
+
+      .landing-static-hero {
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .landing-static-kicker,
+      .landing-static-card h2 {
+        margin: 0 0 0.75rem;
+      }
+
+      .landing-static-kicker {
+        color: #8d3b16;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .landing-static-hero h1 {
+        margin: 0 0 0.9rem;
+        font-size: clamp(2rem, 5vw, 3.6rem);
+        line-height: 0.98;
+        max-width: 12ch;
+      }
+
+      .landing-static-hero p,
+      .landing-static-card p,
+      .landing-static-faq p,
+      .landing-static-card li {
+        margin: 0;
+        color: #4a433d;
+        font-size: 1rem;
+        line-height: 1.65;
+      }
+
+      .landing-static-links,
+      .landing-static-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.85rem 1.2rem;
+        margin-top: 1.25rem;
+      }
+
+      .landing-static-list {
+        padding: 0;
+        list-style: none;
+      }
+
+      .landing-static-list li {
+        padding: 0.4rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(244, 140, 76, 0.12);
+      }
+
+      .landing-static-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        margin-bottom: 1.5rem;
+      }
+
+      .landing-static-card {
+        padding: 1.2rem;
+      }
+
+      .landing-static-card h2 {
+        font-size: 1.05rem;
+      }
+
+      .landing-static-faq {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+
+      .landing-static-faq article {
+        padding: 1.2rem;
+      }
+
+      .landing-static-faq h2 {
+        margin: 0 0 1rem;
+        font-size: 1.05rem;
+      }
+
+      .landing-static-faq h3 {
+        margin: 0 0 0.45rem;
+        font-size: 1rem;
+      }
+
+      noscript p {
+        margin: 1rem 0 0;
+        color: #4a433d;
+      }
+
+      @media (max-width: 720px) {
+        .landing-static-fallback {
+          padding: 1.25rem 1rem 2rem;
+        }
+
+        .landing-static-header {
+          grid-template-columns: 1fr;
+        }
+
+        .landing-static-nav {
+          justify-content: flex-start;
+        }
+
+        .landing-static-hero {
+          padding: 1.35rem;
+        }
+      }
+    </style>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://dowhiz.com/#organization",
+            "name": "DoWhiz",
+            "url": "https://dowhiz.com/",
+            "logo": "https://dowhiz.com/assets/DoWhiz.svg",
+            "sameAs": ["https://github.com/KnoWhiz/DoWhiz"],
+            "contactPoint": [
+              {
+                "@type": "ContactPoint",
+                "contactType": "customer support",
+                "email": "admin@dowhiz.com",
+                "availableLanguage": ["English", "Chinese"]
+              }
+            ]
+          },
+          {
+            "@type": "WebPage",
+            "@id": "https://dowhiz.com/#webpage",
+            "url": "https://dowhiz.com/",
+            "name": "DoWhiz | AI digital employees in email, Slack, and GitHub",
+            "description": "Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools.",
+            "inLanguage": "en"
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://dowhiz.com/#faq",
+            "url": "https://dowhiz.com/",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is the fastest way to start?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Email is the fastest no-login start. Slack and Discord also support direct add flows, while GitHub and docs requests can begin from email first."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Do I need an account before the first request?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. You can begin with a real request before you decide whether saved setup or app connections are worth it."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Which tools does DoWhiz work in?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "DoWhiz supports requests from email, Slack, Discord, GitHub, Google Docs, Notion, and related workflow surfaces."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="landing-static-fallback">
+        <header class="landing-static-header">
+          <a class="landing-static-brand" href="https://dowhiz.com/">DoWhiz</a>
+          <nav class="landing-static-nav" aria-label="Primary">
+            <a href="https://dowhiz.com/integrations/">Integrations</a>
+            <a href="https://dowhiz.com/solutions/email-task-automation/">Solutions</a>
+            <a href="https://dowhiz.com/help-center/">Help Center</a>
+            <a href="https://dowhiz.com/blog/">Blog</a>
+          </nav>
+        </header>
+
+        <section class="landing-static-hero">
+          <p class="landing-static-kicker">AI digital employees</p>
+          <h1>Use Oliver where you already work</h1>
+          <p>
+            Start in email, Slack, or Discord, then expand into GitHub, docs, and other tools when
+            you want deeper workflow access. DoWhiz turns real requests into finished work in the
+            same context where the request started.
+          </p>
+          <ul class="landing-static-list">
+            <li>Email task automation</li>
+            <li>Slack execution support</li>
+            <li>GitHub issue to PR follow-through</li>
+            <li>Google Docs action-item workflows</li>
+          </ul>
+          <div class="landing-static-links">
+            <a href="https://dowhiz.com/solutions/email-task-automation/">Explore workflow pages</a>
+            <a href="mailto:oliver@dowhiz.com?subject=A%20first%20task%20for%20Oliver">Email Oliver</a>
+          </div>
+        </section>
+
+        <section class="landing-static-grid" aria-label="Featured pages">
+          <article class="landing-static-card">
+            <h2><a href="https://dowhiz.com/solutions/github-issue-automation/">GitHub issue automation</a></h2>
+            <p>Move from assigned issue to tested pull request with tighter scope and clear summaries.</p>
+          </article>
+          <article class="landing-static-card">
+            <h2><a href="https://dowhiz.com/solutions/email-task-automation/">Email task automation</a></h2>
+            <p>Keep inbox work in-thread while routing requests into drafts, summaries, and finished deliverables.</p>
+          </article>
+          <article class="landing-static-card">
+            <h2><a href="https://dowhiz.com/solutions/google-docs-automation/">Google Docs automation</a></h2>
+            <p>Turn comments and meeting notes into action items, rewrites, and tracked follow-through.</p>
+          </article>
+          <article class="landing-static-card">
+            <h2><a href="https://dowhiz.com/integrations/">Integrations</a></h2>
+            <p>See how DoWhiz works across email, Slack, Discord, GitHub, Google Docs, and Notion.</p>
+          </article>
+        </section>
+
+        <section class="landing-static-faq" aria-label="Frequently asked questions">
+          <article>
+            <h2>Before you start</h2>
+            <h3>Do I need an account first?</h3>
+            <p>No. Start with a real request first and add saved setup later if it helps.</p>
+          </article>
+          <article>
+            <h2>What can Oliver do?</h2>
+            <h3>Does this only work for one tool?</h3>
+            <p>No. DoWhiz is built for multi-channel work across email, chat, GitHub, and shared docs.</p>
+          </article>
+          <article>
+            <h2>Need details?</h2>
+            <h3>Where should I learn more?</h3>
+            <p>Use the Help Center, Trust and Safety page, and workflow solution pages for deeper guidance.</p>
+          </article>
+        </section>
+      </main>
+    </div>
+    <noscript>
+      <p class="landing-static-fallback">
+        JavaScript is optional for the crawlable overview above. Enable it to load the full interactive DoWhiz experience.
+      </p>
+    </noscript>
     <script src="/theme.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -239,6 +239,7 @@ async function main() {
   const duplicateTitleGroups = buildDuplicateGroups(indexablePages, (row) => row.title);
   const duplicateMetaGroups = buildDuplicateGroups(indexablePages, (row) => row.metaDescription);
   const duplicateH1Groups = buildDuplicateGroups(indexablePages, (row) => row.primaryH1);
+  const missingH1Pages = indexablePages.filter((row) => row.h1Count === 0);
 
   const duplicateTitleUrls = new Set(duplicateTitleGroups.flatMap((entry) => entry.urls));
   const duplicateMetaUrls = new Set(duplicateMetaGroups.flatMap((entry) => entry.urls));
@@ -262,6 +263,7 @@ async function main() {
     indexable_pages: indexablePages.length,
     title_issue_pages: titleIssuePages.size,
     meta_description_issue_pages: metaIssuePages.size,
+    missing_h1_pages: missingH1Pages.length,
     duplicate_h1_groups: duplicateH1Groups.length,
     duplicate_h1_pages: duplicateH1Groups.flatMap((entry) => entry.urls).length,
     status_4xx: status4xx.length,
@@ -284,6 +286,7 @@ async function main() {
     `| Indexable pages (2xx and not noindex) | ${summary.indexable_pages} |`,
     `| Title issue pages (missing/duplicate) | ${summary.title_issue_pages} |`,
     `| Meta description issue pages (missing/duplicate) | ${summary.meta_description_issue_pages} |`,
+    `| Missing H1 pages | ${summary.missing_h1_pages} |`,
     `| Duplicate H1 groups | ${summary.duplicate_h1_groups} |`,
     `| Pages in duplicate H1 groups | ${summary.duplicate_h1_pages} |`,
     `| 4xx responses | ${summary.status_4xx} |`,
@@ -313,6 +316,11 @@ async function main() {
         (group) => `"${group.value}" (${group.urls.length} pages): ${group.urls.join(', ')}`
       )
     ),
+    '',
+    '## Missing H1 Details',
+    '',
+    `Missing H1 pages: ${missingH1Pages.length}`,
+    toMarkdownList(missingH1Pages.map((row) => row.url)),
     '',
     '## Duplicate H1 Details',
     '',
