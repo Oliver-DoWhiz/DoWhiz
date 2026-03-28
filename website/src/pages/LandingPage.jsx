@@ -20,6 +20,8 @@ const LOGO_URL = `${SITE_URL}/assets/DoWhiz.svg`;
 const SUPPORT_EMAIL = 'admin@dowhiz.com';
 const ORG_NAME = 'DoWhiz';
 const CN_PATH_PREFIX = '/cn';
+const LANDING_PAGE_OVERRIDE_PARAM = 'view';
+const LANDING_PAGE_OVERRIDE_VALUE = 'landing';
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
 const LANDING_SETTINGS_SUFFIX = '#section-settings';
 const AUTHENTICATED_SETTINGS_SUFFIX = '?loggedIn=true#section-settings';
@@ -122,6 +124,44 @@ const getLocalizedDashboardPath = (
   pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
 ) => getLocalizedAuthPath(LANDING_DASHBOARD_SUFFIX, pathname);
 
+const getLocalizedLandingPagePath = (
+  pathname = typeof window !== 'undefined' ? window.location.pathname : '/'
+) => {
+  const basePath = isCnPath(pathname) ? CN_PATH_PREFIX : '/';
+  return `${basePath}?${LANDING_PAGE_OVERRIDE_PARAM}=${LANDING_PAGE_OVERRIDE_VALUE}`;
+};
+
+const hasSameOriginReferrer = () => {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.referrer) {
+    return false;
+  }
+
+  try {
+    return new URL(document.referrer, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+};
+
+const shouldStayOnLandingPage = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const { hash, search } = window.location;
+  const searchParams = new URLSearchParams(search);
+
+  if (searchParams.get(LANDING_PAGE_OVERRIDE_PARAM) === LANDING_PAGE_OVERRIDE_VALUE) {
+    return true;
+  }
+
+  if (hash) {
+    return true;
+  }
+
+  return hasSameOriginReferrer();
+};
+
 const updateMetaContent = (selector, content) => {
   if (typeof document === 'undefined' || !content) {
     return;
@@ -161,8 +201,9 @@ function LandingPage({ locale }) {
   const [navHidden, setNavHidden] = useState(false);
   const userMenuRef = useRef(null);
   const lastScrollY = useRef(0);
-  const localizedHomePath = content.nav.homePath;
+  const authRedirectStartedRef = useRef(false);
   const isAuthenticated = authStatus === 'authenticated' && Boolean(user);
+  const localizedHomePath = isAuthenticated ? getLocalizedLandingPagePath(pathname) : content.nav.homePath;
   const heroTools = content.hero.tools;
   const activeHeroTool = heroTools[activeShowcaseIndex] || heroTools[0];
 
@@ -275,6 +316,14 @@ function LandingPage({ locale }) {
 
       if (currentUser) {
         setAuthStatus('authenticated');
+        if (
+          !authRedirectStartedRef.current &&
+          typeof window !== 'undefined' &&
+          !shouldStayOnLandingPage()
+        ) {
+          authRedirectStartedRef.current = true;
+          window.location.replace(getLocalizedDashboardPath(window.location.pathname));
+        }
         return;
       }
 
