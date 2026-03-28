@@ -115,5 +115,6 @@ Manual resend path:
 
 Known V1 limitations:
 - Slack installer identity is not recovered directly from the bot-install callback; DM falls back to the linked account owner's verified Slack identifier when available
+- Slack DM delivery uses a DM-open plus `chat.postMessage` path and safely fails when the workspace install cannot open or write that conversation
 - Discord installer identity is not recovered directly from the bot-install callback; DM falls back to the linked account owner's verified Discord identifier when available
 - if no reliable direct recipient exists, DM is skipped rather than guessed

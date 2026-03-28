@@ -427,6 +427,7 @@ The current V1 implementation makes the following concrete choices:
    - Slack V1 does not recover a reliable installer identity directly from the bot-install callback
    - Discord V1 does not recover a reliable installer identity directly from the bot-install callback
    - for both platforms, the DM path falls back to the linked account owner's verified platform identifier when available
+   - Slack DM delivery depends on the workspace install being able to open and write the DM conversation; when that path is unavailable, the DM safely fails without blocking install success
    - if no reliable direct recipient exists, the DM is skipped
 
 6. Delivery behavior:
