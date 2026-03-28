@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="python"
-else
-  echo "python interpreter not found for notion_mcp" >&2
-  exit 1
+# Check for virtual environment Python first (for externally-managed environments)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_CANDIDATES=(
+  "${SCRIPT_DIR}/../.venv/bin/python"
+  "${HOME}/server/DoWhiz/DoWhiz_service/.venv/bin/python"
+  "/app/DoWhiz_service/.venv/bin/python"
+)
+
+PYTHON_BIN=""
+for venv_py in "${VENV_CANDIDATES[@]}"; do
+  if [[ -x "${venv_py}" ]]; then
+    PYTHON_BIN="${venv_py}"
+    break
+  fi
+done
+
+# Fall back to system Python if no venv found
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  else
+    echo "python interpreter not found for notion_mcp" >&2
+    exit 1
+  fi
 fi
 
 candidates=(

@@ -125,16 +125,16 @@ const EN_LANDING_CONTENT = {
     ]
   },
   demo: {
-    eyebrow: 'Real product examples',
-    title: 'Watch the request-to-result loop before you change your workflow.',
-    intro: 'One longer walkthrough and three faster mobile examples.',
+    eyebrow: 'Examples',
+    title: 'See Oliver in action',
+    intro: 'One full demo and three quick examples.',
     desktopTitle: 'Desktop walkthrough',
-    desktopDescription: 'See the request-to-result loop in one flow.',
+    desktopDescription: 'A full request-to-result walkthrough.',
     desktopVideoId: 'IsSOTSYIIIY',
     desktopVideoHref: 'https://youtu.be/IsSOTSYIIIY',
     desktopCta: 'Open on YouTube',
     shortsTitle: 'Mobile quick looks',
-    shortsDescription: 'Short examples built for a faster scan.',
+    shortsDescription: 'Quick mobile demos.',
     shorts: [
       {
         title: 'Mobile demo 01',
@@ -155,8 +155,8 @@ const EN_LANDING_CONTENT = {
   },
   examples: {
     eyebrow: 'What you can ask',
-    title: 'Start with something concrete, not a toy prompt.',
-    intro: 'Good first requests are real, bounded, and worth handing off for a first pass.',
+    title: 'Start with real work',
+    intro: 'Real, bounded requests work best.',
     cards: [
       {
         tag: 'Research',
@@ -190,15 +190,6 @@ const EN_LANDING_CONTENT = {
       }
     ]
   },
-  control: {
-    eyebrow: 'Control and trust',
-    title: 'Oliver can help first while you stay in control.',
-    points: [
-      'Start in the channel that already fits the request',
-      'Keep sensitive work reviewable before anything final is sent',
-      'Save setup and memory only when you want Oliver to keep context'
-    ]
-  },
   faqItems: [
     {
       question: 'What is the fastest way to start?',
@@ -228,8 +219,8 @@ const EN_LANDING_CONTENT = {
   ],
   labels: {
     faqEyebrow: 'Questions',
-    faqTitle: 'The essentials before you start',
-    faqIntro: 'Short answers about starting without login, choosing a real channel first, and deciding later which connections are worth saving.',
+    faqTitle: 'Before you start',
+    faqIntro: 'Short answers before you begin.',
     faqLinkLabel: 'Open the Help Center',
     footerTitle: 'Resources',
     footerTagline: 'Oliver helps turn requests into finished work.',
@@ -373,16 +364,16 @@ const ZH_LANDING_CONTENT = {
     ]
   },
   demo: {
-    eyebrow: '真实产品演示',
-    title: '先看 Oliver 如何把请求变成结果，而不是先看一整套流程说明。',
-    intro: '一个较完整的桌面演示，加上三个更短的移动端例子。',
+    eyebrow: '示例',
+    title: '看看 Oliver 怎么工作',
+    intro: '一个完整演示，外加三个快速示例。',
     desktopTitle: '桌面完整演示',
-    desktopDescription: '一条龙看完从请求到结果的过程。',
+    desktopDescription: '完整看一遍从请求到结果。',
     desktopVideoId: 'IsSOTSYIIIY',
     desktopVideoHref: 'https://youtu.be/IsSOTSYIIIY',
     desktopCta: '去 YouTube 看',
     shortsTitle: '移动端快速演示',
-    shortsDescription: '更短、更适合快速浏览的几个例子。',
+    shortsDescription: '几个更短的移动端示例。',
     shorts: [
       {
         title: '移动端演示 01',
@@ -403,8 +394,8 @@ const ZH_LANDING_CONTENT = {
   },
   examples: {
     eyebrow: '你可以怎么问',
-    title: '第一条消息最好是真实任务，而不是试玩 prompt。',
-    intro: '最好的第一次请求，通常都具体、可复核，而且值得先让 Oliver 做一版。',
+    title: '先从真实任务开始',
+    intro: '真实、具体的请求最适合第一次开始。',
     cards: [
       {
         tag: 'Research',
@@ -438,15 +429,6 @@ const ZH_LANDING_CONTENT = {
       }
     ]
   },
-  control: {
-    eyebrow: '控制与信任',
-    title: 'Oliver 可以先开始帮忙，而你仍然掌控节奏。',
-    points: [
-      '先在最适合任务的那个渠道里开始',
-      '敏感动作仍然可以保持可审阅、可确认',
-      '只有当你希望保留上下文时，再保存 setup 和 memory'
-    ]
-  },
   faqItems: [
     {
       question: '最快怎么开始？',
@@ -476,8 +458,8 @@ const ZH_LANDING_CONTENT = {
   ],
   labels: {
     faqEyebrow: '常见问题',
-    faqTitle: '开始之前真正需要知道的几件事',
-    faqIntro: '只回答最关键的问题：如何无登录开始、先用哪个真实渠道，以及哪些连接值得以后再保存。',
+    faqTitle: '开始之前',
+    faqIntro: '开始前先看这几条短答案。',
     faqLinkLabel: '打开帮助中心',
     footerTitle: '资源',
     footerTagline: 'Oliver 帮你把请求变成结果。',
