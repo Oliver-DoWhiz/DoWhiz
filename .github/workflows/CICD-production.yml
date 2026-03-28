@@ -121,6 +121,7 @@ jobs:
             DoWhiz_service/target/release/tpm_cli
             DoWhiz_service/target/release/slack_cli
             DoWhiz_service/target/release/discord_cli
+            DoWhiz_service/target/release/lark_cli
           if-no-files-found: error
 
   deploy:
@@ -209,6 +210,7 @@ jobs:
           install -m 755 /tmp/dowhiz-release/tpm_cli "$RELEASE_DIR/tpm_cli"
           install -m 755 /tmp/dowhiz-release/slack_cli "$RELEASE_DIR/slack_cli"
           install -m 755 /tmp/dowhiz-release/discord_cli "$RELEASE_DIR/discord_cli"
+          install -m 755 /tmp/dowhiz-release/lark_cli "$RELEASE_DIR/lark_cli"
           rm -rf /tmp/dowhiz-release
           EOF
 
@@ -445,7 +447,7 @@ jobs:
 
           ctx_release_dir="$build_context_root/DoWhiz_service/target/release"
           mkdir -p "$ctx_release_dir"
-          required_runtime_bins=(rust_service inbound_fanout inbound_gateway google-docs notion_api_cli tpm_cli slack_cli discord_cli)
+          required_runtime_bins=(rust_service inbound_fanout inbound_gateway google-docs notion_api_cli tpm_cli slack_cli discord_cli lark_cli)
           for bin_name in "${required_runtime_bins[@]}"; do
             src_bin="$GITHUB_WORKSPACE/rust-binaries/$bin_name"
             [[ -f "$src_bin" ]] || {

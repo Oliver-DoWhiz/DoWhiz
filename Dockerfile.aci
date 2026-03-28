@@ -14,6 +14,7 @@ COPY DoWhiz_service/target/release/notion_api_cli /app/bin/notion_api_cli
 COPY DoWhiz_service/target/release/tpm_cli /app/bin/tpm_cli
 COPY DoWhiz_service/target/release/slack_cli /app/bin/slack_cli
 COPY DoWhiz_service/target/release/discord_cli /app/bin/discord_cli
+COPY DoWhiz_service/target/release/lark_cli /app/bin/lark_cli
 COPY DoWhiz_service/bin/ /app/bin/
 
 # Copy employee configuration and personas
@@ -34,6 +35,7 @@ RUN ln -sf /app/bin/notion_api_cli /usr/local/bin/notion_api_cli || true
 RUN ln -sf /app/bin/tpm_cli /usr/local/bin/tpm_cli || true
 RUN ln -sf /app/bin/slack_cli /usr/local/bin/slack_cli || true
 RUN ln -sf /app/bin/discord_cli /usr/local/bin/discord_cli || true
+RUN ln -sf /app/bin/lark_cli /usr/local/bin/lark_cli || true
 RUN chown -R app:nogroup /app/DoWhiz_service /app/bin /app/rust_service /app/inbound_fanout /app/inbound_gateway
 
 USER app
