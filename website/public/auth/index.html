@@ -496,16 +496,25 @@
       }
 
       .channel-connect-actions {
-        display: flex;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 0.5rem;
-        flex-wrap: wrap;
       }
 
       .channel-connect-actions .auth-btn {
-        width: 160px;
+        width: 100%;
         min-height: 52px;
-        padding: 10px 16px;
+        padding: 10px 12px;
         box-sizing: border-box;
+        justify-content: center;
+        white-space: nowrap;
+        text-align: center;
+        font-size: 0.95rem;
+      }
+
+      .channel-connect-actions .auth-btn svg,
+      .channel-connect-actions .auth-btn img {
+        flex: 0 0 auto;
       }
 
       .polling-indicator {
@@ -566,6 +575,10 @@
       }
 
       @media (max-width: 640px) {
+        .channel-connect-actions {
+          grid-template-columns: 1fr;
+        }
+
         .channel-connect-actions .auth-btn,
         .memo-actions .auth-btn {
           width: 100%;
@@ -1588,8 +1601,8 @@
                 <p class="sidebar-description">Connect apps, review work, save memory, and tune how Oliver should work for you.</p>
                 <nav class="sidebar-nav" aria-label="Dashboard Sections">
                   <a class="sidebar-link is-active" href="#section-overview">Overview</a>
-                  <a class="sidebar-link" href="#section-workspace">Getting Started</a>
                   <a class="sidebar-link" href="#section-channels">Connected Apps</a>
+                  <a class="sidebar-link" href="#section-workspace">Next Steps</a>
                   <a class="sidebar-link" href="#section-tasks">Tasks</a>
                   <a class="sidebar-link" href="#section-memo">Memory</a>
                   <a class="sidebar-link" href="#section-settings">Settings</a>
@@ -1620,35 +1633,6 @@
                     <div class="account-meta-item">
                       <p class="account-meta-label">Sign-in email</p>
                       <span id="user-email">Loading...</span>
-                    </div>
-                  </div>
-                </section>
-
-                <section id="section-workspace" class="legal-card dashboard-section">
-                  <div class="dashboard-header">
-                    <h2>Getting Started</h2>
-                    <a id="update-team-brief-btn" class="auth-btn auth-btn-oauth" href="#section-channels">Open Connected Apps</a>
-                  </div>
-                  <p class="dashboard-overview-copy">
-                    Start with one connected app, one real task, and one saved preference. Expand only after the first useful result.
-                  </p>
-                  <div id="workspace-recommendation-card" class="workspace-recommendation-card">
-                    <div class="workspace-recommendation-empty">Looking at your setup for the clearest next step...</div>
-                  </div>
-                  <div id="workspace-summary-content" class="workspace-summary-grid">
-                    <div class="workspace-summary-empty">Loading your setup snapshot...</div>
-                  </div>
-
-                  <div id="workspace-next-steps" class="workspace-next-steps" style="margin-top: 2rem;">
-                    <div class="dashboard-header">
-                      <div>
-                        <h3 style="margin-bottom: 0.35rem;">First-run checklist</h3>
-                        <p class="next-step-section-intro">Keep the first win small, personal, and easy to review.</p>
-                      </div>
-                      <span id="next-steps-progress" class="next-step-progress">0 of 4 done</span>
-                    </div>
-                    <div id="next-steps-list" class="next-steps-list">
-                      <p style="color: var(--text-muted, #888);">Loading your checklist...</p>
                     </div>
                   </div>
                 </section>
@@ -1700,6 +1684,35 @@
                   <ul id="identifier-list" class="identifier-list">
                     <li class="identifier-item">Loading...</li>
                   </ul>
+                </section>
+
+                <section id="section-workspace" class="legal-card dashboard-section">
+                  <div class="dashboard-header">
+                    <h2>Next Steps</h2>
+                    <a id="update-team-brief-btn" class="auth-btn auth-btn-oauth" href="#section-channels">Open Connected Apps</a>
+                  </div>
+                  <p class="dashboard-overview-copy">
+                    See the clearest next moves for your Oliver setup after you connect an app.
+                  </p>
+                  <div id="workspace-recommendation-card" class="workspace-recommendation-card">
+                    <div class="workspace-recommendation-empty">Looking at your setup for the clearest next step...</div>
+                  </div>
+                  <div id="workspace-summary-content" class="workspace-summary-grid">
+                    <div class="workspace-summary-empty">Loading your setup snapshot...</div>
+                  </div>
+
+                  <div id="workspace-next-steps" class="workspace-next-steps" style="margin-top: 2rem;">
+                    <div class="dashboard-header">
+                      <div>
+                        <h3 style="margin-bottom: 0.35rem;">Setup checklist</h3>
+                        <p class="next-step-section-intro">Keep the next win small, personal, and easy to review.</p>
+                      </div>
+                      <span id="next-steps-progress" class="next-step-progress">0 of 4 done</span>
+                    </div>
+                    <div id="next-steps-list" class="next-steps-list">
+                      <p style="color: var(--text-muted, #888);">Loading your checklist...</p>
+                    </div>
+                  </div>
                 </section>
 
                 <section id="section-tasks" class="legal-card dashboard-section">
@@ -2092,7 +2105,7 @@
         'section-memo': 'Open Memory',
         'section-settings': 'Open Settings',
         'section-tasks': 'Open Tasks',
-        'section-workspace': 'Open Getting Started'
+        'section-workspace': 'Open Next Steps'
       };
       const WORKSPACE_RECOMMENDATION_CACHE_KEY = 'dowhiz_workspace_recommendation_cache_v2';
       const WORKSPACE_RECOMMENDATION_SUPPRESSION_KEY = 'dowhiz_workspace_recommendation_suppression_v1';
@@ -2756,7 +2769,7 @@
           return RECOMMENDATION_SECTION_LABELS[recommendation?.action?.section] || 'Open section';
         }
         if (actionKind === 'trigger_create_brief') {
-          return 'Open Getting Started';
+          return 'Open Next Steps';
         }
         if (actionKind === 'trigger_create_plan') {
           return 'Open Tasks';
