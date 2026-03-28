@@ -149,11 +149,9 @@ impl SlackOutboundAdapter {
     pub fn new(bot_token: String) -> Self {
         Self { bot_token }
     }
-}
 
-impl OutboundAdapter for SlackOutboundAdapter {
-    fn send(&self, message: &OutboundMessage) -> Result<SendResult, AdapterError> {
-        let channel = message
+    fn resolve_channel_id(&self, message: &OutboundMessage) -> Result<String, AdapterError> {
+        let candidate = message
             .metadata
             .slack_channel_id
             .as_ref()
@@ -162,8 +160,53 @@ impl OutboundAdapter for SlackOutboundAdapter {
                 "no channel specified for Slack message".to_string(),
             ))?;
 
+        if looks_like_slack_user_id(candidate) {
+            return self.open_dm_channel(candidate);
+        }
+
+        Ok(candidate.clone())
+    }
+
+    fn open_dm_channel(&self, user_id: &str) -> Result<String, AdapterError> {
+        let api_base =
+            env::var("SLACK_API_BASE_URL").unwrap_or_else(|_| "https://slack.com/api".to_string());
+        let url = format!("{}/conversations.open", api_base.trim_end_matches('/'));
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.bot_token))
+            .header("Content-Type", "application/json")
+            .json(&SlackOpenConversationRequest {
+                users: user_id.to_string(),
+            })
+            .send()
+            .map_err(|err| AdapterError::SendError(err.to_string()))?;
+
+        let api_response: SlackOpenConversationResponse = response
+            .json()
+            .map_err(|err| AdapterError::SendError(err.to_string()))?;
+
+        if !api_response.ok {
+            return Err(AdapterError::SendError(
+                api_response
+                    .error
+                    .unwrap_or_else(|| "Slack DM open failed".to_string()),
+            ));
+        }
+
+        api_response
+            .channel
+            .map(|channel| channel.id)
+            .ok_or_else(|| AdapterError::SendError("Slack DM open returned no channel".to_string()))
+    }
+}
+
+impl OutboundAdapter for SlackOutboundAdapter {
+    fn send(&self, message: &OutboundMessage) -> Result<SendResult, AdapterError> {
+        let channel = self.resolve_channel_id(message)?;
+
         let request = SlackPostMessageRequest {
-            channel: channel.clone(),
+            channel,
             text: if message.text_body.is_empty() {
                 message.html_body.clone() // Fallback to html_body if text is empty
             } else {
@@ -315,9 +358,30 @@ pub struct SlackApiResponse {
     pub message: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SlackOpenConversationRequest {
+    users: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SlackOpenConversationResponse {
+    ok: bool,
+    error: Option<String>,
+    channel: Option<SlackOpenConversationChannel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SlackOpenConversationChannel {
+    id: String,
+}
+
 // ============================================================================
 // Helper functions
 // ============================================================================
+
+fn looks_like_slack_user_id(value: &str) -> bool {
+    matches!(value.chars().next(), Some('U' | 'W')) && value.len() > 1
+}
 
 /// Check if a payload is a URL verification challenge.
 pub fn is_url_verification(payload: &[u8]) -> Option<SlackUrlVerification> {
@@ -336,6 +400,14 @@ pub fn is_url_verification(payload: &[u8]) -> Option<SlackUrlVerification> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::Matcher;
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn parse_url_verification_challenge() {
@@ -613,5 +685,57 @@ mod tests {
         let message = adapter.parse(payload.as_bytes()).unwrap();
 
         assert_eq!(message.text_body, Some("".to_string()));
+    }
+
+    #[test]
+    fn outbound_opens_dm_before_posting_to_user() {
+        let _guard = env_lock().lock().expect("env lock");
+        let mut server = mockito::Server::new();
+        env::set_var("SLACK_API_BASE_URL", server.url());
+
+        let open_dm = server
+            .mock("POST", "/conversations.open")
+            .match_header("authorization", "Bearer xoxb-test")
+            .match_header("content-type", "application/json")
+            .match_body(Matcher::Regex("\\\"users\\\":\\\"U123\\\"".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":true,"channel":{"id":"D456"}}"#)
+            .expect(1)
+            .create();
+
+        let send = server
+            .mock("POST", "/chat.postMessage")
+            .match_header("authorization", "Bearer xoxb-test")
+            .match_header("content-type", "application/json")
+            .match_body(Matcher::Regex("\\\"channel\\\":\\\"D456\\\"".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":true,"ts":"1700000000.123"}"#)
+            .expect(1)
+            .create();
+
+        let adapter = SlackOutboundAdapter::new("xoxb-test".to_string());
+        let result = adapter
+            .send(&OutboundMessage {
+                channel: Channel::Slack,
+                from: None,
+                to: vec!["U123".to_string()],
+                cc: vec![],
+                bcc: vec![],
+                subject: String::new(),
+                text_body: "Hello there".to_string(),
+                html_body: String::new(),
+                html_path: None,
+                attachments_dir: None,
+                thread_id: None,
+                metadata: Default::default(),
+            })
+            .expect("send succeeds");
+
+        assert!(result.success);
+        open_dm.assert();
+        send.assert();
+        env::remove_var("SLACK_API_BASE_URL");
     }
 }

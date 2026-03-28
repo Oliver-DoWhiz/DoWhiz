@@ -36,6 +36,7 @@ use super::chat_history::search_chat_history;
 
 use super::config::ServiceConfig;
 use super::ingestion::spawn_ingestion_consumer;
+use super::onboarding::InstallOnboardingConfig;
 use super::scheduler::start_scheduler_threads;
 use super::state::AppState;
 use super::BoxError;
@@ -237,6 +238,7 @@ pub async fn run_server(
         discord_client_id,
         discord_client_secret,
         discord_redirect_uri,
+        discord_bot_token: config.discord_bot_token.clone(),
         slack_client_id,
         slack_client_secret,
         slack_redirect_uri,
@@ -250,6 +252,7 @@ pub async fn run_server(
         lark_client_secret,
         lark_redirect_uri,
         frontend_url,
+        install_onboarding_config: InstallOnboardingConfig::from_env(),
         user_store: Some(user_store.clone()),
         users_root: Some(config.users_root.clone()),
     };

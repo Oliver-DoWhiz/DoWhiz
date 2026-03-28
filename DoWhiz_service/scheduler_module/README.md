@@ -81,3 +81,40 @@ Live tests and manual scripts are listed in:
 For gateway/worker runtime and env policy, use:
 - `DoWhiz_service/README.md`
 - `DoWhiz_service/OPERATIONS.md`
+
+## Install Onboarding
+
+Slack/Discord install onboarding is a V1 activation flow that runs from bot-install success, not from generic account linking.
+
+Runtime flags:
+- `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`
+- `OLIVER_DISCORD_INSTALL_ONBOARDING_ENABLED`
+- `OLIVER_INSTALL_ONBOARDING_COOLDOWN_HOURS`
+
+Operational behavior:
+- default reinstall cooldown is 168 hours (7 days)
+- onboarding state is stored per `account_id + platform + workspace_id` in the account database
+- at most one public onboarding post and one DM are attempted per install event
+- public and DM delivery outcomes are logged through analytics events such as `install_onboarding_public_sent`, `install_onboarding_dm_failed`, and `install_onboarding_skipped`
+
+Manual resend path:
+- authenticated API endpoint: `POST /api/channel-install-onboarding/resend`
+- request body:
+
+```json
+{
+  "platform": "slack",
+  "workspace_id": "T123456",
+  "force": false
+}
+```
+
+- `force=false` respects normal dedupe/cooldown rules
+- `force=true` intentionally bypasses normal dedupe/cooldown for support or QA
+- resend requires an existing onboarding state row for that account/workspace
+
+Known V1 limitations:
+- Slack installer identity is not recovered directly from the bot-install callback; DM falls back to the linked account owner's verified Slack identifier when available
+- Slack DM delivery uses a DM-open plus `chat.postMessage` path and safely fails when the workspace install cannot open or write that conversation
+- Discord installer identity is not recovered directly from the bot-install callback; DM falls back to the linked account owner's verified Discord identifier when available
+- if no reliable direct recipient exists, DM is skipped rather than guessed

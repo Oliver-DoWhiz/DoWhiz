@@ -182,6 +182,29 @@ pub struct UserContact {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChannelInstallOnboardingState {
+    pub account_id: Uuid,
+    pub platform: String,
+    pub workspace_id: String,
+    pub workspace_name: Option<String>,
+    pub installer_identifier: Option<String>,
+    pub installer_identifier_source: Option<String>,
+    pub public_channel_id: Option<String>,
+    pub public_channel_name: Option<String>,
+    pub dm_recipient_identifier: Option<String>,
+    pub dm_recipient_source: Option<String>,
+    pub last_event_key: Option<String>,
+    pub last_public_status: Option<String>,
+    pub last_public_error: Option<String>,
+    pub last_dm_status: Option<String>,
+    pub last_dm_error: Option<String>,
+    pub last_skip_reason: Option<String>,
+    pub last_attempted_at: Option<DateTime<Utc>>,
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    pub last_manual_resend_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AccountStoreError {
     #[error("postgres error: {0}")]
@@ -301,6 +324,15 @@ impl AccountStore {
         };
         store.ensure_analytics_schema()?;
         Ok(store)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detached_for_tests() -> Self {
+        Self {
+            primary_pool: None,
+            fallback_pool: None,
+            prefer_fallback: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     fn build_pool(db_url: &str, pool_name: &'static str) -> Result<PgPool, AccountStoreError> {
@@ -442,6 +474,36 @@ impl AccountStore {
                 ON account_recommendation_feedback (account_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS account_recommendation_feedback_key_state_time_idx
                 ON account_recommendation_feedback (account_id, recommendation_key, state_signature, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS channel_install_onboarding_state (
+                account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                platform TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                workspace_name TEXT NULL,
+                installer_identifier TEXT NULL,
+                installer_identifier_source TEXT NULL,
+                public_channel_id TEXT NULL,
+                public_channel_name TEXT NULL,
+                dm_recipient_identifier TEXT NULL,
+                dm_recipient_source TEXT NULL,
+                last_event_key TEXT NULL,
+                last_public_status TEXT NULL,
+                last_public_error TEXT NULL,
+                last_dm_status TEXT NULL,
+                last_dm_error TEXT NULL,
+                last_skip_reason TEXT NULL,
+                last_attempted_at TIMESTAMPTZ NULL,
+                last_succeeded_at TIMESTAMPTZ NULL,
+                last_manual_resend_at TIMESTAMPTZ NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (account_id, platform, workspace_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS channel_install_onboarding_state_workspace_idx
+                ON channel_install_onboarding_state (platform, workspace_id);
+            CREATE INDEX IF NOT EXISTS channel_install_onboarding_state_attempted_idx
+                ON channel_install_onboarding_state (last_attempted_at DESC);
             ",
         )?;
         Ok(())
@@ -640,6 +702,177 @@ impl AccountStore {
                 created_at: r.get(5),
             })
             .collect())
+    }
+
+    pub fn get_channel_install_onboarding_state(
+        &self,
+        account_id: Uuid,
+        platform: &str,
+        workspace_id: &str,
+    ) -> Result<Option<ChannelInstallOnboardingState>, AccountStoreError> {
+        let mut conn = self.conn()?;
+        let row = conn.query_opt(
+            "SELECT
+                account_id,
+                platform,
+                workspace_id,
+                workspace_name,
+                installer_identifier,
+                installer_identifier_source,
+                public_channel_id,
+                public_channel_name,
+                dm_recipient_identifier,
+                dm_recipient_source,
+                last_event_key,
+                last_public_status,
+                last_public_error,
+                last_dm_status,
+                last_dm_error,
+                last_skip_reason,
+                last_attempted_at,
+                last_succeeded_at,
+                last_manual_resend_at
+             FROM channel_install_onboarding_state
+             WHERE account_id = $1 AND platform = $2 AND workspace_id = $3",
+            &[&account_id, &platform, &workspace_id],
+        )?;
+        Ok(row.map(|row| ChannelInstallOnboardingState {
+            account_id: row.get(0),
+            platform: row.get(1),
+            workspace_id: row.get(2),
+            workspace_name: row.get(3),
+            installer_identifier: row.get(4),
+            installer_identifier_source: row.get(5),
+            public_channel_id: row.get(6),
+            public_channel_name: row.get(7),
+            dm_recipient_identifier: row.get(8),
+            dm_recipient_source: row.get(9),
+            last_event_key: row.get(10),
+            last_public_status: row.get(11),
+            last_public_error: row.get(12),
+            last_dm_status: row.get(13),
+            last_dm_error: row.get(14),
+            last_skip_reason: row.get(15),
+            last_attempted_at: row.get(16),
+            last_succeeded_at: row.get(17),
+            last_manual_resend_at: row.get(18),
+        }))
+    }
+
+    pub fn upsert_channel_install_onboarding_state(
+        &self,
+        state: &ChannelInstallOnboardingState,
+    ) -> Result<ChannelInstallOnboardingState, AccountStoreError> {
+        let mut conn = self.conn()?;
+        let row = conn.query_one(
+            "INSERT INTO channel_install_onboarding_state (
+                account_id,
+                platform,
+                workspace_id,
+                workspace_name,
+                installer_identifier,
+                installer_identifier_source,
+                public_channel_id,
+                public_channel_name,
+                dm_recipient_identifier,
+                dm_recipient_source,
+                last_event_key,
+                last_public_status,
+                last_public_error,
+                last_dm_status,
+                last_dm_error,
+                last_skip_reason,
+                last_attempted_at,
+                last_succeeded_at,
+                last_manual_resend_at,
+                updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW()
+            )
+            ON CONFLICT (account_id, platform, workspace_id) DO UPDATE SET
+                workspace_name = EXCLUDED.workspace_name,
+                installer_identifier = EXCLUDED.installer_identifier,
+                installer_identifier_source = EXCLUDED.installer_identifier_source,
+                public_channel_id = EXCLUDED.public_channel_id,
+                public_channel_name = EXCLUDED.public_channel_name,
+                dm_recipient_identifier = EXCLUDED.dm_recipient_identifier,
+                dm_recipient_source = EXCLUDED.dm_recipient_source,
+                last_event_key = EXCLUDED.last_event_key,
+                last_public_status = EXCLUDED.last_public_status,
+                last_public_error = EXCLUDED.last_public_error,
+                last_dm_status = EXCLUDED.last_dm_status,
+                last_dm_error = EXCLUDED.last_dm_error,
+                last_skip_reason = EXCLUDED.last_skip_reason,
+                last_attempted_at = EXCLUDED.last_attempted_at,
+                last_succeeded_at = EXCLUDED.last_succeeded_at,
+                last_manual_resend_at = EXCLUDED.last_manual_resend_at,
+                updated_at = NOW()
+            RETURNING
+                account_id,
+                platform,
+                workspace_id,
+                workspace_name,
+                installer_identifier,
+                installer_identifier_source,
+                public_channel_id,
+                public_channel_name,
+                dm_recipient_identifier,
+                dm_recipient_source,
+                last_event_key,
+                last_public_status,
+                last_public_error,
+                last_dm_status,
+                last_dm_error,
+                last_skip_reason,
+                last_attempted_at,
+                last_succeeded_at,
+                last_manual_resend_at",
+            &[
+                &state.account_id,
+                &state.platform,
+                &state.workspace_id,
+                &state.workspace_name,
+                &state.installer_identifier,
+                &state.installer_identifier_source,
+                &state.public_channel_id,
+                &state.public_channel_name,
+                &state.dm_recipient_identifier,
+                &state.dm_recipient_source,
+                &state.last_event_key,
+                &state.last_public_status,
+                &state.last_public_error,
+                &state.last_dm_status,
+                &state.last_dm_error,
+                &state.last_skip_reason,
+                &state.last_attempted_at,
+                &state.last_succeeded_at,
+                &state.last_manual_resend_at,
+            ],
+        )?;
+
+        Ok(ChannelInstallOnboardingState {
+            account_id: row.get(0),
+            platform: row.get(1),
+            workspace_id: row.get(2),
+            workspace_name: row.get(3),
+            installer_identifier: row.get(4),
+            installer_identifier_source: row.get(5),
+            public_channel_id: row.get(6),
+            public_channel_name: row.get(7),
+            dm_recipient_identifier: row.get(8),
+            dm_recipient_source: row.get(9),
+            last_event_key: row.get(10),
+            last_public_status: row.get(11),
+            last_public_error: row.get(12),
+            last_dm_status: row.get(13),
+            last_dm_error: row.get(14),
+            last_skip_reason: row.get(15),
+            last_attempted_at: row.get(16),
+            last_succeeded_at: row.get(17),
+            last_manual_resend_at: row.get(18),
+        })
     }
 
     /// Delete an account and all its identifiers (CASCADE)
@@ -1542,7 +1775,6 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
     use std::env;
-    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1590,11 +1822,7 @@ mod tests {
 
     #[test]
     fn detached_analytics_recording_can_be_called_inside_tokio_runtime() {
-        let store = Arc::new(AccountStore {
-            primary_pool: None,
-            fallback_pool: None,
-            prefer_fallback: Arc::new(AtomicBool::new(false)),
-        });
+        let store = Arc::new(AccountStore::detached_for_tests());
         let event = AnalyticsEventInsert {
             event_name: "auth_smoke".to_string(),
             source: "server".to_string(),
