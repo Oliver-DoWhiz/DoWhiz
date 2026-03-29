@@ -63,22 +63,55 @@ const EN_LANDING_CONTENT = {
         sampleReply: 'I can draft the reply, tighten the tone, and point out what is still missing',
         accent: '#ff8a3d',
         stage: {
-          composeTitle: 'New request',
+          appName: 'Inbox',
+          appMeta: 'Draft with Oliver',
+          folders: [
+            { label: 'Inbox', count: '12' },
+            { label: 'Drafts', count: '3', active: true },
+            { label: 'Sent', count: '' },
+            { label: 'Archive', count: '' }
+          ],
+          threads: [
+            {
+              from: 'Sage Capital',
+              subject: 'Friday follow-up',
+              preview: 'Loved the conversation today. Could you send the recap by Friday?',
+              time: '2m',
+              active: true
+            },
+            {
+              from: 'Course admin',
+              subject: 'Midterm office hours',
+              preview: 'New time slots are open for next Tuesday.',
+              time: '1h'
+            },
+            {
+              from: 'Mina',
+              subject: 'Launch recap',
+              preview: 'Shared the latest checklist in the ops folder.',
+              time: '3h'
+            }
+          ],
+          composeTitle: 'Draft request',
+          draftBadge: 'Reply',
           toLabel: 'To',
           toValue: 'oliver@dowhiz.com',
-          subjectLabel: 'Subject',
-          subjectValue: 'Follow up after the sponsor call',
+          ccLabel: 'Target',
+          ccValue: 'sponsor@sagecap.com',
+          subjectLabel: 'Request',
+          subjectValue: 'Draft a warm follow-up after the sponsor call',
+          tags: ['Warm tone', 'Friday recap'],
           bodyLines: [
             'Hi Oliver,',
-            'Turn these notes into a warm follow-up email.',
+            'Draft a concise reply for the sponsor.',
             '- thank them for hosting',
             '- mention the Friday recap',
             '- keep the ask light'
           ],
-          footerNote: 'Fastest path',
-          footerValue: 'No login needed',
-          resultLabel: 'Oliver returns',
-          resultTitle: 'Reply draft ready',
+          footerNote: 'Oliver can tighten tone before you send',
+          footerValue: 'Send request',
+          resultLabel: 'Oliver notes',
+          resultTitle: 'Reply ready',
           resultItems: [
             'A tighter subject line',
             'A clean three-paragraph draft',
@@ -100,35 +133,68 @@ const EN_LANDING_CONTENT = {
         accent: '#36c58b',
         stage: {
           workspace: 'product-ops',
+          workspaceMeta: '8 teammates online',
           channels: ['#launch-ops', '#customer-handoffs', '#weekly-plan'],
+          sections: [
+            {
+              title: 'Channels',
+              items: [
+                { label: '#launch-ops', active: true },
+                { label: '#customer-handoffs' },
+                { label: '#weekly-plan' }
+              ]
+            },
+            {
+              title: 'Direct messages',
+              items: [
+                { label: 'Oliver', accent: 'bot' },
+                { label: 'Mina' }
+              ]
+            }
+          ],
           room: '#launch-ops',
-          roomMeta: 'Thread activity',
+          roomMeta: '23 messages today',
+          roomMembers: ['Mina', 'Theo', 'Oliver'],
+          threadPills: ['launch', 'handoff', 'needs owner'],
+          threadActivity: '3 replies in thread',
           messages: [
             {
               author: 'Mina',
               meta: 'Ops',
-              text: 'We still need one clear owner for docs, QA, and launch email.'
+              time: '10:14 AM',
+              text: 'We still need one clear owner for docs, QA, and launch email.',
+              reactions: ['eyes 2', 'check 1']
             },
             {
               author: 'Theo',
               meta: 'Design',
-              text: 'Assets are ready, but the rollout order is not written down.'
+              time: '10:18 AM',
+              text: 'Assets are ready, but the rollout order is not written down.',
+              reactions: ['memo 1']
             },
             {
               author: 'You',
               meta: 'Ask Oliver',
+              time: '10:22 AM',
               text: 'Summarize this thread and give me the next three actions.',
               tone: 'user'
             }
           ],
-          cardLabel: 'Oliver block',
-          cardTitle: 'Next actions',
+          threadLabel: 'Thread summary',
+          threadTitle: 'Launch blockers',
+          threadText: 'Docs owner is still missing. QA order is not final. The launch email needs one clean checklist.',
+          cardLabel: 'Oliver block kit',
+          cardTitle: 'Ready for the channel',
+          cardSummary: 'One clean update and next actions',
           cardItems: [
             'Assign docs owner before 3 PM',
             'Lock QA sign-off order',
             'Post one rollout checklist back to the channel'
           ],
-          cardFooter: 'Ready to paste into Slack'
+          cardFooter: 'One clean update and next actions',
+          cardActions: ['Post summary', 'Open thread'],
+          composerPlaceholder: 'Reply in #launch-ops',
+          composerHint: 'Type a message'
         }
       },
       {
@@ -147,21 +213,39 @@ const EN_LANDING_CONTENT = {
           server: 'study-lab',
           onlineLabel: '18 online',
           channels: ['announcements', 'planning-room', 'resources'],
+          sections: [
+            {
+              title: 'TEXT CHANNELS',
+              items: [
+                { label: 'announcements' },
+                { label: 'planning-room', active: true },
+                { label: 'resources' }
+              ]
+            }
+          ],
           room: '#planning-room',
+          roomTopic: 'Weekly reading coordination',
+          roomMeta: '2 active threads',
           messages: [
             {
               author: 'Lena',
               meta: 'Moderator',
+              time: 'Today at 6:12 PM',
+              accent: '#f2b4ff',
               text: 'We should split the readings and make the check-in deadline obvious.'
             },
             {
               author: 'Marco',
               meta: 'Member',
+              time: 'Today at 6:15 PM',
+              accent: '#8ec5ff',
               text: 'Let us pin one summary so new people stop asking the same thing.'
             },
             {
               author: 'You',
               meta: 'Prompt Oliver',
+              time: 'Today at 6:18 PM',
+              accent: '#9aa4ff',
               text: 'Turn this into a plan for the week.',
               tone: 'user'
             }
@@ -169,11 +253,27 @@ const EN_LANDING_CONTENT = {
           planLabel: 'Oliver bot',
           planTitle: 'Weekly plan',
           planItems: [
-            'Mon: post the reading queue',
-            'Wed: collect open questions',
-            'Fri: pin the recap and next steps'
+            'Mon: Post the reading queue and due dates',
+            'Wed: Collect open questions in one thread',
+            'Fri: Pin the recap and next steps'
           ],
-          planActions: ['Reply with plan', 'Pin summary']
+          planActions: ['Pin plan', 'Open room'],
+          botLabel: 'Oliver bot',
+          botTitle: 'Weekly plan',
+          botDescription: 'Here is a clean plan based on the thread.',
+          botFields: [
+            { label: 'Mon', value: 'Post the reading queue and due dates' },
+            { label: 'Wed', value: 'Collect open questions in one thread' },
+            { label: 'Fri', value: 'Pin the recap and next steps' }
+          ],
+          composerValue: '/oliver turn this into a plan',
+          composerHint: 'Press enter to send',
+          membersTitle: 'Online now',
+          members: [
+            { name: 'Oliver', role: 'Bot', accent: true },
+            { name: 'Lena', role: 'Moderator' },
+            { name: 'Marco', role: 'Member' }
+          ]
         }
       },
       {
@@ -190,36 +290,67 @@ const EN_LANDING_CONTENT = {
         accent: '#2c2c2e',
         stage: {
           repo: 'dowhiz/website',
-          repoMeta: 'Issue triage',
-          tabs: ['Issues', 'Projects', 'Pull requests'],
+          repoMeta: 'main branch',
+          tabs: ['Code', 'Issues', 'Pull requests', 'Actions'],
+          filters: ['is:open', 'label:landing', 'sort:updated-desc'],
+          overview: { open: '18 Open', closed: '128 Closed' },
           issues: [
             {
               id: '#184',
               title: 'Hero states still look too similar',
-              meta: 'landing',
-              status: 'P1'
+              meta: 'shayne opened 2h ago',
+              status: 'Open',
+              labels: ['landing', 'design'],
+              comments: '12',
+              active: true
             },
             {
               id: '#181',
               title: 'Keep no-login CTA behavior intact',
-              meta: 'growth',
-              status: 'Must keep'
+              meta: 'james updated 4h ago',
+              status: 'Open',
+              labels: ['growth', 'routing'],
+              comments: '5'
             },
             {
               id: '#177',
               title: 'Tighten mobile hero spacing',
-              meta: 'ui',
-              status: 'Follow-up'
+              meta: 'yegaoyang updated yesterday',
+              status: 'Open',
+              labels: ['ui'],
+              comments: '3'
             }
           ],
-          detailLabel: 'Oliver triage',
-          detailTitle: 'What matters first',
-          detailSummary: 'Fix the shared hero template first, then polish the supporting details.',
+          detailLabel: 'Selected issue',
+          detailTitle: 'Hero states still look too similar',
+          detailSummary: 'Users still read the hero as one repeated panel with accent swaps instead of six distinct product surfaces.',
+          detailMeta: ['landing', 'design system', 'priority: high'],
           detailItems: [
             'Ship distinct per-channel layouts',
             'Preserve public Slack and Discord entry flows',
             'Treat mobile readability as a release blocker'
-          ]
+          ],
+          detailChecklist: [
+            { title: 'Ship distinct per-channel layouts', meta: 'In progress', state: 'progress' },
+            { title: 'Keep Slack and Discord public entry flows', meta: 'Blocked by regressions', state: 'todo' },
+            { title: 'Treat mobile as release-critical', meta: 'Needs visual QA', state: 'todo' }
+          ],
+          detailCommentTitle: 'Oliver triage note',
+          detailComment:
+            'Ship channel-native structures first. Keep click behavior truthful. Treat smaller screens as part of the release, not a follow-up.',
+          detailActivity: [
+            {
+              actor: 'Oliver',
+              text: 'Split the issue into layout, CTA truthfulness, and mobile follow-up.',
+              meta: 'commented 4m ago'
+            },
+            {
+              actor: 'shayne',
+              text: 'Marked the hero as release-blocking until the channel states stop looking reused.',
+              meta: 'updated 58m ago'
+            }
+          ],
+          detailFooter: 'Ready to post as an issue comment'
         }
       },
       {
@@ -236,23 +367,34 @@ const EN_LANDING_CONTENT = {
         accent: '#6f6b63',
         stage: {
           breadcrumb: 'Personal / Study / Draft',
+          collaborators: ['You', 'Oliver', 'TA'],
+          pageIcon: 'N',
           pageTitle: 'Oliver study outline',
           pageIntro: 'Modern China midterm review',
+          properties: [
+            { label: 'Course', value: 'HIST 242' },
+            { label: 'Status', value: 'Draft' },
+            { label: 'Owner', value: 'You + Oliver' }
+          ],
           blocks: [
             { type: 'heading', text: 'Core questions' },
             { type: 'bullet', text: 'What changed after the reform era' },
             { type: 'bullet', text: 'How the three assigned readings compare' },
-            { type: 'todo', text: 'Add one source for rural policy' }
+            { type: 'todo', text: 'Add one source for rural policy' },
+            { type: 'callout', text: 'Oliver reordered the notes into a better study path' }
           ],
           databaseLabel: 'Next up',
+          databaseTabs: ['Table', 'Board'],
+          databaseColumns: ['Task', 'When', 'Status'],
           rows: [
-            { name: 'Lecture notes cleanup', meta: '20 min' },
-            { name: 'Open questions', meta: '3 gaps' },
-            { name: 'Revision pass', meta: 'Tonight' }
+            { name: 'Lecture notes cleanup', meta: 'Tonight', status: 'In progress' },
+            { name: 'Open questions', meta: '3 gaps', status: 'Queued' },
+            { name: 'Revision pass', meta: 'Tomorrow', status: 'Next' }
           ],
           sideLabel: 'Oliver organized',
           sideTitle: 'From notes to outline',
-          sideItems: ['Cleaner sections', 'A clearer reading order', 'What still needs research']
+          sideItems: ['Cleaner sections', 'A clearer reading order', 'What still needs research'],
+          sideFootnote: 'Ready to paste into your page'
         }
       },
       {
@@ -268,33 +410,42 @@ const EN_LANDING_CONTENT = {
         sampleReply: 'I can turn it into owners, deadlines, and an update you can send',
         accent: '#3f88ff',
         stage: {
+          workspace: 'Growth sync',
+          workspaceMeta: '6 participants',
           chatTitle: 'Growth sync',
           chatMeta: '6 participants',
+          tabs: ['Chat', 'Docs', 'Meetings'],
+          participants: ['Nina', 'Sam', 'Oliver'],
           recapLabel: 'Meeting recap',
-          recapText:
-            'Need a vendor shortlist, a sendable leadership update, and one clear follow-up owner list.',
+          recapTitle: 'Vendor shortlist + leadership update',
+          recapText: 'Need a vendor shortlist, a sendable leadership update, and one clear follow-up owner list.',
           messages: [
             {
               author: 'Nina',
               meta: 'PM',
+              time: '10:02',
               text: 'We have the meeting notes, but not the final owners yet.'
             },
             {
               author: 'Sam',
               meta: 'Ops',
+              time: '10:07',
+              badge: 'Needs send',
               text: 'We also need a clean update card before tomorrow morning.'
             }
           ],
           trackerLabel: 'Oliver follow-up',
           trackerTitle: 'Owners and timing',
+          ownerColumns: ['Owner', 'Task', 'Due'],
           owners: [
-            { owner: 'Nina', task: 'Vendor shortlist', due: 'Thu' },
-            { owner: 'Sam', task: 'Leadership update', due: 'Fri 9 AM' },
-            { owner: 'Oliver', task: 'Draft sendable recap', due: 'Now' }
+            { owner: 'Nina', task: 'Vendor shortlist', due: 'Thu', status: 'In progress' },
+            { owner: 'Sam', task: 'Leadership update', due: 'Fri 9 AM', status: 'Queued' },
+            { owner: 'Oliver', task: 'Draft sendable recap', due: 'Now', status: 'Ready' }
           ],
           updateLabel: 'Sendable update',
           updateText:
-            'Vendor shortlist ships Thursday. Leadership update goes out Friday morning with owners attached.'
+            'Vendor shortlist ships Thursday. Leadership update goes out Friday morning with owners attached.',
+          updateActions: ['Share to chat', 'Open checklist']
         }
       }
     ]
@@ -490,21 +641,54 @@ const ZH_LANDING_CONTENT = {
         sampleReply: '我可以先起草回复、收紧语气，并指出还缺什么信息',
         accent: '#ff8a3d',
         stage: {
-          composeTitle: '新邮件',
+          appName: '收件箱',
+          appMeta: '和 Oliver 一起起草',
+          folders: [
+            { label: '收件箱', count: '12' },
+            { label: '草稿箱', count: '3', active: true },
+            { label: '已发送', count: '' },
+            { label: '归档', count: '' }
+          ],
+          threads: [
+            {
+              from: 'Sage Capital',
+              subject: '周五跟进',
+              preview: '今天沟通很顺利，能否在周五前发一份 recap？',
+              time: '2分',
+              active: true
+            },
+            {
+              from: '课程助教',
+              subject: '期中 office hours',
+              preview: '下周二新开放了一批时间段。',
+              time: '1小时'
+            },
+            {
+              from: 'Mina',
+              subject: 'Launch recap',
+              preview: '我把最新 checklist 放到 ops folder 里了。',
+              time: '3小时'
+            }
+          ],
+          composeTitle: '起草请求',
+          draftBadge: '回复',
           toLabel: '收件人',
           toValue: 'oliver@dowhiz.com',
-          subjectLabel: '主题',
-          subjectValue: '整理赞助方沟通后的跟进邮件',
+          ccLabel: '目标对象',
+          ccValue: 'sponsor@sagecap.com',
+          subjectLabel: '请求内容',
+          subjectValue: '帮我起草一封更自然的赞助方跟进邮件',
+          tags: ['语气温和', '提到周五 recap'],
           bodyLines: [
             '你好 Oliver，',
-            '请把这些要点整理成一封更自然的跟进邮件。',
+            '请帮我起草一封更简洁的赞助方回复。',
             '- 感谢对方今天接待',
             '- 提到周五会发 recap',
             '- 语气保持轻一点'
           ],
-          footerNote: '最快入口',
-          footerValue: '不用先登录',
-          resultLabel: 'Oliver 返回',
+          footerNote: '发送前 Oliver 还可以帮你继续收紧语气',
+          footerValue: '发送请求',
+          resultLabel: 'Oliver 备注',
           resultTitle: '回复草稿已准备好',
           resultItems: ['更清楚的标题', '一版可直接发送的三段式草稿', '还缺哪条信息的提醒']
         }
@@ -523,31 +707,64 @@ const ZH_LANDING_CONTENT = {
         accent: '#36c58b',
         stage: {
           workspace: 'product-ops',
+          workspaceMeta: '8 位同事在线',
           channels: ['#launch-ops', '#customer-handoffs', '#weekly-plan'],
+          sections: [
+            {
+              title: '频道',
+              items: [
+                { label: '#launch-ops', active: true },
+                { label: '#customer-handoffs' },
+                { label: '#weekly-plan' }
+              ]
+            },
+            {
+              title: '私信',
+              items: [
+                { label: 'Oliver', accent: 'bot' },
+                { label: 'Mina' }
+              ]
+            }
+          ],
           room: '#launch-ops',
-          roomMeta: '线程动态',
+          roomMeta: '今天 23 条消息',
+          roomMembers: ['Mina', 'Theo', 'Oliver'],
+          threadPills: ['launch', 'handoff', '缺 owner'],
+          threadActivity: '线程里已有 3 条回复',
           messages: [
             {
               author: 'Mina',
               meta: '运营',
-              text: '文档、QA 和上线邮件还缺一个明确 owner。'
+              time: '10:14',
+              text: '文档、QA 和上线邮件还缺一个明确 owner。',
+              reactions: ['围观 2', '确认 1']
             },
             {
               author: 'Theo',
               meta: '设计',
-              text: '素材已经好了，但 rollout 顺序还没有写清楚。'
+              time: '10:18',
+              text: '素材已经好了，但 rollout 顺序还没有写清楚。',
+              reactions: ['记录 1']
             },
             {
               author: '你',
               meta: '问 Oliver',
+              time: '10:22',
               text: '帮我总结这个线程，并列出接下来三件事。',
               tone: 'user'
             }
           ],
-          cardLabel: 'Oliver 区块',
-          cardTitle: '下一步动作',
+          threadLabel: '线程总结',
+          threadTitle: '上线 blocker',
+          threadText: '文档 owner 还没定，QA 顺序没有锁住，上线邮件也还缺一个干净的 checklist。',
+          cardLabel: 'Oliver Block Kit',
+          cardTitle: '可以直接发回频道',
+          cardSummary: '一段清楚的更新 + 三个动作',
           cardItems: ['下午 3 点前确认文档 owner', '锁定 QA sign-off 顺序', '把 checklist 发回频道'],
-          cardFooter: '可以直接贴回 Slack'
+          cardFooter: '一段清楚的更新 + 三个动作',
+          cardActions: ['发 summary', '打开 thread'],
+          composerPlaceholder: '回复到 #launch-ops',
+          composerHint: '输入消息'
         }
       },
       {
@@ -566,29 +783,67 @@ const ZH_LANDING_CONTENT = {
           server: 'study-lab',
           onlineLabel: '18 人在线',
           channels: ['announcements', 'planning-room', 'resources'],
+          sections: [
+            {
+              title: '文字频道',
+              items: [
+                { label: 'announcements' },
+                { label: 'planning-room', active: true },
+                { label: 'resources' }
+              ]
+            }
+          ],
           room: '#planning-room',
+          roomTopic: '本周阅读安排',
+          roomMeta: '2 个活跃 thread',
           messages: [
             {
               author: 'Lena',
               meta: '管理员',
+              time: '今天 18:12',
+              accent: '#f2b4ff',
               text: '我们应该把阅读任务拆开，也把 check-in 的时间说得更明确。'
             },
             {
               author: 'Marco',
               meta: '成员',
+              time: '今天 18:15',
+              accent: '#8ec5ff',
               text: '还需要一条置顶总结，不然新人会一直重复提问。'
             },
             {
               author: '你',
               meta: '问 Oliver',
+              time: '今天 18:18',
+              accent: '#9aa4ff',
               text: '把这段讨论整理成本周计划。',
               tone: 'user'
             }
           ],
-          planLabel: 'Oliver bot',
+          planLabel: 'Oliver Bot',
           planTitle: '本周计划',
-          planItems: ['周一：发阅读清单', '周三：收集开放问题', '周五：置顶 recap 和下一步'],
-          planActions: ['回复计划', '置顶总结']
+          planItems: [
+            '周一：发阅读清单和截止时间',
+            '周三：把开放问题收集到同一个 thread',
+            '周五：置顶 recap 和下一步'
+          ],
+          planActions: ['置顶计划', '打开频道'],
+          botLabel: 'Oliver Bot',
+          botTitle: '本周计划',
+          botDescription: '我根据这段讨论整理了一份更清楚的节奏。',
+          botFields: [
+            { label: '周一', value: '发阅读清单和截止时间' },
+            { label: '周三', value: '把开放问题收集到同一个 thread' },
+            { label: '周五', value: '置顶 recap 和下一步' }
+          ],
+          composerValue: '/oliver 把这段整理成本周计划',
+          composerHint: '回车发送',
+          membersTitle: '在线成员',
+          members: [
+            { name: 'Oliver', role: 'Bot', accent: true },
+            { name: 'Lena', role: '管理员' },
+            { name: 'Marco', role: '成员' }
+          ]
         }
       },
       {
@@ -605,32 +860,63 @@ const ZH_LANDING_CONTENT = {
         accent: '#2c2c2e',
         stage: {
           repo: 'dowhiz/website',
-          repoMeta: 'Issue 排优先级',
-          tabs: ['Issues', 'Projects', 'Pull requests'],
+          repoMeta: 'main 分支',
+          tabs: ['Code', 'Issues', 'Pull requests', 'Actions'],
+          filters: ['is:open', 'label:landing', 'sort:updated-desc'],
+          overview: { open: '18 个 Open', closed: '128 个 Closed' },
           issues: [
             {
               id: '#184',
               title: 'Hero 状态看起来还是太像了',
-              meta: 'landing',
-              status: 'P1'
+              meta: 'shayne 2 小时前创建',
+              status: 'Open',
+              labels: ['landing', 'design'],
+              comments: '12',
+              active: true
             },
             {
               id: '#181',
               title: '保留无登录 CTA 行为',
-              meta: 'growth',
-              status: '必须保留'
+              meta: 'james 4 小时前更新',
+              status: 'Open',
+              labels: ['growth', 'routing'],
+              comments: '5'
             },
             {
               id: '#177',
               title: '继续收紧移动端 hero 间距',
-              meta: 'ui',
-              status: '待跟进'
+              meta: 'yegaoyang 昨天更新',
+              status: 'Open',
+              labels: ['ui'],
+              comments: '3'
             }
           ],
-          detailLabel: 'Oliver triage',
-          detailTitle: '先做什么',
-          detailSummary: '先解决共享 hero 模板的问题，再继续打磨其他细节。',
-          detailItems: ['先做每个 channel 独立布局', '保留 Slack 和 Discord 的直接入口', '把移动端可读性当成上线门槛']
+          detailLabel: '当前 issue',
+          detailTitle: 'Hero 状态看起来还是太像了',
+          detailSummary: '用户仍然会把 hero 读成“同一个面板只换颜色”，而不是六种不同的软件表面。',
+          detailMeta: ['landing', 'design system', 'priority: high'],
+          detailItems: ['先做每个 channel 独立布局', '保留 Slack 和 Discord 的直接入口', '把移动端可读性当成上线门槛'],
+          detailChecklist: [
+            { title: '先做每个 channel 独立布局', meta: '进行中', state: 'progress' },
+            { title: '保留 Slack 和 Discord 公开入口', meta: '避免回退', state: 'todo' },
+            { title: '把移动端当作上线门槛', meta: '还需要视觉检查', state: 'todo' }
+          ],
+          detailCommentTitle: 'Oliver triage note',
+          detailComment:
+            '先做 channel-native 的结构，再继续打磨局部细节。点击路径必须保持真实，移动端不能当作后续优化。',
+          detailActivity: [
+            {
+              actor: 'Oliver',
+              text: '已拆成布局、入口真实性、移动端三个跟进方向。',
+              meta: '4 分钟前评论'
+            },
+            {
+              actor: 'shayne',
+              text: '在 channel state 停止复用同一骨架前，hero 仍视作 release blocker。',
+              meta: '58 分钟前更新'
+            }
+          ],
+          detailFooter: '可以直接作为 issue comment'
         }
       },
       {
@@ -647,23 +933,34 @@ const ZH_LANDING_CONTENT = {
         accent: '#6f6b63',
         stage: {
           breadcrumb: 'Personal / Study / Draft',
+          collaborators: ['你', 'Oliver', '助教'],
+          pageIcon: 'N',
           pageTitle: 'Oliver 学习提纲',
           pageIntro: '中国近现代史期中复习',
+          properties: [
+            { label: '课程', value: 'HIST 242' },
+            { label: '状态', value: 'Draft' },
+            { label: '协作', value: '你 + Oliver' }
+          ],
           blocks: [
             { type: 'heading', text: '核心问题' },
             { type: 'bullet', text: '改革开放后最关键的变化是什么' },
             { type: 'bullet', text: '三篇阅读材料该怎么对照' },
-            { type: 'todo', text: '补一条关于农村政策的来源' }
+            { type: 'todo', text: '补一条关于农村政策的来源' },
+            { type: 'callout', text: 'Oliver 已经把原始笔记重新整理成更适合复习的顺序' }
           ],
           databaseLabel: '下一步',
+          databaseTabs: ['Table', 'Board'],
+          databaseColumns: ['任务', '时间', '状态'],
           rows: [
-            { name: '整理 lecture notes', meta: '20 分钟' },
-            { name: '补开放问题', meta: '3 个缺口' },
-            { name: '最后 revision', meta: '今晚' }
+            { name: '整理 lecture notes', meta: '今晚', status: '进行中' },
+            { name: '补开放问题', meta: '3 个缺口', status: '待开始' },
+            { name: '最后 revision', meta: '明天', status: '下一步' }
           ],
           sideLabel: 'Oliver 已整理',
           sideTitle: '从笔记到提纲',
-          sideItems: ['章节更清楚', '阅读顺序更明确', '还缺什么研究一眼可见']
+          sideItems: ['章节更清楚', '阅读顺序更明确', '还缺什么研究一眼可见'],
+          sideFootnote: '可以直接贴回你的页面'
         }
       },
       {
@@ -679,31 +976,41 @@ const ZH_LANDING_CONTENT = {
         sampleReply: '我可以把它整理成负责人、时间点和一段可直接发送的更新',
         accent: '#3f88ff',
         stage: {
+          workspace: 'Growth sync',
+          workspaceMeta: '6 位参与者',
           chatTitle: 'Growth sync',
           chatMeta: '6 位参与者',
+          tabs: ['Chat', 'Docs', 'Meetings'],
+          participants: ['Nina', 'Sam', 'Oliver'],
           recapLabel: '会议 recap',
+          recapTitle: 'Vendor shortlist + 领导更新',
           recapText: '需要一份 vendor shortlist、一条可直接发送的领导更新，以及明确的后续 owner 列表。',
           messages: [
             {
               author: 'Nina',
               meta: 'PM',
+              time: '10:02',
               text: '会议纪要有了，但最终 owner 还没定下来。'
             },
             {
               author: 'Sam',
               meta: '运营',
+              time: '10:07',
+              badge: '待发送',
               text: '明天上午前还要有一张干净的更新卡片。'
             }
           ],
           trackerLabel: 'Oliver 跟进',
           trackerTitle: '负责人和时间点',
+          ownerColumns: ['负责人', '事项', '时间'],
           owners: [
-            { owner: 'Nina', task: 'Vendor shortlist', due: '周四' },
-            { owner: 'Sam', task: '领导更新', due: '周五 9:00' },
-            { owner: 'Oliver', task: '起草可发送 recap', due: '现在' }
+            { owner: 'Nina', task: 'Vendor shortlist', due: '周四', status: '进行中' },
+            { owner: 'Sam', task: '领导更新', due: '周五 9:00', status: '待开始' },
+            { owner: 'Oliver', task: '起草可发送 recap', due: '现在', status: '已准备' }
           ],
           updateLabel: '可发送更新',
-          updateText: 'Vendor shortlist 周四完成，周五上午发出领导更新，并附上 owner 分工。'
+          updateText: 'Vendor shortlist 周四完成，周五上午发出领导更新，并附上 owner 分工。',
+          updateActions: ['分享到群聊', '打开 checklist']
         }
       }
     ]
