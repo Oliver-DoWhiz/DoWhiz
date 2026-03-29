@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test:auth-onboarding": "node --test tests/connect-onboarding.test.mjs",
     "preview": "vite preview",
     "test:responsive": "node scripts/responsive-audit.mjs",
     "seo:crawl": "node scripts/seo-crawl-report.mjs"

@@ -291,6 +291,20 @@
         gap: 0.75rem;
         flex-shrink: 0;
       }
+      .identifier-install-btn {
+        padding: 0.3rem 0.6rem;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        border-radius: 999px;
+        font-size: 0.75rem;
+        background: rgba(56, 189, 248, 0.12);
+        color: var(--text, #fff);
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease;
+      }
+      .identifier-install-btn:hover {
+        background: rgba(56, 189, 248, 0.2);
+        border-color: rgba(56, 189, 248, 0.55);
+      }
       .unlink-btn {
         padding: 0.25rem 0.5rem;
         border: 1px solid rgba(239, 68, 68, 0.5);
@@ -1281,6 +1295,74 @@
         margin-bottom: 0.75rem;
       }
 
+      .connection-onboarding-panel {
+        margin-top: 1rem;
+      }
+
+      .connection-onboarding-card {
+        display: grid;
+        gap: 0.85rem;
+        padding: 1rem;
+        border-radius: 0.85rem;
+        border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 32%, var(--border, #333));
+        background:
+          linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--surface, #1a1a1a) 84%, rgba(56, 189, 248, 0.18)),
+            color-mix(in srgb, var(--surface, #1a1a1a) 95%, rgba(15, 23, 42, 0.38))
+          );
+        box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+      }
+
+      .connection-onboarding-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted, #888);
+      }
+
+      .connection-onboarding-title {
+        margin: 0;
+        font-size: 1.05rem;
+        line-height: 1.35;
+      }
+
+      .connection-onboarding-description {
+        margin: 0.35rem 0 0;
+        color: var(--text-muted, #888);
+        line-height: 1.5;
+      }
+
+      .connection-onboarding-list {
+        margin: 0;
+        padding-left: 1.15rem;
+        display: grid;
+        gap: 0.45rem;
+        color: var(--text, #fff);
+        font-size: 0.9rem;
+      }
+
+      .connection-onboarding-list li {
+        line-height: 1.45;
+      }
+
+      .connection-onboarding-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
+      .connection-onboarding-footnote {
+        margin: 0;
+        font-size: 0.84rem;
+        color: var(--text-muted, #888);
+        line-height: 1.45;
+      }
+
       .settings-status-stack span {
         display: block;
         margin-top: 0.35rem;
@@ -1680,6 +1762,7 @@
                       <span id="notion-oauth-status"></span>
                       <span id="lark-oauth-status"></span>
                     </div>
+                    <div id="connect-onboarding-panel" class="connection-onboarding-panel hidden" aria-live="polite"></div>
                   </div>
                   <ul id="identifier-list" class="identifier-list">
                     <li class="identifier-item">Loading...</li>
@@ -1861,6 +1944,14 @@
 
     <script type="module">
       import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+      import {
+        CONNECT_ONBOARDING_STORAGE_KEY,
+        buildConnectOnboardingModel,
+        chooseConnectOnboardingPayload,
+        createConnectOnboardingPayload,
+        filterOptionalExtensionsForNextSteps,
+        parseStoredConnectOnboarding
+      } from './connect-onboarding.js';
 
       // Configuration
       // TODO: Update Supabase credentials for staging if using a separate Supabase project
@@ -2121,6 +2212,12 @@
       let workspaceRecommendationRequestNonce = 0;
       let workspaceRecommendationLastFetchedAt = null;
       let workspaceRecommendationDismissedForDay = false;
+      let taskPollingInterval = null;
+      let cachedIdentifiers = [];
+      let cachedTasks = [];
+      let cachedMemoContent = '';
+      let cachedBalance = null;
+      let pendingConnectionOnboarding = loadPendingConnectionOnboardingFromStorage();
 
       // Check if user came from logged-in state (expecting dashboard)
       const authQueryParams = new URLSearchParams(window.location.search);
@@ -2343,6 +2440,193 @@
           .filter((agent) => agent.role.length > 0);
       }
 
+      function safeSessionStorageGetItem(key) {
+        try {
+          return window.sessionStorage.getItem(key);
+        } catch {
+          return null;
+        }
+      }
+
+      function safeSessionStorageSetItem(key, value) {
+        try {
+          if (value == null) {
+            window.sessionStorage.removeItem(key);
+          } else {
+            window.sessionStorage.setItem(key, value);
+          }
+        } catch {
+          // Ignore storage failures so onboarding never blocks the dashboard.
+        }
+      }
+
+      function readCompletedAdminTasks() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
+          return Array.isArray(parsed)
+            ? parsed.filter((taskId) => typeof taskId === 'string' && taskId.trim().length > 0)
+            : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function markCompletedAdminTask(taskId) {
+        const normalizedTaskId = String(taskId || '').trim();
+        if (!normalizedTaskId) {
+          return;
+        }
+
+        const completedTasks = readCompletedAdminTasks();
+        if (!completedTasks.includes(normalizedTaskId)) {
+          completedTasks.push(normalizedTaskId);
+          localStorage.setItem('dw_completed_admin_tasks', JSON.stringify(completedTasks));
+        }
+      }
+
+      function buildDashboardReturnUrl(hash = '') {
+        const normalizedHash = hash
+          ? (String(hash).startsWith('#') ? String(hash) : `#${String(hash)}`)
+          : '';
+        return `${window.location.pathname}?loggedIn=true${normalizedHash}`;
+      }
+
+      function loadPendingConnectionOnboardingFromStorage() {
+        return parseStoredConnectOnboarding(safeSessionStorageGetItem(CONNECT_ONBOARDING_STORAGE_KEY));
+      }
+
+      function setPendingConnectionOnboarding(payload) {
+        const parsedPayload = parseStoredConnectOnboarding(payload);
+        pendingConnectionOnboarding = parsedPayload;
+        if (parsedPayload) {
+          safeSessionStorageSetItem(
+            CONNECT_ONBOARDING_STORAGE_KEY,
+            JSON.stringify(parsedPayload)
+          );
+        } else {
+          safeSessionStorageSetItem(CONNECT_ONBOARDING_STORAGE_KEY, null);
+        }
+      }
+
+      function queueConnectionOnboarding(provider, options = {}) {
+        const payload = createConnectOnboardingPayload(provider, options);
+        if (!payload) {
+          return null;
+        }
+        setPendingConnectionOnboarding(payload);
+        return payload;
+      }
+
+      function renderConnectOnboardingAction(cta) {
+        if (!cta) {
+          return '';
+        }
+
+        if (cta.kind === 'bot_install') {
+          return `
+            <button
+              type="button"
+              class="auth-btn auth-btn-primary"
+              data-connect-onboarding-action="bot_install"
+              data-provider="${escapeHtml(cta.provider || '')}"
+            >
+              ${escapeHtml(cta.label || 'Continue')}
+            </button>
+          `;
+        }
+
+        if (cta.kind === 'anchor') {
+          return `
+            <a
+              class="auth-btn auth-btn-primary"
+              data-connect-onboarding-action="anchor"
+              href="${escapeHtml(cta.href || '#section-tasks')}"
+            >
+              ${escapeHtml(cta.label || 'Open')}
+            </a>
+          `;
+        }
+
+        return '';
+      }
+
+      function renderConnectionOnboardingCard() {
+        const panel = document.getElementById('connect-onboarding-panel');
+        if (!panel) {
+          return;
+        }
+
+        const completedAdminTasks = readCompletedAdminTasks();
+        const connectedTypes = connectedProviderTypes(cachedIdentifiers);
+        const activePayload = chooseConnectOnboardingPayload({
+          pendingPayload: pendingConnectionOnboarding,
+          connectedTypes,
+          completedAdminTasks
+        });
+
+        if (!activePayload) {
+          if (pendingConnectionOnboarding && !parseStoredConnectOnboarding(pendingConnectionOnboarding)) {
+            setPendingConnectionOnboarding(null);
+          }
+          panel.innerHTML = '';
+          panel.classList.add('hidden');
+          return;
+        }
+
+        const model = buildConnectOnboardingModel({
+          provider: activePayload.provider,
+          eventType: activePayload.eventType,
+          completedAdminTasks
+        });
+        if (!model) {
+          panel.innerHTML = '';
+          panel.classList.add('hidden');
+          return;
+        }
+
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
+          <div class="connection-onboarding-card">
+            <span class="connection-onboarding-kicker">${escapeHtml(model.eyebrow || 'Connection ready')}</span>
+            <div>
+              <h3 class="connection-onboarding-title">${escapeHtml(model.title || '')}</h3>
+              <p class="connection-onboarding-description">${escapeHtml(model.description || '')}</p>
+            </div>
+            <ul class="connection-onboarding-list">
+              ${(Array.isArray(model.examples) ? model.examples : [])
+                .map((example) => `<li>${escapeHtml(example)}</li>`)
+                .join('')}
+            </ul>
+            <div class="connection-onboarding-actions">
+              ${renderConnectOnboardingAction(model.cta)}
+              <p class="connection-onboarding-footnote">${escapeHtml(model.footnote || '')}</p>
+            </div>
+          </div>
+        `;
+
+        const action = panel.querySelector('[data-connect-onboarding-action]');
+        if (!action || !model.cta) {
+          return;
+        }
+
+        if (model.cta.kind === 'bot_install') {
+          action.addEventListener('click', async (event) => {
+            if (model.cta.provider === 'discord') {
+              await openDiscordBotAuth(event);
+              return;
+            }
+            await openSlackBotAuth(event);
+          });
+          return;
+        }
+
+        if (model.cta.kind === 'anchor') {
+          action.addEventListener('click', () => {
+            setPendingConnectionOnboarding(null);
+          });
+        }
+      }
+
       function loadWorkspaceBlueprintFromStorage() {
         const raw = window.localStorage.getItem(STARTUP_BLUEPRINT_STORAGE_KEY);
         if (!raw) {
@@ -2429,6 +2713,7 @@
 
         // Render next steps with current cached identifiers
         renderNextSteps(cachedIdentifiers || []);
+        renderConnectionOnboardingCard();
       }
 
       function recommendationItems(response = workspaceRecommendationResponse) {
@@ -3680,6 +3965,7 @@
           title: 'Add Oliver to Slack',
           description: 'Make Oliver available in your Slack for follow-ups and task handoffs.',
           channelKey: 'slack',
+          nextStepsEligible: false,
           externalUrl: 'https://slack.com/oauth/v2/authorize?client_id=5584751405762.10556678065461&scope=app_mentions:read,channels:history,channels:read,chat:write,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,users:read&user_scope=',
           actionLabel: 'Add'
         },
@@ -3688,6 +3974,7 @@
           title: 'Add Oliver to Discord',
           description: 'Make Oliver available in your Discord for shared requests and quick follow-through.',
           channelKey: 'discord',
+          nextStepsEligible: false,
           externalUrl: 'https://discord.com/oauth2/authorize?client_id=1475574666830680175&permissions=68608&integration_type=0&scope=bot',
           actionLabel: 'Add'
         }
@@ -3886,7 +4173,10 @@
           .map((provider) => OAUTH_TASKS.find((task) => task.identifierType === provider))
           .filter(Boolean)
           .slice(0, 3);
-        const optionalExtensions = ADMIN_TASKS_CONFIG.filter((task) => connectedTypes.includes(task.channelKey));
+        const optionalExtensions = filterOptionalExtensionsForNextSteps(
+          ADMIN_TASKS_CONFIG,
+          connectedTypes
+        );
 
         const checklistTasks = [
           {
@@ -4021,12 +4311,14 @@
           suggestedConnections,
           'You already connected the currently supported apps.'
         );
-        html += renderSection(
-          'Optional extensions',
-          'Use these only after the matching app connection is already in place.',
-          optionalExtensions,
-          'No optional extensions to show right now.'
-        );
+        if (optionalExtensions.length > 0) {
+          html += renderSection(
+            'Optional extensions',
+            'Use these only after the matching app connection is already in place.',
+            optionalExtensions,
+            'No optional extensions to show right now.'
+          );
+        }
 
         container.innerHTML = html;
       }
@@ -4594,15 +4886,42 @@
           cachedIdentifiers = data.identifiers || [];
 
           if (data.identifiers && data.identifiers.length > 0) {
+            const completedAdminTasks = readCompletedAdminTasks();
             list.innerHTML = data.identifiers.map(id => `
               <li class="identifier-item">
                 <span><strong>${id.identifier_type}</strong>: ${id.identifier}</span>
                 <div class="identifier-actions">
                   <span class="identifier-badge">${id.verified ? 'Verified' : 'Pending'}</span>
+                  ${(() => {
+                    const provider = String(id.identifier_type || '').trim().toLowerCase();
+                    const installTaskId = provider === 'slack'
+                      ? 'add-oliver-slack'
+                      : provider === 'discord'
+                        ? 'add-oliver-discord'
+                        : null;
+                    if (!id.verified || !installTaskId) {
+                      return '';
+                    }
+                    if (completedAdminTasks.includes(installTaskId)) {
+                      return '<span class="identifier-badge">Oliver added</span>';
+                    }
+                    return `<button class="identifier-install-btn" data-provider="${escapeHtml(provider)}">Add Oliver</button>`;
+                  })()}
                   <button class="unlink-btn" data-type="${id.identifier_type}" data-id="${id.identifier}">Unlink</button>
                 </div>
               </li>
             `).join('');
+
+            list.querySelectorAll('.identifier-install-btn').forEach((btn) => {
+              btn.addEventListener('click', async (event) => {
+                const provider = String(event.currentTarget?.dataset?.provider || '').trim().toLowerCase();
+                if (provider === 'discord') {
+                  await openDiscordBotAuth(event);
+                  return;
+                }
+                await openSlackBotAuth(event);
+              });
+            });
 
             // Add click handlers for unlink buttons
             list.querySelectorAll('.unlink-btn').forEach(btn => {
@@ -4775,15 +5094,18 @@
       if (discordResult) {
         const discordStatus = document.getElementById('discord-oauth-status');
         if (discordResult === 'success') {
-          discordStatus.textContent = 'Discord connected successfully!';
+          discordStatus.textContent = 'Discord connected. Review the setup guidance below.';
           discordStatus.style.color = '#22c55e';
+          queueConnectionOnboarding('discord', {
+            source: 'oauth_callback'
+          });
         } else if (discordResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           discordStatus.textContent = `Failed to connect Discord: ${reason}`;
           discordStatus.style.color = '#ef4444';
         }
         // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Check for payment result
@@ -4836,19 +5158,20 @@
           }
           showMessage('Oliver is now available in Discord.', 'success');
           // Mark task as completed in local storage
-          const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
-          if (!completedTasks.includes('add-oliver-discord')) {
-            completedTasks.push('add-oliver-discord');
-            localStorage.setItem('dw_completed_admin_tasks', JSON.stringify(completedTasks));
-          }
+          markCompletedAdminTask('add-oliver-discord');
+          queueConnectionOnboarding('discord', {
+            eventType: 'install',
+            source: 'bot_install_callback'
+          });
           // Re-render next steps to show completed state
           renderNextSteps(cachedIdentifiers || []);
+          renderConnectionOnboardingCard();
         } else if (discordBotResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           showMessage(`Failed to add Oliver to Discord: ${reason}`, 'error');
         }
         // Clean up URL (removes both query params and hash)
-        window.history.replaceState({}, document.title, window.location.pathname + '?loggedIn=true');
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Discord bot installation function
@@ -4886,19 +5209,20 @@
           }
           showMessage('Oliver is now available in Slack.', 'success');
           // Mark task as completed in local storage
-          const completedTasks = JSON.parse(localStorage.getItem('dw_completed_admin_tasks') || '[]');
-          if (!completedTasks.includes('add-oliver-slack')) {
-            completedTasks.push('add-oliver-slack');
-            localStorage.setItem('dw_completed_admin_tasks', JSON.stringify(completedTasks));
-          }
+          markCompletedAdminTask('add-oliver-slack');
+          queueConnectionOnboarding('slack', {
+            eventType: 'install',
+            source: 'bot_install_callback'
+          });
           // Re-render next steps to show completed state
           renderNextSteps(cachedIdentifiers || []);
+          renderConnectionOnboardingCard();
         } else if (slackBotResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           showMessage(`Failed to add Oliver to Slack: ${reason}`, 'error');
         }
         // Clean up URL (removes both query params and hash)
-        window.history.replaceState({}, document.title, window.location.pathname + '?loggedIn=true');
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Slack bot installation function
@@ -4972,15 +5296,18 @@
       if (slackResult) {
         const slackStatus = document.getElementById('slack-oauth-status');
         if (slackResult === 'success') {
-          slackStatus.textContent = 'Slack connected successfully!';
+          slackStatus.textContent = 'Slack connected. Review the setup guidance below.';
           slackStatus.style.color = '#22c55e';
+          queueConnectionOnboarding('slack', {
+            source: 'oauth_callback'
+          });
         } else if (slackResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           slackStatus.textContent = `Failed to connect Slack: ${reason}`;
           slackStatus.style.color = '#ef4444';
         }
         // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // GitHub OAuth button
@@ -5022,15 +5349,18 @@
       if (githubResult) {
         const githubStatus = document.getElementById('github-connect-status');
         if (githubResult === 'success') {
-          githubStatus.textContent = 'GitHub connected successfully!';
+          githubStatus.textContent = 'GitHub connected. Review the setup guidance below.';
           githubStatus.style.color = '#22c55e';
+          queueConnectionOnboarding('github', {
+            source: 'oauth_callback'
+          });
         } else if (githubResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           githubStatus.textContent = `Failed to connect GitHub: ${reason}`;
           githubStatus.style.color = '#ef4444';
         }
         // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Notion OAuth button
@@ -5072,15 +5402,18 @@
       if (notionResult) {
         const notionStatus = document.getElementById('notion-oauth-status');
         if (notionResult === 'success') {
-          notionStatus.textContent = 'Notion connected successfully!';
+          notionStatus.textContent = 'Notion connected. Review the setup guidance below.';
           notionStatus.style.color = '#22c55e';
+          queueConnectionOnboarding('notion', {
+            source: 'oauth_callback'
+          });
         } else if (notionResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           notionStatus.textContent = `Failed to connect Notion: ${reason}`;
           notionStatus.style.color = '#ef4444';
         }
         // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Lark OAuth button
@@ -5122,15 +5455,18 @@
       if (larkResult) {
         const larkStatus = document.getElementById('lark-oauth-status');
         if (larkResult === 'success') {
-          larkStatus.textContent = 'Lark connected successfully!';
+          larkStatus.textContent = 'Lark connected. Review the setup guidance below.';
           larkStatus.style.color = '#22c55e';
+          queueConnectionOnboarding('lark', {
+            source: 'oauth_callback'
+          });
         } else if (larkResult === 'error') {
           const reason = urlParams.get('reason') || 'unknown error';
           larkStatus.textContent = `Failed to connect Lark: ${reason}`;
           larkStatus.style.color = '#ef4444';
         }
         // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        window.history.replaceState({}, document.title, buildDashboardReturnUrl('#section-channels'));
       }
 
       // Check for email verification token (from magic link in email)
@@ -5235,23 +5571,20 @@
             showLinkMessage(result.message || 'Verification email sent. Please check your inbox.', 'success');
           } else {
             showLinkMessage('Channel linked successfully!', 'success');
+            queueConnectionOnboarding(identifierType, {
+              source: 'manual_link'
+            });
           }
 
           document.getElementById('link-identifier').value = '';
           await loadIdentifiers(session.access_token);
           // Refresh tasks to include the new channel
           await loadTasks(session.access_token, { refreshRecommendation: true });
+          renderConnectionOnboardingCard();
         } catch (err) {
           showLinkMessage(err.message);
         }
       });
-
-      // Task polling state
-      let taskPollingInterval = null;
-      let cachedIdentifiers = [];
-      let cachedTasks = [];
-      let cachedMemoContent = '';
-      let cachedBalance = null;
 
       async function loadBalanceAndBadges(accessToken) {
         try {
