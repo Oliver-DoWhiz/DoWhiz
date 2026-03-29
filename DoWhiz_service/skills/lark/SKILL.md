@@ -13,6 +13,7 @@ This skill enables you to interact with Lark's productivity suite:
 - **Sheets** - Read, write, and append spreadsheet data
 - **Bitable** - Query and manage database records (like Airtable)
 - **Drive** - List and manage files/folders
+- **Sharing** - Share files with users via email
 
 ## Authentication
 
@@ -105,6 +106,30 @@ lark_cli get-file --file-token "<file_token>"
 # Create a folder
 lark_cli create-folder --name "Projects" --parent-token "<parent_folder_token>"
 ```
+
+### Sharing
+
+Share documents, sheets, or bitable apps with users:
+
+```bash
+# Share a document with a user (view access)
+lark_cli share-file --token "<doc_token>" --file-type docx --user-email "user@example.com" --perm view
+
+# Share a spreadsheet with edit access
+lark_cli share-file --token "<sheet_token>" --file-type sheet --user-email "user@example.com" --perm edit
+
+# Share a bitable with full access
+lark_cli share-file --token "<app_token>" --file-type bitable --user-email "user@example.com" --perm full_access
+```
+
+**File types:** `docx`, `sheet`, `bitable`, `file`, `folder`
+
+**Permission levels:**
+- `view` - Read-only access
+- `edit` - Can edit content
+- `full_access` - Full management rights
+
+**Important:** When you create a document/sheet/bitable, it is owned by the bot app. You must share it with the user for them to access it.
 
 ## Getting Tokens from URLs
 

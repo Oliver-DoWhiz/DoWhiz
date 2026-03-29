@@ -129,6 +129,16 @@ enum Commands {
         #[arg(long)]
         parent_token: String,
     },
+    ShareFile {
+        #[arg(long)]
+        token: String,
+        #[arg(long, help = "File type: docx, sheet, bitable, file, folder")]
+        file_type: String,
+        #[arg(long, help = "User email to share with")]
+        user_email: String,
+        #[arg(long, default_value = "edit", help = "Permission: view, edit, full_access")]
+        perm: String,
+    },
 }
 
 async fn get_tenant_access_token(app_id: &str, app_secret: &str) -> Result<String> {
@@ -452,6 +462,31 @@ async fn create_folder(token: &str, name: &str, parent_token: &str) -> Result<()
     Ok(())
 }
 
+async fn share_file(
+    token: &str,
+    file_token: &str,
+    file_type: &str,
+    user_email: &str,
+    perm: &str,
+) -> Result<()> {
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/open-apis/drive/v1/permissions/{}/members?type={}",
+            LARK_BASE_URL, file_token, file_type
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({
+            "member_type": "email",
+            "member_id": user_email,
+            "perm": perm
+        }))
+        .send()
+        .await?;
+
+    println!("{}", resp.text().await?);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -517,6 +552,12 @@ async fn main() -> Result<()> {
         Commands::CreateFolder { name, parent_token } => {
             create_folder(&token, name, parent_token).await?
         }
+        Commands::ShareFile {
+            token: file_token,
+            file_type,
+            user_email,
+            perm,
+        } => share_file(&token, file_token, file_type, user_email, perm).await?,
     }
 
     Ok(())
