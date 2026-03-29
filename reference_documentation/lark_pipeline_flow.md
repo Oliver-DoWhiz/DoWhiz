@@ -1163,7 +1163,7 @@ async fn share_file(
 }
 ```
 * One question is how do we get Codex to open_id within the ACI container. We solved this in the following way:
-* In prompt.rs, tell codex to get the Lark open id via looking in user_identities (which was first implemented for cross-channel linking,
+* In prompt.rs, tell codex to get the Lark open id via looking in user_identities_section (which was first implemented for cross-channel linking,
   but it’s convenient to use here).
 * We can’t use email because inbound gateway and account linkage use ou_id as the primary identifier for Lark.
 
