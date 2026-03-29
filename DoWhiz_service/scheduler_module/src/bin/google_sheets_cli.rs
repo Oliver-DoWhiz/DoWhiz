@@ -647,7 +647,7 @@ fn cmd_list_folders(parent_id: Option<&str>, query: Option<&str>) -> Result<Stri
     let mut output = String::new();
     output.push_str(&format!("Found {} folders:\n\n", folders.len()));
 
-    for (id, name) in folders {
+    for (id, name) in &folders {
         output.push_str(&format!("- {} ({})\n", name, id));
     }
 
