@@ -694,22 +694,44 @@ fn read_text_by_epoch_or_latest(
 }
 
 /// Get file path by thread_epoch if available, otherwise fall back to latest file with suffix.
-/// If thread_epoch is provided, looks for "{epoch:04}{suffix}" (e.g., "0005_lark.txt").
-/// Falls back to latest_file_with_suffix if epoch file doesn't exist or epoch is None.
+/// Finds files ending with suffix, extracts the numeric prefix, and matches against epoch.
+/// Falls back to latest_file_with_suffix if no match found or epoch is None.
 fn file_with_epoch_or_latest(
     incoming_dir: &Path,
     suffix: &str,
     thread_epoch: Option<u64>,
 ) -> Option<PathBuf> {
     if let Some(epoch) = thread_epoch {
-        let epoch_filename = format!("{:04}{}", epoch, suffix);
-        let epoch_path = incoming_dir.join(&epoch_filename);
-        if epoch_path.exists() {
-            return Some(epoch_path);
+        // Find file matching the epoch by parsing numeric prefix
+        if let Some(path) = find_file_by_epoch(incoming_dir, suffix, epoch) {
+            return Some(path);
         }
     }
     // Fallback to latest file with suffix
     latest_file_with_suffix(incoming_dir, &[suffix])
+}
+
+/// Find a file by extracting numeric prefix and matching against epoch.
+/// E.g., "0002_lark.txt" with suffix "_lark.txt" → prefix "0002" → 2 matches epoch=2
+fn find_file_by_epoch(incoming_dir: &Path, suffix: &str, epoch: u64) -> Option<PathBuf> {
+    for entry in fs::read_dir(incoming_dir).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(suffix) {
+            continue;
+        }
+        // Strip suffix and parse numeric prefix
+        let prefix = name.strip_suffix(suffix)?;
+        if let Ok(file_epoch) = prefix.parse::<u64>() {
+            if file_epoch == epoch {
+                return Some(entry.path());
+            }
+        }
+    }
+    None
 }
 
 fn read_latest_text_by_suffix(incoming_dir: &Path, suffixes: &[&str]) -> Option<String> {
