@@ -207,6 +207,26 @@ impl MongoSchedulerStore {
         Ok(())
     }
 
+    /// Check if there's already a running execution for this task.
+    ///
+    /// This prevents duplicate executions when the worker process restarts
+    /// and loses its in-memory claims state.
+    pub(crate) fn has_running_execution(&self, task_id: &str) -> Result<bool, SchedulerError> {
+        let count = self
+            .executions
+            .count_documents(
+                doc! {
+                    "owner_scope.kind": &self.owner_kind,
+                    "owner_scope.id": &self.owner_id,
+                    "task_id": task_id,
+                    "status": "running",
+                },
+                None,
+            )
+            .map_err(mongo_err)?;
+        Ok(count > 0)
+    }
+
     pub(crate) fn record_execution_start(
         &self,
         task_id: Uuid,

@@ -32,6 +32,14 @@ impl SchedulerStore {
         self.mongo.update_task(task)
     }
 
+    /// Check if there's already a running execution for this task.
+    ///
+    /// This prevents duplicate executions when the worker process restarts
+    /// and loses its in-memory claims state.
+    pub(crate) fn has_running_execution(&self, task_id: &str) -> Result<bool, SchedulerError> {
+        self.mongo.has_running_execution(task_id)
+    }
+
     pub(crate) fn record_execution_start(
         &self,
         task_id: Uuid,

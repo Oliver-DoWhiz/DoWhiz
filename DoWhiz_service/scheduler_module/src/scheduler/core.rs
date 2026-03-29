@@ -530,6 +530,14 @@ impl<E: TaskExecutor> Scheduler<E> {
         self.store.reset_retry_count(task_id)
     }
 
+    /// Check if there's already a running execution for this task.
+    ///
+    /// This prevents duplicate executions when the worker process restarts
+    /// and loses its in-memory claims state.
+    pub fn has_running_execution(&self, task_id: &str) -> Result<bool, SchedulerError> {
+        self.store.has_running_execution(task_id)
+    }
+
     /// Disable a task by its ID (used when max retries exceeded)
     pub fn disable_task_by_id(&mut self, task_id: &str) -> Result<(), SchedulerError> {
         // Update in-memory task list
