@@ -25,7 +25,7 @@ const LANDING_PAGE_OVERRIDE_VALUE = 'landing';
 const LANDING_DASHBOARD_SUFFIX = '?loggedIn=true#section-overview';
 const LANDING_SETTINGS_SUFFIX = '#section-settings';
 const AUTHENTICATED_SETTINGS_SUFFIX = '?loggedIn=true#section-settings';
-const LANDING_PAGE_VARIANT = 'oliver_channel_showcase_v2';
+const LANDING_PAGE_VARIANT = 'oliver_channel_native_stages_v3';
 const HERO_SHOWCASE_INTERVAL_MS = 4200;
 const PUBLIC_CHANNEL_URLS = {
   slack:
@@ -183,6 +183,810 @@ const updateLinkHref = (selector, href) => {
     node.setAttribute('href', href);
   }
 };
+
+const getStageAvatarLabel = (author = '') => {
+  const trimmedAuthor = author.trim();
+  if (!trimmedAuthor) {
+    return '?';
+  }
+
+  if (trimmedAuthor.length <= 2) {
+    return trimmedAuthor;
+  }
+
+  return trimmedAuthor
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase();
+};
+
+function HeroStageAvatarCluster({ items = [], dark = false }) {
+  if (!items.length) {
+    return null;
+  }
+
+  const clusterClasses = ['hero-stage-avatar-cluster'];
+  if (dark) {
+    clusterClasses.push('is-dark');
+  }
+
+  return (
+    <div className={clusterClasses.join(' ')} aria-hidden="true">
+      {items.map((item, index) => {
+        const label = typeof item === 'string' ? item : item?.name || '';
+        return (
+          <span key={`${label}-${index}`} className="hero-stage-avatar-cluster-item">
+            {getStageAvatarLabel(label)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function SlackStageMessage({ author, meta, time, text, tone = 'default', reactions = [] }) {
+  return (
+    <div className={`hero-stage-slack-message${tone === 'user' ? ' is-user' : ''}`}>
+      <span className="hero-stage-slack-avatar" aria-hidden="true">
+        {getStageAvatarLabel(author)}
+      </span>
+      <div className="hero-stage-slack-message-main">
+        <div className="hero-stage-slack-message-head">
+          <strong>{author}</strong>
+          {meta ? <span className="hero-stage-slack-message-role">{meta}</span> : null}
+          {time ? <small>{time}</small> : null}
+        </div>
+        <p>{text}</p>
+        {reactions.length ? (
+          <div className="hero-stage-slack-reactions">
+            {reactions.map((reaction) => (
+              <span key={reaction} className="hero-stage-slack-reaction">
+                {reaction}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DiscordStageMessage({ author, meta, time, text, tone = 'default', accent }) {
+  return (
+    <div className={`hero-stage-discord-message${tone === 'user' ? ' is-user' : ''}`}>
+      <span
+        className="hero-stage-discord-avatar"
+        aria-hidden="true"
+        style={accent ? { '--discord-accent': accent } : undefined}
+      >
+        {getStageAvatarLabel(author)}
+      </span>
+      <div className="hero-stage-discord-message-main">
+        <div className="hero-stage-discord-message-head">
+          <strong style={accent ? { color: accent } : undefined}>{author}</strong>
+          {meta ? <span className="hero-stage-discord-role">{meta}</span> : null}
+          {time ? <small>{time}</small> : null}
+        </div>
+        <p>{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function GitHubChecklistItem({ item }) {
+  return (
+    <div className={`hero-stage-github-checklist-item hero-stage-github-checklist-item-${item.state}`}>
+      <span className="hero-stage-github-check" aria-hidden="true">
+        {item.state === 'done' ? '✓' : item.state === 'progress' ? '•' : ''}
+      </span>
+      <div className="hero-stage-github-checklist-copy">
+        <strong>{item.title}</strong>
+        <span>{item.meta}</span>
+      </div>
+    </div>
+  );
+}
+
+function GitHubActivityRow({ item }) {
+  return (
+    <div className="hero-stage-github-activity">
+      <span className="hero-stage-github-activity-dot" aria-hidden="true"></span>
+      <div className="hero-stage-github-activity-copy">
+        <strong>{item.actor}</strong>
+        <p>{item.text}</p>
+      </div>
+      <small>{item.meta}</small>
+    </div>
+  );
+}
+
+function NotionCollaboratorBar({ items = [] }) {
+  if (!items.length) {
+    return null;
+  }
+
+  return (
+    <div className="hero-stage-notion-collaborators" aria-hidden="true">
+      {items.map((item, index) => (
+        <span key={`${item}-${index}`} className="hero-stage-notion-collaborator">
+          {getStageAvatarLabel(item)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function LarkStageMessage({ author, meta, time, text, badge }) {
+  return (
+    <div className="hero-stage-lark-message">
+      <span className="hero-stage-lark-avatar" aria-hidden="true">
+        {getStageAvatarLabel(author)}
+      </span>
+      <div className="hero-stage-lark-message-main">
+        <div className="hero-stage-lark-message-head">
+          <strong>{author}</strong>
+          {meta ? <span>{meta}</span> : null}
+          {time ? <small>{time}</small> : null}
+          {badge ? <em>{badge}</em> : null}
+        </div>
+        <p>{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function getStageStatusTone(status = '') {
+  const normalized = status.toLowerCase();
+
+  if (normalized.includes('ready') || status.includes('已准备')) {
+    return 'success';
+  }
+
+  if (
+    normalized.includes('progress') ||
+    normalized.includes('active') ||
+    normalized.includes('open') ||
+    status.includes('进行中')
+  ) {
+    return 'progress';
+  }
+
+  if (
+    normalized.includes('queue') ||
+    normalized.includes('next') ||
+    normalized.includes('draft') ||
+    status.includes('待开始') ||
+    status.includes('下一步')
+  ) {
+    return 'queued';
+  }
+
+  return 'neutral';
+}
+
+function HeroStageStatusPill({ label }) {
+  return (
+    <span className={['hero-stage-status-pill', `is-${getStageStatusTone(label)}`].join(' ')}>
+      {label}
+    </span>
+  );
+}
+
+function getNotionBlockMarker(type) {
+  switch (type) {
+    case 'heading':
+      return 'H1';
+    case 'todo':
+      return '[]';
+    case 'callout':
+      return '!';
+    default:
+      return '•';
+  }
+}
+
+function EmailHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-email-layout">
+      <aside className="hero-stage-email-nav">
+        <div className="hero-stage-email-nav-head">
+          <strong>{stage.appName}</strong>
+          <span>{stage.appMeta}</span>
+        </div>
+
+        <div className="hero-stage-email-folder-list">
+          {stage.folders.map((folder) => (
+            <div
+              key={folder.label}
+              className={`hero-stage-email-folder${folder.active ? ' is-active' : ''}`}
+            >
+              <span>{folder.label}</span>
+              {folder.count ? <small>{folder.count}</small> : null}
+            </div>
+          ))}
+        </div>
+
+        <div className="hero-stage-email-thread-list">
+          {stage.threads.map((thread) => (
+            <article
+              key={`${thread.from}-${thread.subject}`}
+              className={`hero-stage-email-thread${thread.active ? ' is-active' : ''}`}
+            >
+              <div className="hero-stage-email-thread-head">
+                <strong>{thread.from}</strong>
+                <span>{thread.time}</span>
+              </div>
+              <p>{thread.subject}</p>
+              <small>{thread.preview}</small>
+            </article>
+          ))}
+        </div>
+      </aside>
+
+      <section className="hero-stage-email-compose">
+        <div className="hero-stage-window-bar">
+          <div className="hero-stage-window-controls" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <strong>{stage.composeTitle}</strong>
+        </div>
+
+        <div className="hero-stage-email-badges">
+          <span className="hero-stage-email-draft-badge">{stage.draftBadge}</span>
+          {stage.tags.map((tag) => (
+            <span key={tag} className="hero-stage-email-tag">
+              {tag}
+            </span>
+          ))}
+        </div>
+
+        <div className="hero-stage-email-fields">
+          <div className="hero-stage-email-field">
+            <span>{stage.toLabel}</span>
+            <strong>{stage.toValue}</strong>
+          </div>
+          <div className="hero-stage-email-field">
+            <span>{stage.ccLabel}</span>
+            <strong>{stage.ccValue}</strong>
+          </div>
+          <div className="hero-stage-email-field">
+            <span>{stage.subjectLabel}</span>
+            <strong>{stage.subjectValue}</strong>
+          </div>
+        </div>
+
+        <div className="hero-stage-email-body">
+          {stage.bodyLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+
+        <div className="hero-stage-email-footer">
+          <span>{stage.footerNote}</span>
+          <span className="hero-stage-mock-button hero-stage-mock-button-dark">{stage.footerValue}</span>
+        </div>
+      </section>
+
+      <aside className="hero-stage-email-result">
+        <span className="hero-stage-micro-label">{stage.resultLabel}</span>
+        <strong>{stage.resultTitle}</strong>
+        <ul className="hero-stage-list">
+          {stage.resultItems.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </aside>
+    </div>
+  );
+}
+
+function SlackHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-slack-layout">
+      <aside className="hero-stage-slack-sidebar">
+        <div className="hero-stage-slack-workspace">
+          <span className="hero-stage-slack-workspace-mark" aria-hidden="true"></span>
+          <div className="hero-stage-slack-workspace-copy">
+            <strong>{stage.workspace}</strong>
+            <span>{stage.workspaceMeta}</span>
+          </div>
+        </div>
+
+        {stage.sections.map((section) => (
+          <div key={section.title} className="hero-stage-slack-section">
+            <span className="hero-stage-slack-section-title">{section.title}</span>
+            <div className="hero-stage-slack-section-list">
+              {section.items.map((item) => {
+                const isDirectSection =
+                  section.title.toLowerCase().includes('direct') || section.title.includes('私信');
+                const prefix = isDirectSection ? (item.accent === 'bot' ? '@' : '•') : '#';
+                const label = prefix === '#' ? item.label.replace(/^#\s*/, '') : item.label;
+
+                return (
+                  <div
+                    key={item.label}
+                    className={`hero-stage-slack-item${item.active ? ' is-active' : ''}${
+                      item.accent === 'bot' ? ' is-bot' : ''
+                    }`}
+                  >
+                    <span className="hero-stage-slack-item-marker" aria-hidden="true">
+                      {prefix}
+                    </span>
+                    <span>{label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </aside>
+
+      <section className="hero-stage-slack-thread">
+        <div className="hero-stage-slack-thread-head">
+          <div className="hero-stage-slack-room-copy">
+            <strong>{stage.room}</strong>
+            <span>{stage.roomMeta}</span>
+          </div>
+          <div className="hero-stage-slack-room-members">
+            <HeroStageAvatarCluster items={stage.roomMembers} />
+            <span>{stage.roomMembers.join(' / ')}</span>
+          </div>
+        </div>
+
+        <div className="hero-stage-slack-thread-toolbar">
+          <div className="hero-stage-slack-thread-pills">
+            {(stage.threadPills || []).map((pill) => (
+              <span key={pill} className="hero-stage-slack-thread-pill">
+                {pill}
+              </span>
+            ))}
+          </div>
+          {stage.threadActivity ? (
+            <span className="hero-stage-slack-thread-activity">{stage.threadActivity}</span>
+          ) : null}
+        </div>
+
+        <div className="hero-stage-slack-message-feed">
+          {stage.messages.map((message) => (
+            <SlackStageMessage key={`${message.author}-${message.text}`} {...message} />
+          ))}
+        </div>
+
+        <div className="hero-stage-slack-summary">
+          <span className="hero-stage-micro-label">{stage.threadLabel}</span>
+          <strong>{stage.threadTitle}</strong>
+          <p>{stage.threadText}</p>
+        </div>
+
+        <div className="hero-stage-slack-composer">
+          <span className="hero-stage-slack-composer-pill">@Oliver</span>
+          <div className="hero-stage-slack-composer-copy">
+            <strong>{stage.composerPlaceholder}</strong>
+            <span>{stage.composerHint}</span>
+          </div>
+        </div>
+      </section>
+
+      <aside className="hero-stage-slack-card">
+        <span className="hero-stage-micro-label">{stage.cardLabel}</span>
+        <strong>{stage.cardTitle}</strong>
+        <p className="hero-stage-slack-card-summary">{stage.cardSummary}</p>
+        <ul className="hero-stage-list">
+          {stage.cardItems.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+        <div className="hero-stage-chip-row">
+          {stage.cardActions.map((action) => (
+            <span key={action} className="hero-stage-chip">
+              {action}
+            </span>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DiscordHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-discord-layout">
+      <aside className="hero-stage-discord-servers" aria-hidden="true">
+        <span className="hero-stage-discord-server-dot is-active"></span>
+        <span className="hero-stage-discord-server-dot"></span>
+        <span className="hero-stage-discord-server-dot"></span>
+        <span className="hero-stage-discord-server-dot"></span>
+      </aside>
+
+      <aside className="hero-stage-discord-channels">
+        <div className="hero-stage-discord-server-head">
+          <strong>{stage.server}</strong>
+          <span>{stage.onlineLabel}</span>
+        </div>
+
+        {stage.sections.map((section) => (
+          <div key={section.title} className="hero-stage-discord-section">
+            <span className="hero-stage-discord-section-title">{section.title}</span>
+            <div className="hero-stage-discord-channel-list">
+              {section.items.map((item) => {
+                const label = item.label.replace(/^#\s*/, '');
+                return (
+                  <span key={item.label} className={item.active ? 'is-active' : ''}>
+                    # {label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div className="hero-stage-discord-members-mini">
+          <span>{stage.membersTitle}</span>
+          <HeroStageAvatarCluster items={stage.members} dark />
+        </div>
+      </aside>
+
+      <section className="hero-stage-discord-chat">
+        <div className="hero-stage-discord-room-head">
+          <div className="hero-stage-discord-room-copy">
+            <strong>{stage.room}</strong>
+            <span>{stage.roomTopic}</span>
+          </div>
+        </div>
+
+        <div className="hero-stage-discord-chat-toolbar">
+          <span className="hero-stage-discord-channel-badge">{stage.room}</span>
+          {stage.roomMeta ? <span className="hero-stage-discord-room-meta">{stage.roomMeta}</span> : null}
+        </div>
+
+        <div className="hero-stage-discord-message-feed">
+          {stage.messages.map((message) => (
+            <DiscordStageMessage key={`${message.author}-${message.text}`} {...message} />
+          ))}
+        </div>
+
+        <div className="hero-stage-discord-composer">
+          <strong>{stage.composerValue}</strong>
+          <span>{stage.composerHint}</span>
+        </div>
+      </section>
+
+      <aside className="hero-stage-discord-plan">
+        <span className="hero-stage-micro-label">{stage.botLabel}</span>
+        <strong>{stage.botTitle}</strong>
+        <p className="hero-stage-discord-bot-description">{stage.botDescription}</p>
+
+        <div className="hero-stage-discord-embed">
+          <div className="hero-stage-discord-embed-accent" aria-hidden="true"></div>
+          <div className="hero-stage-discord-field-list">
+            {stage.botFields.map((field) => (
+              <div key={field.label} className="hero-stage-discord-field">
+                <span>{field.label}</span>
+                <strong>{field.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="hero-stage-discord-member-list">
+          <span className="hero-stage-discord-member-title">{stage.membersTitle}</span>
+          {stage.members.map((member) => (
+            <div
+              key={member.name}
+              className={`hero-stage-discord-member${member.accent ? ' is-accent' : ''}`}
+            >
+              <strong>{member.name}</strong>
+              <span>{member.role}</span>
+            </div>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function GitHubHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-github-layout">
+      <div className="hero-stage-github-shell">
+        <div className="hero-stage-github-topbar">
+          <div className="hero-stage-github-repo">
+            <strong>{stage.repo}</strong>
+            <span>{stage.repoMeta}</span>
+          </div>
+          <div className="hero-stage-github-tabs">
+            {stage.tabs.map((tab) => (
+              <span key={tab}>{tab}</span>
+            ))}
+          </div>
+        </div>
+
+        <div className="hero-stage-github-filter-row">
+          {stage.filters.map((filter) => (
+            <span key={filter} className="hero-stage-github-filter">
+              {filter}
+            </span>
+          ))}
+        </div>
+
+        <div className="hero-stage-github-list-head">
+          <span className="hero-stage-github-list-count is-open">{stage.overview.open}</span>
+          <span className="hero-stage-github-list-count is-closed">{stage.overview.closed}</span>
+        </div>
+
+        <div className="hero-stage-github-grid">
+          <section className="hero-stage-github-issues">
+            {stage.issues.map((issue) => (
+              <article
+                key={issue.id}
+                className={`hero-stage-github-issue${issue.active ? ' is-active' : ''}`}
+              >
+                <div className="hero-stage-github-issue-title-row">
+                  <div className="hero-stage-github-state">
+                    <span className="hero-stage-github-state-dot" aria-hidden="true"></span>
+                    <strong>{issue.title}</strong>
+                  </div>
+                  <HeroStageStatusPill label={issue.status} />
+                </div>
+
+                <div className="hero-stage-github-issue-meta-row">
+                  <span>{issue.id}</span>
+                  <span>{issue.meta}</span>
+                </div>
+
+                <div className="hero-stage-github-issue-badges">
+                  <div className="hero-stage-github-issue-labels">
+                    {issue.labels.map((label) => (
+                      <span key={label} className="hero-stage-github-issue-label">
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  <span className="hero-stage-github-issue-comments">{issue.comments}</span>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          <aside className="hero-stage-github-detail">
+            <span className="hero-stage-micro-label">{stage.detailLabel}</span>
+            <strong>{stage.detailTitle}</strong>
+            <p>{stage.detailSummary}</p>
+
+            <div className="hero-stage-github-detail-meta">
+              {stage.detailMeta.map((item) => (
+                <span key={item} className="hero-stage-github-detail-chip">
+                  {item}
+                </span>
+              ))}
+            </div>
+
+            <div className="hero-stage-github-checklist">
+              {stage.detailChecklist.map((item) => (
+                <GitHubChecklistItem key={item.title} item={item} />
+              ))}
+            </div>
+
+            <div className="hero-stage-github-detail-comment">
+              <span>{stage.detailCommentTitle}</span>
+              <p>{stage.detailComment}</p>
+            </div>
+
+            <div className="hero-stage-github-activity-list">
+              {stage.detailActivity.map((item) => (
+                <GitHubActivityRow key={`${item.actor}-${item.text}`} item={item} />
+              ))}
+            </div>
+
+            <div className="hero-stage-inline-note">{stage.detailFooter}</div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NotionHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-notion-layout">
+      <section className="hero-stage-notion-page">
+        <div className="hero-stage-notion-meta-row">
+          <div className="hero-stage-notion-breadcrumb">{stage.breadcrumb}</div>
+          <NotionCollaboratorBar items={stage.collaborators} />
+        </div>
+
+        <div className="hero-stage-notion-page-head">
+          <span className="hero-stage-notion-page-icon">{stage.pageIcon}</span>
+          <div className="hero-stage-notion-title-copy">
+            <h3>{stage.pageTitle}</h3>
+            <p>{stage.pageIntro}</p>
+          </div>
+        </div>
+
+        <div className="hero-stage-notion-properties">
+          {stage.properties.map((property) => (
+            <div key={property.label} className="hero-stage-notion-property">
+              <span>{property.label}</span>
+              <strong>{property.value}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="hero-stage-notion-blocks">
+          {stage.blocks.map((block) => (
+            <div
+              key={`${block.type}-${block.text}`}
+              className={`hero-stage-notion-block hero-stage-notion-block-${block.type}`}
+            >
+              <span aria-hidden="true">{getNotionBlockMarker(block.type)}</span>
+              <strong>{block.text}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="hero-stage-notion-table">
+          <div className="hero-stage-notion-table-head">
+            <span className="hero-stage-micro-label">{stage.databaseLabel}</span>
+            <div className="hero-stage-notion-tabs">
+              {stage.databaseTabs.map((tab, index) => (
+                <span key={tab} className={index === 0 ? 'is-active' : ''}>
+                  {tab}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {stage.databaseColumns?.length ? (
+            <div className="hero-stage-notion-table-columns">
+              {stage.databaseColumns.map((column) => (
+                <span key={column}>{column}</span>
+              ))}
+            </div>
+          ) : null}
+
+          {stage.rows.map((row) => (
+            <div key={row.name} className="hero-stage-notion-row">
+              <div className="hero-stage-notion-row-main">
+                <strong>{row.name}</strong>
+                <span>{row.meta}</span>
+              </div>
+              <HeroStageStatusPill label={row.status} />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <aside className="hero-stage-notion-sidecard">
+        <span className="hero-stage-micro-label">{stage.sideLabel}</span>
+        <strong>{stage.sideTitle}</strong>
+        <ul className="hero-stage-list">
+          {stage.sideItems.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+        <div className="hero-stage-inline-note">{stage.sideFootnote}</div>
+      </aside>
+    </div>
+  );
+}
+
+function LarkHeroStage({ tool }) {
+  const stage = tool.stage;
+
+  return (
+    <div className="hero-stage-body hero-stage-lark-layout">
+      <section className="hero-stage-lark-feed">
+        <div className="hero-stage-lark-toolbar">
+          <div className="hero-stage-lark-head">
+            <strong>{stage.workspace}</strong>
+            <span>{stage.workspaceMeta}</span>
+          </div>
+          <div className="hero-stage-lark-tabs">
+            {stage.tabs.map((tab, index) => (
+              <span key={tab} className={index === 0 ? 'is-active' : ''}>
+                {tab}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {stage.participants?.length ? (
+          <div className="hero-stage-lark-participants">
+            <HeroStageAvatarCluster items={stage.participants} />
+            <span>{stage.participants.join(' / ')}</span>
+          </div>
+        ) : null}
+
+        <div className="hero-stage-lark-recap">
+          <span className="hero-stage-micro-label">{stage.recapLabel}</span>
+          <strong>{stage.recapTitle}</strong>
+          <p>{stage.recapText}</p>
+        </div>
+
+        <div className="hero-stage-lark-message-feed">
+          {stage.messages.map((message) => (
+            <LarkStageMessage key={`${message.author}-${message.text}`} {...message} />
+          ))}
+        </div>
+      </section>
+
+      <aside className="hero-stage-lark-card">
+        <span className="hero-stage-micro-label">{stage.trackerLabel}</span>
+        <strong className="hero-stage-lark-title">{stage.trackerTitle}</strong>
+
+        {stage.ownerColumns?.length ? (
+          <div className="hero-stage-lark-owner-head">
+            {stage.ownerColumns.map((column) => (
+              <span key={column}>{column}</span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="hero-stage-lark-owners">
+          {stage.owners.map((owner) => (
+            <div key={`${owner.owner}-${owner.task}`} className="hero-stage-lark-owner-row">
+              <div className="hero-stage-lark-owner-copy">
+                <strong>{owner.owner}</strong>
+                <span>{owner.task}</span>
+              </div>
+              <div className="hero-stage-lark-owner-meta">
+                <small>{owner.due}</small>
+                <HeroStageStatusPill label={owner.status} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="hero-stage-lark-update">
+          <span>{stage.updateLabel}</span>
+          <p>{stage.updateText}</p>
+        </div>
+
+        <div className="hero-stage-chip-row">
+          {stage.updateActions.map((action) => (
+            <span key={action} className="hero-stage-chip">
+              {action}
+            </span>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function renderHeroStageBody(tool) {
+  switch (tool.key) {
+    case 'email':
+      return <EmailHeroStage tool={tool} />;
+    case 'slack':
+      return <SlackHeroStage tool={tool} />;
+    case 'discord':
+      return <DiscordHeroStage tool={tool} />;
+    case 'github':
+      return <GitHubHeroStage tool={tool} />;
+    case 'notion':
+      return <NotionHeroStage tool={tool} />;
+    case 'lark':
+      return <LarkHeroStage tool={tool} />;
+    default:
+      return null;
+  }
+}
 
 function LandingPage({ locale }) {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
@@ -905,7 +1709,7 @@ function LandingPage({ locale }) {
                       </span>
                       <span className="hero-channel-pill-copy">
                         <strong>{tool.label}</strong>
-                        <span>{tool.anonymousActionLabel}</span>
+                        <span>{tool.pillLabel || tool.anonymousActionLabel}</span>
                       </span>
                     </span>
                     <span className="hero-channel-pill-progress" aria-hidden="true">
@@ -918,7 +1722,7 @@ function LandingPage({ locale }) {
               {activeHeroTool ? (
                 <article
                   key={activeHeroTool.key}
-                  className="hero-channel-stage"
+                  className={`hero-channel-stage hero-channel-stage-${activeHeroTool.key}`}
                   style={{ '--tool-accent': activeHeroTool.accent }}
                 >
                   <div className="hero-channel-stage-head">
@@ -941,25 +1745,7 @@ function LandingPage({ locale }) {
                     </button>
                   </div>
 
-                  <div className="hero-channel-stage-grid">
-                    <div className="hero-stage-entry-card">
-                      <span className="hero-preview-label">{content.hero.entryEyebrow}</span>
-                      <strong>{getHeroToolActionLabel(activeHeroTool)}</strong>
-                      <p>{activeHeroTool.description}</p>
-                    </div>
-
-                    <div className="hero-stage-thread" aria-label={content.hero.previewEyebrow}>
-                      <span className="hero-preview-label">{content.hero.previewEyebrow}</span>
-                      <div className="hero-thread-bubble hero-thread-user">
-                        <span className="hero-thread-role">{content.hero.youLabel}</span>
-                        <p>{activeHeroTool.samplePrompt}</p>
-                      </div>
-                      <div className="hero-thread-bubble hero-thread-oliver">
-                        <span className="hero-thread-role">Oliver</span>
-                        <p>{activeHeroTool.sampleReply}</p>
-                      </div>
-                    </div>
-                  </div>
+                  {renderHeroStageBody(activeHeroTool)}
                 </article>
               ) : null}
 
