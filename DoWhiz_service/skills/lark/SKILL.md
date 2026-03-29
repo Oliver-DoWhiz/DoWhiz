@@ -13,6 +13,7 @@ This skill enables you to interact with Lark's productivity suite:
 - **Sheets** - Read, write, and append spreadsheet data
 - **Bitable** - Query and manage database records (like Airtable)
 - **Drive** - List and manage files/folders
+- **Sharing** - Share files with users via email
 
 ## Authentication
 
@@ -105,6 +106,38 @@ lark_cli get-file --file-token "<file_token>"
 # Create a folder
 lark_cli create-folder --name "Projects" --parent-token "<parent_folder_token>"
 ```
+
+### Sharing
+
+Share documents, sheets, or bitable apps with users:
+
+```bash
+# Share a document with a user by open_id (default, edit access)
+lark_cli share-file --token "<doc_token>" --file-type docx --member-id "ou_xxx"
+
+# Share with view-only access
+lark_cli share-file --token "<doc_token>" --file-type docx --member-id "ou_xxx" --perm view
+
+# Share by email instead of open_id
+lark_cli share-file --token "<doc_token>" --file-type docx --member-type email --member-id "user@example.com"
+
+# Share a spreadsheet
+lark_cli share-file --token "<sheet_token>" --file-type sheet --member-id "ou_xxx"
+
+# Share a bitable with full access
+lark_cli share-file --token "<app_token>" --file-type bitable --member-id "ou_xxx" --perm full_access
+```
+
+**Parameters:**
+- `--token` - The file/doc token from the create response
+- `--file-type` - `docx`, `sheet`, `bitable`, `file`, `folder`
+- `--member-type` - `openid` (default), `email`, or `userid`
+- `--member-id` - The user's open_id (like "ou_xxx"), email, or user_id
+- `--perm` - `view`, `edit` (default), or `full_access`
+
+**Important:** When you create a document/sheet/bitable, it is owned by the bot app. You must share it with the user for them to access it.
+- Use the user's open_id from "Lark Open IDs" in the cross-channel routing section
+- If not available, the user needs to link their Lark account at dowhiz.com first
 
 ## Getting Tokens from URLs
 

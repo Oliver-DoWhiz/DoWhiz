@@ -81,12 +81,19 @@ Available commands:
 - Sheets: `lark_cli get-sheet`, `lark_cli read-range`, `lark_cli write-range`, `lark_cli append-rows`
 - Bitable (database): `lark_cli list-tables`, `lark_cli get-table`, `lark_cli query-records`, `lark_cli create-record`, `lark_cli update-record`, `lark_cli delete-record`
 - Drive: `lark_cli list-files`, `lark_cli get-file`, `lark_cli create-folder`
+- Sharing: `lark_cli share-file` (share docs/sheets/bitable with users)
 
 Example usage:
 - List files: `lark_cli list-files`
 - Create doc: `lark_cli create-doc --title "My Document"`
 - Read sheet range: `lark_cli read-range --spreadsheet-id "shtXXX" --sheet-id "Sheet1" --range "A1:C10"`
 - Query bitable records: `lark_cli query-records --app-token "appXXX" --table-id "tblYYY"`
+- Share a file: `lark_cli share-file --token "docXXX" --file-type docx --member-id "ou_xxx"`
+
+SHARING FILES: When you create a doc/sheet/bitable, share it with the user so they can access it.
+- Use the user's Lark open_id from "Lark Open IDs" in the cross-channel routing section above
+- If "Lark Open IDs" is not listed, tell the user they need to link their Lark account at dowhiz.com first
+- Command: `lark_cli share-file --token <file_token> --file-type <type> --member-id <open_id>`
 
 See `.agents/skills/lark/SKILL.md` for complete command reference."#
             }
@@ -343,7 +350,9 @@ fn build_user_identities_section(identities: &UserIdentities) -> String {
         || !identities.slack_user_ids.is_empty()
         || !identities.discord_user_ids.is_empty()
         || !identities.phone_numbers.is_empty()
-        || !identities.telegram_user_ids.is_empty();
+        || !identities.telegram_user_ids.is_empty()
+        || !identities.lark_user_ids.is_empty()
+        || !identities.wechat_user_ids.is_empty();
 
     if !has_any {
         return "Cross-channel routing: Not available (user has no linked DoWhiz account). \
@@ -383,6 +392,18 @@ their accounts at dowhiz.com first.\n"
             identities.telegram_user_ids.join(", ")
         ));
     }
+    if !identities.lark_user_ids.is_empty() {
+        channels.push(format!(
+            "- Lark Open IDs: {}",
+            identities.lark_user_ids.join(", ")
+        ));
+    }
+    if !identities.wechat_user_ids.is_empty() {
+        channels.push(format!(
+            "- WeChat User IDs: {}",
+            identities.wechat_user_ids.join(", ")
+        ));
+    }
 
     format!(
         r#"Cross-channel routing (user's linked channels):
@@ -396,7 +417,7 @@ If no routing file is written, the reply goes to the original inbound channel.
 reply_routing.json schema:
 ```json
 {{
-  "channel": "email" | "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "wechat",
+  "channel": "email" | "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "wechat" | "lark",
   "identifier": "<target identifier for the channel>"
 }}
 ```
@@ -408,12 +429,14 @@ Identifier format per channel:
 - telegram: Telegram user ID (e.g., "123456789")
 - sms/whatsapp/bluebubbles: phone number (e.g., "+15551234567")
 - wechat: WeChat Work UserID (e.g., "zhangsan")
+- lark: Lark open_id (e.g., "ou_xxxxxxxxxxxxxxxxx")
 
 IMPORTANT: When using cross-channel routing, write the reply in the TARGET channel's format:
 - email target: reply_email_draft.html (HTML), attachments in reply_email_attachments/
 - slack target: reply_message.txt (Slack mrkdwn: *bold*, _italic_, `code`)
 - discord target: reply_message.txt (Discord markdown: **bold**, *italic*, `code`)
 - telegram target: reply_message.txt (MarkdownV2)
+- lark target: reply_message.txt (Lark markdown: **bold**, *italic*, ~~strikethrough~~, `code`)
 - sms/whatsapp/bluebubbles/wechat target: reply_message.txt (plain text)
 - Attachments for non-email channels go in reply_attachments/
 
