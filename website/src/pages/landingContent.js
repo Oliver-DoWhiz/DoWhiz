@@ -53,6 +53,7 @@ const EN_LANDING_CONTENT = {
       {
         key: 'email',
         label: 'Email',
+        pillLabel: 'Compose',
         anonymousStatus: 'Direct compose',
         authenticatedStatus: 'Direct compose',
         anonymousActionLabel: 'Send request',
@@ -60,11 +61,35 @@ const EN_LANDING_CONTENT = {
         description: 'Send the request you already have in mind',
         samplePrompt: 'Turn these notes into a concise follow-up email',
         sampleReply: 'I can draft the reply, tighten the tone, and point out what is still missing',
-        accent: '#ff8a3d'
+        accent: '#ff8a3d',
+        stage: {
+          composeTitle: 'New request',
+          toLabel: 'To',
+          toValue: 'oliver@dowhiz.com',
+          subjectLabel: 'Subject',
+          subjectValue: 'Follow up after the sponsor call',
+          bodyLines: [
+            'Hi Oliver,',
+            'Turn these notes into a warm follow-up email.',
+            '- thank them for hosting',
+            '- mention the Friday recap',
+            '- keep the ask light'
+          ],
+          footerNote: 'Fastest path',
+          footerValue: 'No login needed',
+          resultLabel: 'Oliver returns',
+          resultTitle: 'Reply draft ready',
+          resultItems: [
+            'A tighter subject line',
+            'A clean three-paragraph draft',
+            'A note on what detail is still missing'
+          ]
+        }
       },
       {
         key: 'slack',
         label: 'Slack',
+        pillLabel: 'Thread',
         anonymousStatus: 'Public install',
         authenticatedStatus: 'Connect workspace',
         anonymousActionLabel: 'Add bot',
@@ -72,11 +97,44 @@ const EN_LANDING_CONTENT = {
         description: 'Install Oliver and ask in Slack',
         samplePrompt: 'Summarize this channel and list the next three actions',
         sampleReply: 'I can pull the thread context and return a clean action list',
-        accent: '#36c58b'
+        accent: '#36c58b',
+        stage: {
+          workspace: 'product-ops',
+          channels: ['#launch-ops', '#customer-handoffs', '#weekly-plan'],
+          room: '#launch-ops',
+          roomMeta: 'Thread activity',
+          messages: [
+            {
+              author: 'Mina',
+              meta: 'Ops',
+              text: 'We still need one clear owner for docs, QA, and launch email.'
+            },
+            {
+              author: 'Theo',
+              meta: 'Design',
+              text: 'Assets are ready, but the rollout order is not written down.'
+            },
+            {
+              author: 'You',
+              meta: 'Ask Oliver',
+              text: 'Summarize this thread and give me the next three actions.',
+              tone: 'user'
+            }
+          ],
+          cardLabel: 'Oliver block',
+          cardTitle: 'Next actions',
+          cardItems: [
+            'Assign docs owner before 3 PM',
+            'Lock QA sign-off order',
+            'Post one rollout checklist back to the channel'
+          ],
+          cardFooter: 'Ready to paste into Slack'
+        }
       },
       {
         key: 'discord',
         label: 'Discord',
+        pillLabel: 'Server',
         anonymousStatus: 'Public invite',
         authenticatedStatus: 'Connect server',
         anonymousActionLabel: 'Add bot',
@@ -84,11 +142,44 @@ const EN_LANDING_CONTENT = {
         description: 'Invite Oliver and start in your server',
         samplePrompt: 'Read this discussion and turn it into a plan for the week',
         sampleReply: 'I can organize the thread into owners, deadlines, and a reply-ready summary',
-        accent: '#6c78ff'
+        accent: '#6c78ff',
+        stage: {
+          server: 'study-lab',
+          onlineLabel: '18 online',
+          channels: ['announcements', 'planning-room', 'resources'],
+          room: '#planning-room',
+          messages: [
+            {
+              author: 'Lena',
+              meta: 'Moderator',
+              text: 'We should split the readings and make the check-in deadline obvious.'
+            },
+            {
+              author: 'Marco',
+              meta: 'Member',
+              text: 'Let us pin one summary so new people stop asking the same thing.'
+            },
+            {
+              author: 'You',
+              meta: 'Prompt Oliver',
+              text: 'Turn this into a plan for the week.',
+              tone: 'user'
+            }
+          ],
+          planLabel: 'Oliver bot',
+          planTitle: 'Weekly plan',
+          planItems: [
+            'Mon: post the reading queue',
+            'Wed: collect open questions',
+            'Fri: pin the recap and next steps'
+          ],
+          planActions: ['Reply with plan', 'Pin summary']
+        }
       },
       {
         key: 'github',
         label: 'GitHub',
+        pillLabel: 'Issues',
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect repo access',
         anonymousActionLabel: 'Send request',
@@ -96,11 +187,45 @@ const EN_LANDING_CONTENT = {
         description: 'Start with repo context, connect later if needed',
         samplePrompt: 'Review these issues and tell me what should be fixed first',
         sampleReply: 'I can rank the work, flag blockers, and draft the next follow-up',
-        accent: '#2c2c2e'
+        accent: '#2c2c2e',
+        stage: {
+          repo: 'dowhiz/website',
+          repoMeta: 'Issue triage',
+          tabs: ['Issues', 'Projects', 'Pull requests'],
+          issues: [
+            {
+              id: '#184',
+              title: 'Hero states still look too similar',
+              meta: 'landing',
+              status: 'P1'
+            },
+            {
+              id: '#181',
+              title: 'Keep no-login CTA behavior intact',
+              meta: 'growth',
+              status: 'Must keep'
+            },
+            {
+              id: '#177',
+              title: 'Tighten mobile hero spacing',
+              meta: 'ui',
+              status: 'Follow-up'
+            }
+          ],
+          detailLabel: 'Oliver triage',
+          detailTitle: 'What matters first',
+          detailSummary: 'Fix the shared hero template first, then polish the supporting details.',
+          detailItems: [
+            'Ship distinct per-channel layouts',
+            'Preserve public Slack and Discord entry flows',
+            'Treat mobile readability as a release blocker'
+          ]
+        }
       },
       {
         key: 'notion',
         label: 'Notion',
+        pillLabel: 'Page',
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect docs access',
         anonymousActionLabel: 'Send request',
@@ -108,11 +233,32 @@ const EN_LANDING_CONTENT = {
         description: 'Start with docs or notes work, connect later if helpful',
         samplePrompt: 'Turn these notes into a clean study outline',
         sampleReply: 'I can organize the draft, tighten the structure, and flag what still needs research',
-        accent: '#6f6b63'
+        accent: '#6f6b63',
+        stage: {
+          breadcrumb: 'Personal / Study / Draft',
+          pageTitle: 'Oliver study outline',
+          pageIntro: 'Modern China midterm review',
+          blocks: [
+            { type: 'heading', text: 'Core questions' },
+            { type: 'bullet', text: 'What changed after the reform era' },
+            { type: 'bullet', text: 'How the three assigned readings compare' },
+            { type: 'todo', text: 'Add one source for rural policy' }
+          ],
+          databaseLabel: 'Next up',
+          rows: [
+            { name: 'Lecture notes cleanup', meta: '20 min' },
+            { name: 'Open questions', meta: '3 gaps' },
+            { name: 'Revision pass', meta: 'Tonight' }
+          ],
+          sideLabel: 'Oliver organized',
+          sideTitle: 'From notes to outline',
+          sideItems: ['Cleaner sections', 'A clearer reading order', 'What still needs research']
+        }
       },
       {
         key: 'lark',
         label: 'Lark',
+        pillLabel: 'Follow-up',
         anonymousStatus: 'Start with email',
         authenticatedStatus: 'Connect workspace',
         anonymousActionLabel: 'Send request',
@@ -120,7 +266,36 @@ const EN_LANDING_CONTENT = {
         description: 'Start ops follow-up now, connect later if needed',
         samplePrompt: 'Draft a follow-up plan from this meeting summary',
         sampleReply: 'I can turn it into owners, deadlines, and an update you can send',
-        accent: '#3f88ff'
+        accent: '#3f88ff',
+        stage: {
+          chatTitle: 'Growth sync',
+          chatMeta: '6 participants',
+          recapLabel: 'Meeting recap',
+          recapText:
+            'Need a vendor shortlist, a sendable leadership update, and one clear follow-up owner list.',
+          messages: [
+            {
+              author: 'Nina',
+              meta: 'PM',
+              text: 'We have the meeting notes, but not the final owners yet.'
+            },
+            {
+              author: 'Sam',
+              meta: 'Ops',
+              text: 'We also need a clean update card before tomorrow morning.'
+            }
+          ],
+          trackerLabel: 'Oliver follow-up',
+          trackerTitle: 'Owners and timing',
+          owners: [
+            { owner: 'Nina', task: 'Vendor shortlist', due: 'Thu' },
+            { owner: 'Sam', task: 'Leadership update', due: 'Fri 9 AM' },
+            { owner: 'Oliver', task: 'Draft sendable recap', due: 'Now' }
+          ],
+          updateLabel: 'Sendable update',
+          updateText:
+            'Vendor shortlist ships Thursday. Leadership update goes out Friday morning with owners attached.'
+        }
       }
     ]
   },
@@ -305,6 +480,7 @@ const ZH_LANDING_CONTENT = {
       {
         key: 'email',
         label: 'Email',
+        pillLabel: '写邮件',
         anonymousStatus: '直接写邮件',
         authenticatedStatus: '直接写邮件',
         anonymousActionLabel: '发送请求',
@@ -312,11 +488,31 @@ const ZH_LANDING_CONTENT = {
         description: '把你已经想好的请求直接发出去',
         samplePrompt: '把这些要点整理成一封简洁的跟进邮件',
         sampleReply: '我可以先起草回复、收紧语气，并指出还缺什么信息',
-        accent: '#ff8a3d'
+        accent: '#ff8a3d',
+        stage: {
+          composeTitle: '新邮件',
+          toLabel: '收件人',
+          toValue: 'oliver@dowhiz.com',
+          subjectLabel: '主题',
+          subjectValue: '整理赞助方沟通后的跟进邮件',
+          bodyLines: [
+            '你好 Oliver，',
+            '请把这些要点整理成一封更自然的跟进邮件。',
+            '- 感谢对方今天接待',
+            '- 提到周五会发 recap',
+            '- 语气保持轻一点'
+          ],
+          footerNote: '最快入口',
+          footerValue: '不用先登录',
+          resultLabel: 'Oliver 返回',
+          resultTitle: '回复草稿已准备好',
+          resultItems: ['更清楚的标题', '一版可直接发送的三段式草稿', '还缺哪条信息的提醒']
+        }
       },
       {
         key: 'slack',
         label: 'Slack',
+        pillLabel: '线程',
         anonymousStatus: '公开安装',
         authenticatedStatus: '连接工作区',
         anonymousActionLabel: '添加机器人',
@@ -324,11 +520,40 @@ const ZH_LANDING_CONTENT = {
         description: '装好 Oliver 后直接在 Slack 里开始',
         samplePrompt: '帮我总结这个频道，并列出接下来三件事',
         sampleReply: '我可以把线程上下文整理成清晰的行动清单',
-        accent: '#36c58b'
+        accent: '#36c58b',
+        stage: {
+          workspace: 'product-ops',
+          channels: ['#launch-ops', '#customer-handoffs', '#weekly-plan'],
+          room: '#launch-ops',
+          roomMeta: '线程动态',
+          messages: [
+            {
+              author: 'Mina',
+              meta: '运营',
+              text: '文档、QA 和上线邮件还缺一个明确 owner。'
+            },
+            {
+              author: 'Theo',
+              meta: '设计',
+              text: '素材已经好了，但 rollout 顺序还没有写清楚。'
+            },
+            {
+              author: '你',
+              meta: '问 Oliver',
+              text: '帮我总结这个线程，并列出接下来三件事。',
+              tone: 'user'
+            }
+          ],
+          cardLabel: 'Oliver 区块',
+          cardTitle: '下一步动作',
+          cardItems: ['下午 3 点前确认文档 owner', '锁定 QA sign-off 顺序', '把 checklist 发回频道'],
+          cardFooter: '可以直接贴回 Slack'
+        }
       },
       {
         key: 'discord',
         label: 'Discord',
+        pillLabel: '服务器',
         anonymousStatus: '公开邀请',
         authenticatedStatus: '连接服务器',
         anonymousActionLabel: '添加机器人',
@@ -336,11 +561,40 @@ const ZH_LANDING_CONTENT = {
         description: '邀请 Oliver 后直接在 server 里开始',
         samplePrompt: '读一下这段讨论，并把它整理成本周执行计划',
         sampleReply: '我可以把讨论整理成负责人、截止时间和可直接发送的总结',
-        accent: '#6c78ff'
+        accent: '#6c78ff',
+        stage: {
+          server: 'study-lab',
+          onlineLabel: '18 人在线',
+          channels: ['announcements', 'planning-room', 'resources'],
+          room: '#planning-room',
+          messages: [
+            {
+              author: 'Lena',
+              meta: '管理员',
+              text: '我们应该把阅读任务拆开，也把 check-in 的时间说得更明确。'
+            },
+            {
+              author: 'Marco',
+              meta: '成员',
+              text: '还需要一条置顶总结，不然新人会一直重复提问。'
+            },
+            {
+              author: '你',
+              meta: '问 Oliver',
+              text: '把这段讨论整理成本周计划。',
+              tone: 'user'
+            }
+          ],
+          planLabel: 'Oliver bot',
+          planTitle: '本周计划',
+          planItems: ['周一：发阅读清单', '周三：收集开放问题', '周五：置顶 recap 和下一步'],
+          planActions: ['回复计划', '置顶总结']
+        }
       },
       {
         key: 'github',
         label: 'GitHub',
+        pillLabel: 'Issue',
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接仓库权限',
         anonymousActionLabel: '发送请求',
@@ -348,11 +602,41 @@ const ZH_LANDING_CONTENT = {
         description: '先带着 repo 上下文开始，需要时再连接',
         samplePrompt: '看看这些 issues，告诉我应该先修哪几个',
         sampleReply: '我可以帮你排优先级、指出 blocker，并起草下一步跟进',
-        accent: '#2c2c2e'
+        accent: '#2c2c2e',
+        stage: {
+          repo: 'dowhiz/website',
+          repoMeta: 'Issue 排优先级',
+          tabs: ['Issues', 'Projects', 'Pull requests'],
+          issues: [
+            {
+              id: '#184',
+              title: 'Hero 状态看起来还是太像了',
+              meta: 'landing',
+              status: 'P1'
+            },
+            {
+              id: '#181',
+              title: '保留无登录 CTA 行为',
+              meta: 'growth',
+              status: '必须保留'
+            },
+            {
+              id: '#177',
+              title: '继续收紧移动端 hero 间距',
+              meta: 'ui',
+              status: '待跟进'
+            }
+          ],
+          detailLabel: 'Oliver triage',
+          detailTitle: '先做什么',
+          detailSummary: '先解决共享 hero 模板的问题，再继续打磨其他细节。',
+          detailItems: ['先做每个 channel 独立布局', '保留 Slack 和 Discord 的直接入口', '把移动端可读性当成上线门槛']
+        }
       },
       {
         key: 'notion',
         label: 'Notion',
+        pillLabel: '页面',
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接文档权限',
         anonymousActionLabel: '发送请求',
@@ -360,11 +644,32 @@ const ZH_LANDING_CONTENT = {
         description: '先从文档或笔记任务开始，有需要再连接',
         samplePrompt: '把这些笔记整理成一份清楚的学习提纲',
         sampleReply: '我可以先整理结构、收紧逻辑，并指出还要补哪些研究',
-        accent: '#6f6b63'
+        accent: '#6f6b63',
+        stage: {
+          breadcrumb: 'Personal / Study / Draft',
+          pageTitle: 'Oliver 学习提纲',
+          pageIntro: '中国近现代史期中复习',
+          blocks: [
+            { type: 'heading', text: '核心问题' },
+            { type: 'bullet', text: '改革开放后最关键的变化是什么' },
+            { type: 'bullet', text: '三篇阅读材料该怎么对照' },
+            { type: 'todo', text: '补一条关于农村政策的来源' }
+          ],
+          databaseLabel: '下一步',
+          rows: [
+            { name: '整理 lecture notes', meta: '20 分钟' },
+            { name: '补开放问题', meta: '3 个缺口' },
+            { name: '最后 revision', meta: '今晚' }
+          ],
+          sideLabel: 'Oliver 已整理',
+          sideTitle: '从笔记到提纲',
+          sideItems: ['章节更清楚', '阅读顺序更明确', '还缺什么研究一眼可见']
+        }
       },
       {
         key: 'lark',
         label: 'Lark',
+        pillLabel: '跟进卡',
         anonymousStatus: '先发邮件开始',
         authenticatedStatus: '连接工作区',
         anonymousActionLabel: '发送请求',
@@ -372,7 +677,34 @@ const ZH_LANDING_CONTENT = {
         description: '先从协作跟进任务开始，需要时再连接',
         samplePrompt: '根据这次会议总结，起草一个后续推进计划',
         sampleReply: '我可以把它整理成负责人、时间点和一段可直接发送的更新',
-        accent: '#3f88ff'
+        accent: '#3f88ff',
+        stage: {
+          chatTitle: 'Growth sync',
+          chatMeta: '6 位参与者',
+          recapLabel: '会议 recap',
+          recapText: '需要一份 vendor shortlist、一条可直接发送的领导更新，以及明确的后续 owner 列表。',
+          messages: [
+            {
+              author: 'Nina',
+              meta: 'PM',
+              text: '会议纪要有了，但最终 owner 还没定下来。'
+            },
+            {
+              author: 'Sam',
+              meta: '运营',
+              text: '明天上午前还要有一张干净的更新卡片。'
+            }
+          ],
+          trackerLabel: 'Oliver 跟进',
+          trackerTitle: '负责人和时间点',
+          owners: [
+            { owner: 'Nina', task: 'Vendor shortlist', due: '周四' },
+            { owner: 'Sam', task: '领导更新', due: '周五 9:00' },
+            { owner: 'Oliver', task: '起草可发送 recap', due: '现在' }
+          ],
+          updateLabel: '可发送更新',
+          updateText: 'Vendor shortlist 周四完成，周五上午发出领导更新，并附上 owner 分工。'
+        }
       }
     ]
   },
