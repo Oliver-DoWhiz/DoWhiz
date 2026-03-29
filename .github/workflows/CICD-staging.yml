@@ -116,6 +116,8 @@ jobs:
             DoWhiz_service/target/release/inbound_fanout
             DoWhiz_service/target/release/inbound_gateway
             DoWhiz_service/target/release/google-docs
+            DoWhiz_service/target/release/google-sheets
+            DoWhiz_service/target/release/google-slides
             DoWhiz_service/target/release/set_postmark_inbound_hook
             DoWhiz_service/target/release/notion_api_cli
             DoWhiz_service/target/release/tpm_cli
@@ -229,6 +231,8 @@ jobs:
           install -m 755 /tmp/dowhiz-release/inbound_fanout "$RELEASE_DIR/inbound_fanout"
           install -m 755 /tmp/dowhiz-release/inbound_gateway "$RELEASE_DIR/inbound_gateway"
           install -m 755 /tmp/dowhiz-release/google-docs "$RELEASE_DIR/google-docs"
+          install -m 755 /tmp/dowhiz-release/google-sheets "$RELEASE_DIR/google-sheets"
+          install -m 755 /tmp/dowhiz-release/google-slides "$RELEASE_DIR/google-slides"
           install -m 755 /tmp/dowhiz-release/set_postmark_inbound_hook "$RELEASE_DIR/set_postmark_inbound_hook"
           install -m 755 /tmp/dowhiz-release/notion_api_cli "$RELEASE_DIR/notion_api_cli"
           install -m 755 /tmp/dowhiz-release/tpm_cli "$RELEASE_DIR/tpm_cli"
@@ -477,7 +481,7 @@ jobs:
 
           ctx_release_dir="$build_context_root/DoWhiz_service/target/release"
           mkdir -p "$ctx_release_dir"
-          required_runtime_bins=(rust_service inbound_fanout inbound_gateway google-docs notion_api_cli tpm_cli slack_cli discord_cli lark_cli)
+          required_runtime_bins=(rust_service inbound_fanout inbound_gateway google-docs google-sheets google-slides notion_api_cli tpm_cli slack_cli discord_cli lark_cli)
           for bin_name in "${required_runtime_bins[@]}"; do
             src_bin="$GITHUB_WORKSPACE/rust-binaries/$bin_name"
             [[ -f "$src_bin" ]] || {
