@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CONNECT_ONBOARDING_MAX_AGE_MS,
   buildConnectOnboardingModel,
+  clearConnectOnboardingStateForProvider,
   chooseConnectOnboardingPayload,
   createConnectOnboardingPayload,
   filterOptionalExtensionsForNextSteps,
@@ -147,4 +148,36 @@ test('Stale pending onboarding payloads are discarded safely', () => {
   });
 
   assert.equal(parseStoredConnectOnboarding(stalePayload), null);
+});
+
+test('Clearing Slack onboarding state removes the local bot-install completion marker and matching pending payload', () => {
+  const result = clearConnectOnboardingStateForProvider({
+    provider: 'slack',
+    completedAdminTasks: ['add-oliver-slack', 'add-oliver-discord'],
+    pendingPayload: createConnectOnboardingPayload('slack', {
+      eventType: 'install',
+      source: 'bot_install_callback',
+      createdAt: Date.now()
+    })
+  });
+
+  assert.deepEqual(result.completedAdminTasks, ['add-oliver-discord']);
+  assert.equal(result.pendingPayload, null);
+});
+
+test('Clearing one provider leaves unrelated onboarding state intact', () => {
+  const pendingPayload = createConnectOnboardingPayload('discord', {
+    eventType: 'connect',
+    source: 'oauth_callback',
+    createdAt: Date.now()
+  });
+
+  const result = clearConnectOnboardingStateForProvider({
+    provider: 'slack',
+    completedAdminTasks: ['add-oliver-slack', 'add-oliver-discord'],
+    pendingPayload
+  });
+
+  assert.deepEqual(result.completedAdminTasks, ['add-oliver-discord']);
+  assert.deepEqual(result.pendingPayload, pendingPayload);
 });

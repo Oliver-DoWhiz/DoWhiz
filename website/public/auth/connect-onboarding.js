@@ -44,6 +44,34 @@ export function connectOnboardingBotInstallTaskId(provider) {
   return normalized ? BOT_INSTALL_TASK_IDS[normalized] || null : null;
 }
 
+export function clearConnectOnboardingStateForProvider({
+  provider,
+  completedAdminTasks = [],
+  pendingPayload = null,
+  now = Date.now()
+} = {}) {
+  const normalizedProvider = normalizeConnectOnboardingProvider(provider);
+  const nextCompletedTasks = normalizeCompletedAdminTasks(completedAdminTasks);
+  const parsedPending = parseStoredConnectOnboarding(pendingPayload, now);
+
+  if (!normalizedProvider) {
+    return {
+      completedAdminTasks: Array.from(nextCompletedTasks),
+      pendingPayload: parsedPending
+    };
+  }
+
+  const botInstallTaskId = connectOnboardingBotInstallTaskId(normalizedProvider);
+  if (botInstallTaskId) {
+    nextCompletedTasks.delete(botInstallTaskId);
+  }
+
+  return {
+    completedAdminTasks: Array.from(nextCompletedTasks),
+    pendingPayload: parsedPending?.provider === normalizedProvider ? null : parsedPending
+  };
+}
+
 export function createConnectOnboardingPayload(provider, options = {}) {
   const normalizedProvider = normalizeConnectOnboardingProvider(provider);
   if (!normalizedProvider) {

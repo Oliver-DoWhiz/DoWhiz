@@ -249,7 +249,7 @@ This section is required for V1.
 1. At most one public onboarding message per install event.
 2. At most one installer DM per install event.
 3. At most one thread follow-up per onboarding message.
-4. Reinstalls should respect a cooldown unless the user explicitly requests a re-onboarding.
+4. Deduplication should suppress retries of the same callback event, not block future intentional reconnects or reinstalls.
 
 ### 13.2 Targeting guardrails
 
@@ -309,7 +309,7 @@ V1 functional requirements:
 3. The system must choose at most one public posting target.
 4. The system must send one onboarding message to that target when permissions allow.
 5. The system must attempt one direct installer greeting when installer identity and DM path are available.
-6. The system must deduplicate onboarding delivery per install event.
+6. The system must deduplicate onboarding delivery per callback event while still allowing future reconnects or reinstalls to send again.
 7. The system must record delivery outcomes for analytics and debugging.
 8. The system must support a manual re-trigger or resend path for support, QA, or future admin controls.
 
@@ -343,7 +343,7 @@ Recommended MVP:
 1. Slack: one public welcome plus one installer DM plus optional thread follow-up
 2. Discord: one public welcome plus one installer DM when possible
 3. Generic copy with lightweight personalization
-4. Strict dedupe, cooldown, and targeting guardrails
+4. Strict same-event dedupe and targeting guardrails
 5. Instrumentation for activation and failure analysis
 
 Recommended V2:
@@ -372,7 +372,7 @@ Primary risks:
 Mitigations:
 
 1. Conservative channel-selection heuristics
-2. Strong dedupe and cooldown rules
+2. Strong same-event dedupe and reconnect-safe replay rules
 3. Structured copy templates instead of unconstrained generation
 4. Separate delivery logging for public post and DM
 
@@ -406,20 +406,22 @@ The current V1 implementation makes the following concrete choices:
 
 1. Triggering:
    - onboarding runs from Slack and Discord bot-install success callbacks
-   - generic Slack/Discord account-link success does not trigger outbound bot onboarding
+   - generic Slack/Discord account-link success does not create onboarding for unknown workspaces or servers
+   - reconnecting Slack or Discord after a prior install replays onboarding for the known installed workspace or server entries recorded for that platform
    - generic connect success in the auth dashboard triggers an in-product setup card in `Connected Apps` so users still get immediate next-step guidance
    - Next Steps does not repeat Slack/Discord bot-install tasks after the provider itself is connected; those install CTAs live in `Connected Apps` instead
    - the auth dashboard currently treats bot-install completion as a browser-local UI marker until provider-state exposes a durable platform install snapshot
+   - unlinking Slack or Discord clears that browser-local install marker so reconnect starts from a fresh onboarding state in the UI
 
 2. Rollout flags:
    - `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`
    - `OLIVER_DISCORD_INSTALL_ONBOARDING_ENABLED`
-   - `OLIVER_INSTALL_ONBOARDING_COOLDOWN_HOURS`
-   - default reinstall cooldown is 168 hours (7 days)
+   - both flags now act as optional kill switches; onboarding is enabled by default unless a runtime env explicitly disables it
 
 3. Durable state:
-   - dedupe, cooldown, latest delivery result, and manual resend bookkeeping are stored per `account_id + platform + workspace_id`
-   - callback retries and reinstall retries reuse that state to avoid duplicate public or DM sends
+   - dedupe, latest delivery result, and manual resend bookkeeping are stored per `account_id + platform + workspace_id`
+   - callback retries reuse that state to avoid duplicate public or DM sends for the same event key
+   - reconnects and reinstalls generate a new event key so they can intentionally replay onboarding without clearing historical delivery state
 
 4. Public targeting:
    - Slack prefers an explicit channel hint when available, then a true `#general` channel, then conservative general-style public channels
@@ -443,4 +445,4 @@ The current V1 implementation makes the following concrete choices:
    - V1 ships an authenticated API path: `POST /api/channel-install-onboarding/resend`
    - the request accepts `platform`, `workspace_id`, and optional `force`
    - resend requires an existing onboarding state row for that account/workspace
-   - `force=true` intentionally bypasses normal dedupe/cooldown; the default path does not
+   - `force=true` intentionally bypasses normal same-event dedupe; the default path does not

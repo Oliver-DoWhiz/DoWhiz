@@ -91,12 +91,15 @@ The current auth dashboard still uses a browser-local completion marker for the 
 Runtime flags:
 - `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`
 - `OLIVER_DISCORD_INSTALL_ONBOARDING_ENABLED`
-- `OLIVER_INSTALL_ONBOARDING_COOLDOWN_HOURS`
+
+These flags are optional kill switches. If they are unset, install onboarding is enabled by default; set either flag to `0` / `false` to disable that platform quickly.
 
 Operational behavior:
-- default reinstall cooldown is 168 hours (7 days)
 - onboarding state is stored per `account_id + platform + workspace_id` in the account database
-- at most one public onboarding post and one DM are attempted per install event
+- reconnecting Slack or Discord after a prior install will replay onboarding for the known installed workspace/server entries on that platform
+- repeated installs/reconnects are allowed immediately; dedupe only suppresses re-processing of the same callback event
+- unlinking Slack or Discord clears the browser-local install completion marker in the auth dashboard so reconnect returns to a fresh add-bot state
+- at most one public onboarding post and one DM are attempted per callback event per workspace
 - public and DM delivery outcomes are logged through analytics events such as `install_onboarding_public_sent`, `install_onboarding_dm_failed`, and `install_onboarding_skipped`
 
 Manual resend path:
@@ -111,8 +114,8 @@ Manual resend path:
 }
 ```
 
-- `force=false` respects normal dedupe/cooldown rules
-- `force=true` intentionally bypasses normal dedupe/cooldown for support or QA
+- `force=false` respects normal same-event dedupe rules
+- `force=true` intentionally bypasses normal same-event dedupe for support or QA
 - resend requires an existing onboarding state row for that account/workspace
 
 Known V1 limitations:
