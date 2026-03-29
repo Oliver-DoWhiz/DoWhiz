@@ -558,13 +558,20 @@ fn derive_request_summary(task_doc: &Document) -> Option<String> {
                 .and_then(|v| v.as_str())
                 .or_else(|| task_doc.get_str("channel").ok())
                 .unwrap_or("");
-            derive_run_task_summary(Path::new(workspace_dir), channel)
+            let thread_epoch = task_value
+                .pointer("/kind/thread_epoch")
+                .and_then(|v| v.as_u64());
+            derive_run_task_summary(Path::new(workspace_dir), channel, thread_epoch)
         }
         _ => None,
     }
 }
 
-fn derive_run_task_summary(workspace_dir: &Path, channel: &str) -> Option<String> {
+fn derive_run_task_summary(
+    workspace_dir: &Path,
+    channel: &str,
+    thread_epoch: Option<u64>,
+) -> Option<String> {
     let incoming_dir = workspace_dir.join("incoming_email");
     if !incoming_dir.exists() {
         return None;
@@ -572,17 +579,23 @@ fn derive_run_task_summary(workspace_dir: &Path, channel: &str) -> Option<String
 
     match channel {
         "email" => derive_email_summary(&incoming_dir),
-        "google_docs" => derive_google_workspace_summary(&incoming_dir, "gdocs"),
-        "google_sheets" => derive_google_workspace_summary(&incoming_dir, "gsheets"),
-        "google_slides" => derive_google_workspace_summary(&incoming_dir, "gslides"),
-        "discord" => derive_discord_summary(&incoming_dir),
-        "slack" => derive_text_file_summary(&incoming_dir, &["_slack_message.txt"]),
-        "sms" => derive_text_file_summary(&incoming_dir, &["_sms_message.txt"]),
-        "bluebubbles" => derive_text_file_summary(&incoming_dir, &["_bluebubbles_message.txt"]),
-        "telegram" => derive_header_text_file_summary(&incoming_dir, &["_telegram.txt"]),
-        "whatsapp" => derive_header_text_file_summary(&incoming_dir, &["_whatsapp.txt"]),
-        "wechat" => derive_header_text_file_summary(&incoming_dir, &["_wechat.txt"]),
-        "lark" => derive_header_text_file_summary(&incoming_dir, &["_lark.txt"]),
+        "google_docs" => derive_google_workspace_summary(&incoming_dir, "gdocs", thread_epoch),
+        "google_sheets" => derive_google_workspace_summary(&incoming_dir, "gsheets", thread_epoch),
+        "google_slides" => derive_google_workspace_summary(&incoming_dir, "gslides", thread_epoch),
+        "discord" => derive_discord_summary(&incoming_dir, thread_epoch),
+        "slack" => derive_text_file_summary(&incoming_dir, &["_slack_message.txt"], thread_epoch),
+        "sms" => derive_text_file_summary(&incoming_dir, &["_sms_message.txt"], thread_epoch),
+        "bluebubbles" => {
+            derive_text_file_summary(&incoming_dir, &["_bluebubbles_message.txt"], thread_epoch)
+        }
+        "telegram" => {
+            derive_header_text_file_summary(&incoming_dir, &["_telegram.txt"], thread_epoch)
+        }
+        "whatsapp" => {
+            derive_header_text_file_summary(&incoming_dir, &["_whatsapp.txt"], thread_epoch)
+        }
+        "wechat" => derive_header_text_file_summary(&incoming_dir, &["_wechat.txt"], thread_epoch),
+        "lark" => derive_header_text_file_summary(&incoming_dir, &["_lark.txt"], thread_epoch),
         _ => None,
     }
 }
@@ -610,9 +623,14 @@ fn derive_email_summary(incoming_dir: &Path) -> Option<String> {
         })
 }
 
-fn derive_google_workspace_summary(incoming_dir: &Path, file_prefix: &str) -> Option<String> {
+fn derive_google_workspace_summary(
+    incoming_dir: &Path,
+    file_prefix: &str,
+    thread_epoch: Option<u64>,
+) -> Option<String> {
     let comment_suffix = format!("_{}_comment.json", file_prefix);
-    if let Some(comment_path) = latest_file_with_suffix(incoming_dir, &[comment_suffix.as_str()]) {
+    let comment_path = file_with_epoch_or_latest(incoming_dir, &comment_suffix, thread_epoch);
+    if let Some(comment_path) = comment_path {
         if let Ok(raw_comment) = fs::read_to_string(comment_path) {
             if let Ok(comment) = serde_json::from_str::<serde_json::Value>(&raw_comment) {
                 if let Some(summary) = comment
@@ -627,7 +645,7 @@ fn derive_google_workspace_summary(incoming_dir: &Path, file_prefix: &str) -> Op
     }
 
     let meta_suffix = format!("_{}_meta.json", file_prefix);
-    let meta_path = latest_file_with_suffix(incoming_dir, &[meta_suffix.as_str()])?;
+    let meta_path = file_with_epoch_or_latest(incoming_dir, &meta_suffix, thread_epoch)?;
     let raw_meta = fs::read_to_string(meta_path).ok()?;
     let meta: serde_json::Value = serde_json::from_str(&raw_meta).ok()?;
     let file_name = meta.get("file_name").and_then(|v| v.as_str())?;
@@ -635,8 +653,8 @@ fn derive_google_workspace_summary(incoming_dir: &Path, file_prefix: &str) -> Op
     normalize_summary_text(&format!("Comment on {}", file_name))
 }
 
-fn derive_discord_summary(incoming_dir: &Path) -> Option<String> {
-    let raw = read_latest_text_by_suffix(incoming_dir, &["_discord_message.txt"])?;
+fn derive_discord_summary(incoming_dir: &Path, thread_epoch: Option<u64>) -> Option<String> {
+    let raw = read_text_by_epoch_or_latest(incoming_dir, "_discord_message.txt", thread_epoch)?;
     if let Some((_, user_section)) = raw.split_once("User message:\n") {
         if let Some(summary) = normalize_summary_text(user_section) {
             return Some(summary);
@@ -645,14 +663,53 @@ fn derive_discord_summary(incoming_dir: &Path) -> Option<String> {
     normalize_summary_text(&raw)
 }
 
-fn derive_text_file_summary(incoming_dir: &Path, suffixes: &[&str]) -> Option<String> {
-    let raw = read_latest_text_by_suffix(incoming_dir, suffixes)?;
+fn derive_text_file_summary(
+    incoming_dir: &Path,
+    suffixes: &[&str],
+    thread_epoch: Option<u64>,
+) -> Option<String> {
+    // Use the first suffix for epoch-based lookup
+    let raw = read_text_by_epoch_or_latest(incoming_dir, suffixes[0], thread_epoch)?;
     normalize_summary_text(&raw)
 }
 
-fn derive_header_text_file_summary(incoming_dir: &Path, suffixes: &[&str]) -> Option<String> {
-    let raw = read_latest_text_by_suffix(incoming_dir, suffixes)?;
+fn derive_header_text_file_summary(
+    incoming_dir: &Path,
+    suffixes: &[&str],
+    thread_epoch: Option<u64>,
+) -> Option<String> {
+    // Use the first suffix for epoch-based lookup
+    let raw = read_text_by_epoch_or_latest(incoming_dir, suffixes[0], thread_epoch)?;
     extract_header_file_body_summary(&raw).or_else(|| normalize_summary_text(&raw))
+}
+
+/// Read a file by thread_epoch if available, otherwise fall back to latest file with suffix.
+fn read_text_by_epoch_or_latest(
+    incoming_dir: &Path,
+    suffix: &str,
+    thread_epoch: Option<u64>,
+) -> Option<String> {
+    let path = file_with_epoch_or_latest(incoming_dir, suffix, thread_epoch)?;
+    fs::read_to_string(path).ok()
+}
+
+/// Get file path by thread_epoch if available, otherwise fall back to latest file with suffix.
+/// If thread_epoch is provided, looks for "{epoch:04}{suffix}" (e.g., "0005_lark.txt").
+/// Falls back to latest_file_with_suffix if epoch file doesn't exist or epoch is None.
+fn file_with_epoch_or_latest(
+    incoming_dir: &Path,
+    suffix: &str,
+    thread_epoch: Option<u64>,
+) -> Option<PathBuf> {
+    if let Some(epoch) = thread_epoch {
+        let epoch_filename = format!("{:04}{}", epoch, suffix);
+        let epoch_path = incoming_dir.join(&epoch_filename);
+        if epoch_path.exists() {
+            return Some(epoch_path);
+        }
+    }
+    // Fallback to latest file with suffix
+    latest_file_with_suffix(incoming_dir, &[suffix])
 }
 
 fn read_latest_text_by_suffix(incoming_dir: &Path, suffixes: &[&str]) -> Option<String> {
@@ -845,6 +902,89 @@ mod tests {
         assert_eq!(
             summary.as_deref(),
             Some("Review the attached budget and flag risks.")
+        );
+    }
+
+    #[test]
+    fn derive_request_summary_uses_thread_epoch_for_lark() {
+        let temp = TempDir::new().expect("tempdir");
+        let incoming_dir = temp.path().join("incoming_email");
+        fs::create_dir_all(&incoming_dir).expect("create incoming_email");
+
+        // Create multiple lark messages
+        fs::write(
+            incoming_dir.join("0002_lark.txt"),
+            "From: ou_user1\nDate: 2026-03-13T10:00:00Z\n\nFirst message about project setup.",
+        )
+        .expect("write first message");
+        fs::write(
+            incoming_dir.join("0003_lark.txt"),
+            "From: ou_user1\nDate: 2026-03-13T11:00:00Z\n\nSecond message about code review.",
+        )
+        .expect("write second message");
+        fs::write(
+            incoming_dir.join("0004_lark.txt"),
+            "From: ou_user1\nDate: 2026-03-13T12:00:00Z\n\nThird message about deployment.",
+        )
+        .expect("write third message");
+
+        // Task with thread_epoch=2 should read 0002_lark.txt
+        let task_json_epoch2 = serde_json::json!({
+            "kind": {
+                "type": "run_task",
+                "workspace_dir": temp.path().to_string_lossy(),
+                "channel": "lark",
+                "thread_epoch": 2
+            }
+        })
+        .to_string();
+        let doc_epoch2 = doc! {
+            "task_json": task_json_epoch2,
+            "channel": "lark",
+        };
+        let summary_epoch2 = derive_request_summary(&doc_epoch2);
+        assert_eq!(
+            summary_epoch2.as_deref(),
+            Some("First message about project setup.")
+        );
+
+        // Task with thread_epoch=3 should read 0003_lark.txt
+        let task_json_epoch3 = serde_json::json!({
+            "kind": {
+                "type": "run_task",
+                "workspace_dir": temp.path().to_string_lossy(),
+                "channel": "lark",
+                "thread_epoch": 3
+            }
+        })
+        .to_string();
+        let doc_epoch3 = doc! {
+            "task_json": task_json_epoch3,
+            "channel": "lark",
+        };
+        let summary_epoch3 = derive_request_summary(&doc_epoch3);
+        assert_eq!(
+            summary_epoch3.as_deref(),
+            Some("Second message about code review.")
+        );
+
+        // Task without thread_epoch should fall back to latest (0004_lark.txt)
+        let task_json_no_epoch = serde_json::json!({
+            "kind": {
+                "type": "run_task",
+                "workspace_dir": temp.path().to_string_lossy(),
+                "channel": "lark"
+            }
+        })
+        .to_string();
+        let doc_no_epoch = doc! {
+            "task_json": task_json_no_epoch,
+            "channel": "lark",
+        };
+        let summary_no_epoch = derive_request_summary(&doc_no_epoch);
+        assert_eq!(
+            summary_no_epoch.as_deref(),
+            Some("Third message about deployment.")
         );
     }
 }
