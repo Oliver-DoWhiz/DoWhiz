@@ -91,7 +91,7 @@ Example usage:
 - Share a file: `lark_cli share-file --token "docXXX" --file-type docx --member-id "ou_xxx"`
 
 SHARING FILES: When you create a doc/sheet/bitable, share it with the user so they can access it.
-- Use the user's Lark open_id from "Lark Open IDs" in the cross-channel routing section above
+- Use the user's Lark open_id from "Lark Open IDs" in the User Context section above
 - If "Lark Open IDs" is not listed, tell the user they need to link their Lark account at dowhiz.com first
 - Command: `lark_cli share-file --token <file_token> --file-type <type> --member-id <open_id>`
 
@@ -355,9 +355,9 @@ fn build_user_identities_section(identities: &UserIdentities) -> String {
         || !identities.wechat_user_ids.is_empty();
 
     if !has_any {
-        return "Cross-channel routing: Not available (user has no linked DoWhiz account). \
-If the user requests a reply on a different channel, politely explain they need to link \
-their accounts at dowhiz.com first.\n"
+        return "User Context: Not available (user has no linked DoWhiz account). \
+If the user requests features requiring their linked accounts (sharing files, cross-channel routing), \
+politely explain they need to link their accounts at dowhiz.com first.\n"
             .to_string();
     }
 
@@ -406,12 +406,20 @@ their accounts at dowhiz.com first.\n"
     }
 
     format!(
-        r#"Cross-channel routing (user's linked channels):
+        r#"User Context (linked accounts & identifiers):
 {channels}
+
+IMPORTANT - Use these identifiers to:
+- Share files with the user via platform CLIs (Lark, WeChat, etc. - NOT Google Workspace or Notion which use OAuth)
+- Route replies to different channels (see Cross-channel Reply Routing below)
+- Check what integrations the user has available before suggesting platform-specific features
+
+If a required identifier is missing, tell the user to link their account at dowhiz.com.
 
 Cross-channel Reply Routing:
 If the user requests a reply on a different channel than the inbound channel,
 write a `reply_routing.json` file in the workspace root to route the reply.
+IMPORTANT: Use the identifiers from the User Context section above for the target channel.
 If no routing file is written, the reply goes to the original inbound channel.
 
 reply_routing.json schema:
@@ -1035,7 +1043,7 @@ mod tests {
         };
         let section = build_user_identities_section(&identities);
         assert!(section.contains("DoWhiz Account ID: test-account-123"));
-        assert!(section.contains("Cross-channel routing"));
+        assert!(section.contains("User Context"));
     }
 
     #[test]
@@ -1098,7 +1106,7 @@ mod tests {
             &identities,
         );
 
-        assert!(prompt.contains("Cross-channel routing"));
+        assert!(prompt.contains("User Context"));
         assert!(prompt.contains("test@example.com"));
         assert!(prompt.contains("123456789"));
         assert!(prompt.contains("reply_routing.json"));
@@ -1499,8 +1507,8 @@ mod tests {
             &identities,
         );
 
-        // Should have cross-channel routing info
-        assert!(prompt.contains("Cross-channel routing"));
+        // Should have user context and cross-channel routing info
+        assert!(prompt.contains("User Context"));
         assert!(prompt.contains("reply_routing.json"));
         // And filesystem security with user path
         assert!(prompt.contains("Filesystem Security"));

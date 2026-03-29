@@ -136,7 +136,7 @@ lark_cli share-file --token "<app_token>" --file-type bitable --member-id "ou_xx
 - `--perm` - `view`, `edit` (default), or `full_access`
 
 **Important:** When you create a document/sheet/bitable, it is owned by the bot app. You must share it with the user for them to access it.
-- Use the user's open_id from "Lark Open IDs" in the cross-channel routing section
+- Use the user's open_id from "Lark Open IDs" in the User Context section
 - If not available, the user needs to link their Lark account at dowhiz.com first
 
 ## Getting Tokens from URLs
