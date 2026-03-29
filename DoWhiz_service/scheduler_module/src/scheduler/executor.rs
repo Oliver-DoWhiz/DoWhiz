@@ -394,6 +394,12 @@ fn identifiers_to_user_identities(
             "telegram" | "telegram_user_id" => {
                 result.telegram_user_ids.push(identifier.identifier.clone())
             }
+            "lark" | "lark_open_id" | "feishu" => {
+                result.lark_user_ids.push(identifier.identifier.clone())
+            }
+            "wechat" | "wechat_user_id" => {
+                result.wechat_user_ids.push(identifier.identifier.clone())
+            }
             _ => {
                 // Unknown identifier type, skip
             }

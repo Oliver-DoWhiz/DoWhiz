@@ -134,8 +134,10 @@ enum Commands {
         token: String,
         #[arg(long, help = "File type: docx, sheet, bitable, file, folder")]
         file_type: String,
-        #[arg(long, help = "User email to share with")]
-        user_email: String,
+        #[arg(long, default_value = "openid", help = "Member type: openid, email, userid")]
+        member_type: String,
+        #[arg(long, help = "Member ID (open_id like ou_xxx, email, or user_id)")]
+        member_id: String,
         #[arg(long, default_value = "edit", help = "Permission: view, edit, full_access")]
         perm: String,
     },
@@ -466,7 +468,8 @@ async fn share_file(
     token: &str,
     file_token: &str,
     file_type: &str,
-    user_email: &str,
+    member_type: &str,
+    member_id: &str,
     perm: &str,
 ) -> Result<()> {
     let resp = reqwest::Client::new()
@@ -476,8 +479,8 @@ async fn share_file(
         ))
         .header("Authorization", format!("Bearer {}", token))
         .json(&json!({
-            "member_type": "email",
-            "member_id": user_email,
+            "member_type": member_type,
+            "member_id": member_id,
             "perm": perm
         }))
         .send()
@@ -555,9 +558,10 @@ async fn main() -> Result<()> {
         Commands::ShareFile {
             token: file_token,
             file_type,
-            user_email,
+            member_type,
+            member_id,
             perm,
-        } => share_file(&token, file_token, file_type, user_email, perm).await?,
+        } => share_file(&token, file_token, file_type, member_type, member_id, perm).await?,
     }
 
     Ok(())
