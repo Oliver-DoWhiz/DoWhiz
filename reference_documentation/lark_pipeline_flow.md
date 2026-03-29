@@ -1151,7 +1151,7 @@ async fn share_file(
         ))
         .header("Authorization", format!("Bearer {}", token))
         .json(&json!({
-            "member_type": member_type, //defaults to openid in `Commands` enum
+            "member_type": member_type, //defaults to openid in Commands enum
             "member_id": member_id,
             "perm": perm
         }))
