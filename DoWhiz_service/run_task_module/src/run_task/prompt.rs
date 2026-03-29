@@ -81,12 +81,16 @@ Available commands:
 - Sheets: `lark_cli get-sheet`, `lark_cli read-range`, `lark_cli write-range`, `lark_cli append-rows`
 - Bitable (database): `lark_cli list-tables`, `lark_cli get-table`, `lark_cli query-records`, `lark_cli create-record`, `lark_cli update-record`, `lark_cli delete-record`
 - Drive: `lark_cli list-files`, `lark_cli get-file`, `lark_cli create-folder`
+- Sharing: `lark_cli share-file` (share docs/sheets/bitable with users)
 
 Example usage:
 - List files: `lark_cli list-files`
 - Create doc: `lark_cli create-doc --title "My Document"`
 - Read sheet range: `lark_cli read-range --spreadsheet-id "shtXXX" --sheet-id "Sheet1" --range "A1:C10"`
 - Query bitable records: `lark_cli query-records --app-token "appXXX" --table-id "tblYYY"`
+- Share a file: `lark_cli share-file --token "docXXX" --file-type docx --user-email "user@example.com" --perm edit`
+
+IMPORTANT: When you create a doc/sheet/bitable, share it with the user so they can access it.
 
 See `.agents/skills/lark/SKILL.md` for complete command reference."#
             }

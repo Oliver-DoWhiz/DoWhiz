@@ -36,6 +36,7 @@ use scheduler_module::ingestion_queue::{
 };
 use scheduler_module::service::agent_market::{agent_market_router, AgentMarketState};
 use scheduler_module::service::auth::{auth_router, AuthState};
+use scheduler_module::service::InstallOnboardingConfig;
 use scheduler_module::slack_store::SlackStore;
 
 use config::{
@@ -167,6 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let discord_client_id = env::var("DISCORD_CLIENT_ID").ok();
     let discord_client_secret = env::var("DISCORD_CLIENT_SECRET").ok();
     let discord_redirect_uri = env::var("DISCORD_REDIRECT_URI").ok();
+    let discord_bot_token = env::var("DISCORD_BOT_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
 
     // Slack OAuth config (optional)
     let slack_client_id = env::var("SLACK_CLIENT_ID").ok();
@@ -200,6 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         discord_client_id,
         discord_client_secret,
         discord_redirect_uri,
+        discord_bot_token,
         slack_client_id,
         slack_client_secret,
         slack_redirect_uri,
@@ -213,6 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         lark_client_secret,
         lark_redirect_uri,
         frontend_url,
+        install_onboarding_config: InstallOnboardingConfig::from_env(),
         user_store: None, // Task lookups not available in inbound gateway
         users_root: None,
     };

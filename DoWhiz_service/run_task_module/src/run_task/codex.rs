@@ -76,7 +76,6 @@ const HUMAN_APPROVAL_GATE_ENV_KEYS: &[&str] = &[
 const HUMAN_APPROVAL_GATE_REQUIRE_MCP_ENV_KEY: &str = "HUMAN_APPROVAL_GATE_REQUIRE_MCP";
 const HUMAN_APPROVAL_GATE_MCP_SERVER_NAME: &str = "human-approval-gate";
 const HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS: u32 = 31 * 60;
-const NOTION_MCP_ENV_KEYS: &[&str] = &["EMPLOYEE_ID", "MONGODB_URI", "MONGODB_DATABASE", "NOTION_DEFAULT_WORKSPACE"];
 const LARK_ENV_KEYS: &[&str] = &["LARK_APP_ID", "LARK_APP_SECRET"];
 const HUMAN_APPROVAL_FROM_ENV_KEY: &str = "HUMAN_APPROVAL_FROM";
 const HUMAN_APPROVAL_REPLY_TO_ENV_KEY: &str = "HUMAN_APPROVAL_REPLY_TO";
@@ -104,10 +103,6 @@ const REMOTE_OUTPUT_FILENAME: &str = ".codex_remote_output.log";
 const REMOTE_EXIT_CODE_FILENAME: &str = ".codex_remote_exit_code";
 const HAG_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ HUMAN APPROVAL GATE MCP";
 const HAG_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ HUMAN APPROVAL GATE MCP";
-const NOTION_MCP_CONFIG_START_MARKER: &str = "# BEGIN DOWHIZ NOTION MCP";
-const NOTION_MCP_CONFIG_END_MARKER: &str = "# END DOWHIZ NOTION MCP";
-const NOTION_MCP_SERVER_NAME: &str = "notion";
-const NOTION_MCP_TOOL_TIMEOUT_SECONDS: u32 = 120;
 const EPHEMERAL_SHARE_PREFIX: &str = "task-";
 static ACI_CONTAINER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -390,7 +385,6 @@ pub(super) fn run_codex_task(
     };
     let browserbase_env_overrides = collect_browserbase_env_overrides(&browserbase_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
-    let notion_env_overrides = collect_notion_env_overrides();
     let lark_env_overrides = collect_lark_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -435,9 +429,6 @@ pub(super) fn run_codex_task(
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &human_approval_gate_env_overrides {
-        trace_env_overrides.push((key.clone(), value.clone()));
-    }
-    for (key, value) in &notion_env_overrides {
         trace_env_overrides.push((key.clone(), value.clone()));
     }
     for (key, value) in &lark_env_overrides {
@@ -562,9 +553,6 @@ pub(super) fn run_codex_task(
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         for (key, value) in &human_approval_gate_env_overrides {
-            cmd.arg("-e").arg(format!("{}={}", key, value));
-        }
-        for (key, value) in &notion_env_overrides {
             cmd.arg("-e").arg(format!("{}={}", key, value));
         }
         for (key, value) in &lark_env_overrides {
@@ -706,9 +694,6 @@ pub(super) fn run_codex_task(
             cmd.env(key, value);
         }
         for (key, value) in &human_approval_gate_env_overrides {
-            cmd.env(key, value);
-        }
-        for (key, value) in &notion_env_overrides {
             cmd.env(key, value);
         }
         for (key, value) in &lark_env_overrides {
@@ -928,7 +913,6 @@ fn run_codex_task_azure_aci(
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
     let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
-    let notion_env_overrides = collect_notion_env_overrides();
     let lark_env_overrides = collect_lark_env_overrides();
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
@@ -1024,9 +1008,6 @@ fn run_codex_task_azure_aci(
         env_overrides.push((key, value));
     }
     for (key, value) in human_approval_gate_env_overrides {
-        env_overrides.push((key, value));
-    }
-    for (key, value) in notion_env_overrides {
         env_overrides.push((key, value));
     }
     for (key, value) in lark_env_overrides {
@@ -2304,7 +2285,6 @@ fn ensure_codex_config_at(
 
     let block = build_codex_config_block(azure_endpoint);
     let hag_mcp_block = build_human_approval_gate_mcp_block();
-    let notion_mcp_block = build_notion_mcp_block();
 
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)?
@@ -2318,12 +2298,6 @@ fn ensure_codex_config_at(
         HAG_MCP_CONFIG_START_MARKER,
         HAG_MCP_CONFIG_END_MARKER,
         &hag_mcp_block,
-    );
-    let updated = update_managed_config_block(
-        &updated,
-        NOTION_MCP_CONFIG_START_MARKER,
-        NOTION_MCP_CONFIG_END_MARKER,
-        &notion_mcp_block,
     );
     let updated = ensure_project_trust(&updated, trust_workspace_dir);
     fs::write(config_path, updated)?;
@@ -2436,13 +2410,6 @@ fn collect_human_approval_gate_env_overrides() -> Vec<(String, String)> {
     }
 
     overrides
-}
-
-fn collect_notion_env_overrides() -> Vec<(String, String)> {
-    NOTION_MCP_ENV_KEYS
-        .iter()
-        .filter_map(|key| read_env_trimmed(key).map(|value| ((*key).to_string(), value)))
-        .collect()
 }
 
 fn collect_lark_env_overrides() -> Vec<(String, String)> {
@@ -2762,18 +2729,6 @@ env_vars = [{env_vars}]
 tool_timeout_sec = {HUMAN_APPROVAL_GATE_MCP_TOOL_TIMEOUT_SECONDS}
 
 {HAG_MCP_CONFIG_END_MARKER}"#
-    )
-}
-
-fn build_notion_mcp_block() -> String {
-    format!(
-        r#"{NOTION_MCP_CONFIG_START_MARKER}
-[mcp_servers.{NOTION_MCP_SERVER_NAME}]
-command = "notion_mcp"
-env_vars = ["EMPLOYEE_ID", "MONGODB_URI", "NOTION_DEFAULT_WORKSPACE"]
-tool_timeout_sec = {NOTION_MCP_TOOL_TIMEOUT_SECONDS}
-
-{NOTION_MCP_CONFIG_END_MARKER}"#
     )
 }
 
