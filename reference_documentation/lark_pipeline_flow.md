@@ -1131,3 +1131,81 @@ LARK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 LARK_ENCRYPT_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 LARK_VERIFICATION_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+## Note for Lark CLI File Sharing:
+In `lark_cli.rs` we have a CLI wrapper for file-sharing. Its function looks something like this, with the match arm in main:
+
+```
+async fn share_file(
+    token: &str,
+    file_token: &str,
+    file_type: &str,
+    member_type: &str,
+    member_id: &str,
+    perm: &str,
+) -> Result<()> {
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/open-apis/drive/v1/permissions/{}/members?type={}",
+            LARK_BASE_URL, file_token, file_type
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({
+            "member_type": member_type, //defaults to openid in `Commands` enum
+            "member_id": member_id,
+            "perm": perm
+        }))
+        .send()
+        .await?;
+
+    println!("{}", resp.text().await?);
+    Ok(())
+}
+```
+* One question is how do we get Codex to open_id within the ACI container. We solved this in the following way:
+* In prompt.rs, tell codex to get the Lark open id via looking in user_identities (which was first implemented for cross-channel linking,
+  but it’s convenient to use here).
+* We can’t use email because inbound gateway and account linkage use ou_id as the primary identifier for Lark.
+
+```
+let user_identities_section = build_user_identities_section(user_identities);
+
+
+//more code
+
+
+fn build_user_identities_section(identities: &UserIdentities) -> String {
+   let has_any = identities.account_id.is_some()
+       || !identities.emails.is_empty()
+       || !identities.slack_user_ids.is_empty()
+       || !identities.discord_user_ids.is_empty()
+       || !identities.phone_numbers.is_empty()
+       || !identities.telegram_user_ids.is_empty()
+       || !identities.lark_user_ids.is_empty()
+       || !identities.wechat_user_ids.is_empty();
+
+
+if !identities.lark_user_ids.is_empty() {
+       channels.push(format!(
+           "- Lark Open IDs: {}",
+           identities.lark_user_ids.join(", ")
+       ));
+   }
+
+
+//Sys prompt contains:
+...
+
+{cross_channel_capabilities}
+{chat_history_capabilities_section}
+{web_auth_capabilities_section}
+{human_approval_gate_section}
+{user_identities_section}
+Rules:
+...
+
+//Also in sys prompt and lark/SKILL.md
+SHARING FILES: When you create a doc/sheet/bitable, share it with the user so they can access it.
+Use the user's Lark open_id from "Lark Open IDs" in the cross-channel routing section above
+If "Lark Open IDs" is not listed, tell the user they need to link their Lark account at dowhiz.com first
+```
