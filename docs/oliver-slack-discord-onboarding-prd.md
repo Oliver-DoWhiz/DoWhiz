@@ -409,6 +409,7 @@ The current V1 implementation makes the following concrete choices:
    - generic Slack/Discord account-link success does not trigger outbound bot onboarding
    - generic connect success in the auth dashboard triggers an in-product setup card in `Connected Apps` so users still get immediate next-step guidance
    - Next Steps does not repeat Slack/Discord bot-install tasks after the provider itself is connected; those install CTAs live in `Connected Apps` instead
+   - the auth dashboard currently treats bot-install completion as a browser-local UI marker until provider-state exposes a durable platform install snapshot
 
 2. Rollout flags:
    - `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`
