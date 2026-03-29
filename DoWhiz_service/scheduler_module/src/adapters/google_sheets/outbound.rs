@@ -235,6 +235,58 @@ impl GoogleSheetsOutboundAdapter {
             .json()
             .map_err(|e| AdapterError::ParseError(e.to_string()))
     }
+
+    /// Create a new spreadsheet.
+    ///
+    /// Returns the spreadsheet ID of the newly created spreadsheet.
+    pub fn create_spreadsheet(&self, title: &str) -> Result<String, AdapterError> {
+        let access_token = self
+            .auth
+            .get_access_token()
+            .map_err(|e| AdapterError::ConfigError(e.to_string()))?;
+
+        let client = reqwest::blocking::Client::new();
+
+        let url = "https://sheets.googleapis.com/v4/spreadsheets";
+
+        let payload = serde_json::json!({
+            "properties": {
+                "title": title
+            }
+        });
+
+        let response = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .map_err(|e| AdapterError::SendError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            error!("Failed to create spreadsheet '{}': {} - {}", title, status, body);
+            return Err(AdapterError::SendError(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        let spreadsheet_id = json
+            .get("spreadsheetId")
+            .and_then(|id| id.as_str())
+            .ok_or_else(|| AdapterError::ParseError("Missing spreadsheetId in response".to_string()))?
+            .to_string();
+
+        info!("Created new spreadsheet '{}' with ID {}", title, spreadsheet_id);
+
+        Ok(spreadsheet_id)
+    }
 }
 
 impl OutboundAdapter for GoogleSheetsOutboundAdapter {

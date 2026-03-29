@@ -28,6 +28,8 @@ fn main() -> ExitCode {
         "send" => cmd_send(&args[2..]),
         "send-dm" => cmd_send_dm(&args[2..]),
         "send-channel" => cmd_send_channel(&args[2..]),
+        "list-guild-members" => cmd_list_guild_members(&args[2..]),
+        "dm-all-guild" => cmd_dm_all_guild(&args[2..]),
         "help" | "--help" | "-h" => {
             print_usage();
             ExitCode::SUCCESS
@@ -62,6 +64,16 @@ Commands:
     --message <text>    Message content
     --reply-to <id>     Reply to message ID (optional)
 
+  list-guild-members   List all members in a guild/server
+    --guild-id <id>     Discord guild/server ID
+    --no-bots           Exclude bot accounts (optional)
+
+  dm-all-guild   Send DM to all members in a guild
+    --guild-id <id>     Discord guild/server ID
+    --message <text>    Message content
+    --no-bots           Exclude bot accounts (default: true)
+    --dry-run           Preview without sending (optional)
+
 Environment:
   DISCORD_BOT_TOKEN     Required. Bot token
   DISCORD_API_BASE_URL  Optional. Override API base (default: https://discord.com/api/v10)
@@ -75,6 +87,7 @@ Output:
 Notes:
   - Discord message content limit is 2000 characters
   - DM requires the bot and user to share a server
+  - Bot must have SERVER MEMBERS INTENT enabled for list-guild-members
 "#
     );
 }
@@ -146,6 +159,21 @@ struct MessageReference {
 struct MessageResponse {
     id: String,
     channel_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuildMember {
+    user: Option<DiscordUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordUser {
+    id: String,
+    username: String,
+    #[serde(default)]
+    bot: bool,
+    #[serde(default)]
+    global_name: Option<String>,
 }
 
 fn create_dm_channel(token: &str, user_id: &str) -> Result<String, String> {
@@ -418,5 +446,268 @@ fn cmd_send_channel(args: &[String]) -> ExitCode {
             eprintln!("Error: {}", e);
             ExitCode::FAILURE
         }
+    }
+}
+
+fn list_guild_members(token: &str, guild_id: &str, exclude_bots: bool) -> Result<Vec<DiscordUser>, String> {
+    let client = Client::new();
+    let mut all_members = Vec::new();
+    let mut after: Option<String> = None;
+    let limit = 1000; // Discord max per request
+
+    loop {
+        let mut url = format!(
+            "{}/guilds/{}/members?limit={}",
+            get_api_base().trim_end_matches('/'),
+            guild_id,
+            limit
+        );
+
+        if let Some(ref after_id) = after {
+            url.push_str(&format!("&after={}", after_id));
+        }
+
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bot {}", token))
+            .send()
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().unwrap_or_else(|_| "unknown error".to_string());
+            return Err(format!("Failed to list guild members ({}): {}", status, error_text));
+        }
+
+        let members: Vec<GuildMember> = response
+            .json()
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        if members.is_empty() {
+            break;
+        }
+
+        let last_id = members.last().and_then(|m| m.user.as_ref()).map(|u| u.id.clone());
+
+        for member in members {
+            if let Some(user) = member.user {
+                if exclude_bots && user.bot {
+                    continue;
+                }
+                all_members.push(user);
+            }
+        }
+
+        // If we got fewer than limit, we've reached the end
+        if last_id.is_none() || all_members.len() < limit {
+            break;
+        }
+        after = last_id;
+    }
+
+    Ok(all_members)
+}
+
+fn cmd_list_guild_members(args: &[String]) -> ExitCode {
+    let mut guild_id: Option<String> = None;
+    let mut exclude_bots = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--guild-id" => {
+                i += 1;
+                guild_id = args.get(i).cloned();
+            }
+            "--no-bots" => {
+                exclude_bots = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(guild_id) = guild_id else {
+        eprintln!("Error: --guild-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(token) = get_bot_token() else {
+        eprintln!("Error: DISCORD_BOT_TOKEN not configured");
+        return ExitCode::FAILURE;
+    };
+
+    match list_guild_members(&token, &guild_id, exclude_bots) {
+        Ok(members) => {
+            let member_list: Vec<serde_json::Value> = members
+                .iter()
+                .map(|u| {
+                    json!({
+                        "id": u.id,
+                        "username": u.username,
+                        "display_name": u.global_name.as_deref().unwrap_or(&u.username),
+                        "bot": u.bot
+                    })
+                })
+                .collect();
+
+            let output = json!({
+                "success": true,
+                "guild_id": guild_id,
+                "member_count": members.len(),
+                "members": member_list
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_dm_all_guild(args: &[String]) -> ExitCode {
+    let mut guild_id: Option<String> = None;
+    let mut message: Option<String> = None;
+    let mut exclude_bots = true; // Default to excluding bots
+    let mut dry_run = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--guild-id" => {
+                i += 1;
+                guild_id = args.get(i).cloned();
+            }
+            "--message" => {
+                i += 1;
+                message = args.get(i).cloned();
+            }
+            "--no-bots" => {
+                exclude_bots = true;
+            }
+            "--include-bots" => {
+                exclude_bots = false;
+            }
+            "--dry-run" => {
+                dry_run = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(guild_id) = guild_id else {
+        eprintln!("Error: --guild-id is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(message_content) = message else {
+        eprintln!("Error: --message is required");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(token) = get_bot_token() else {
+        eprintln!("Error: DISCORD_BOT_TOKEN not configured");
+        return ExitCode::FAILURE;
+    };
+
+    // Get all members first
+    let members = match list_guild_members(&token, &guild_id, exclude_bots) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error listing members: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if dry_run {
+        let member_list: Vec<serde_json::Value> = members
+            .iter()
+            .map(|u| {
+                json!({
+                    "id": u.id,
+                    "username": u.username,
+                    "display_name": u.global_name.as_deref().unwrap_or(&u.username)
+                })
+            })
+            .collect();
+
+        let output = json!({
+            "dry_run": true,
+            "guild_id": guild_id,
+            "message_preview": if message_content.len() > 100 {
+                format!("{}...", &message_content[..100])
+            } else {
+                message_content.clone()
+            },
+            "would_send_to": member_list,
+            "recipient_count": members.len()
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return ExitCode::SUCCESS;
+    }
+
+    // Send DMs to all members
+    let mut success_count = 0;
+    let mut failed_count = 0;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for user in &members {
+        // Create DM channel
+        match create_dm_channel(&token, &user.id) {
+            Ok(channel_id) => {
+                // Send message
+                match send_message(&token, &channel_id, &message_content, None) {
+                    Ok(response) => {
+                        success_count += 1;
+                        results.push(json!({
+                            "user_id": user.id,
+                            "username": user.username,
+                            "status": "sent",
+                            "message_id": response.id
+                        }));
+                    }
+                    Err(e) => {
+                        failed_count += 1;
+                        results.push(json!({
+                            "user_id": user.id,
+                            "username": user.username,
+                            "status": "failed",
+                            "error": e
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                failed_count += 1;
+                results.push(json!({
+                    "user_id": user.id,
+                    "username": user.username,
+                    "status": "dm_channel_failed",
+                    "error": e
+                }));
+            }
+        }
+
+        // Small delay to avoid rate limiting (Discord allows ~5 requests/second)
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    let output = json!({
+        "success": true,
+        "guild_id": guild_id,
+        "total_members": members.len(),
+        "sent": success_count,
+        "failed": failed_count,
+        "results": results
+    });
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+
+    if failed_count > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
