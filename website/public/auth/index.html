@@ -1947,6 +1947,7 @@
       import {
         CONNECT_ONBOARDING_STORAGE_KEY,
         buildConnectOnboardingModel,
+        clearConnectOnboardingStateForProvider,
         chooseConnectOnboardingPayload,
         createConnectOnboardingPayload,
         filterOptionalExtensionsForNextSteps,
@@ -2480,8 +2481,26 @@
         const completedTasks = readCompletedAdminTasks();
         if (!completedTasks.includes(normalizedTaskId)) {
           completedTasks.push(normalizedTaskId);
-          localStorage.setItem('dw_completed_admin_tasks', JSON.stringify(completedTasks));
+          writeCompletedAdminTasks(completedTasks);
         }
+      }
+
+      function writeCompletedAdminTasks(taskIds) {
+        const normalizedTasks = Array.isArray(taskIds)
+          ? taskIds
+            .filter((taskId) => typeof taskId === 'string' && taskId.trim().length > 0)
+          : [];
+        localStorage.setItem('dw_completed_admin_tasks', JSON.stringify(normalizedTasks));
+      }
+
+      function clearProviderInstallCompletionState(provider) {
+        const nextState = clearConnectOnboardingStateForProvider({
+          provider,
+          completedAdminTasks: readCompletedAdminTasks(),
+          pendingPayload: loadPendingConnectionOnboardingFromStorage()
+        });
+        writeCompletedAdminTasks(nextState.completedAdminTasks);
+        setPendingConnectionOnboarding(nextState.pendingPayload);
       }
 
       function buildDashboardReturnUrl(hash = '') {
@@ -4964,10 +4983,12 @@
             throw new Error(err.error || 'Failed to unlink');
           }
 
+          clearProviderInstallCompletionState(identifierType);
           showMessage('Connection removed successfully!', 'success');
           await loadIdentifiers(accessToken);
           // Refresh tasks to remove tasks from the unlinked channel
           await loadTasks(accessToken, { refreshRecommendation: true });
+          renderConnectionOnboardingCard();
         } catch (err) {
           showMessage(normalizeApiFetchError(err));
         }

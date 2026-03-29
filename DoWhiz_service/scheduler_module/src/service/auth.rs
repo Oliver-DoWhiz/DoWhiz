@@ -7,6 +7,7 @@ use base64::Engine;
 use chrono::Utc;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::task;
 use tracing::{error, info, warn};
@@ -257,11 +258,26 @@ fn linked_owner_identifier_source(linked_owner_identifier: &Option<String>) -> O
         .map(|_| "linked_account_owner".to_string())
 }
 
+fn oauth_callback_event_nonce(code: &str) -> String {
+    let digest = Sha256::digest(code.as_bytes());
+    hex::encode(digest)[..16].to_string()
+}
+
+fn build_install_onboarding_event_key(
+    event_kind: &str,
+    account_id: Uuid,
+    workspace_id: &str,
+    event_nonce: &str,
+) -> String {
+    format!("{event_kind}:{account_id}:{workspace_id}:{event_nonce}")
+}
+
 fn build_slack_install_onboarding_request(
     account_id: Uuid,
     auth_user_id: Uuid,
     installation: &SlackInstallation,
     linked_owner_identifier: Option<String>,
+    event_nonce: &str,
 ) -> InstallOnboardingRequest {
     InstallOnboardingRequest {
         account_id,
@@ -274,9 +290,11 @@ fn build_slack_install_onboarding_request(
         linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
         linked_owner_identifier,
         public_channel_hint: None,
-        event_key: Some(format!(
-            "slack_bot_installed:{}:{}",
-            account_id, installation.team_id
+        event_key: Some(build_install_onboarding_event_key(
+            "slack_bot_installed",
+            account_id,
+            &installation.team_id,
+            event_nonce,
         )),
         route_path: Some("/auth/slack/bot-callback".to_string()),
         trigger: InstallOnboardingTrigger::InstallSuccess,
@@ -290,6 +308,7 @@ fn build_discord_install_onboarding_request(
     guild_id: &str,
     guild_name: Option<String>,
     linked_owner_identifier: Option<String>,
+    event_nonce: &str,
 ) -> InstallOnboardingRequest {
     InstallOnboardingRequest {
         account_id,
@@ -302,9 +321,50 @@ fn build_discord_install_onboarding_request(
         linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
         linked_owner_identifier,
         public_channel_hint: None,
-        event_key: Some(format!("discord_bot_installed:{}:{}", account_id, guild_id)),
+        event_key: Some(build_install_onboarding_event_key(
+            "discord_bot_installed",
+            account_id,
+            guild_id,
+            event_nonce,
+        )),
         route_path: Some("/auth/discord/bot-callback".to_string()),
         trigger: InstallOnboardingTrigger::InstallSuccess,
+        force: false,
+    }
+}
+
+fn build_reconnect_install_onboarding_request(
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    platform: InstallPlatform,
+    state: &ChannelInstallOnboardingState,
+    linked_owner_identifier: Option<String>,
+    event_nonce: &str,
+) -> InstallOnboardingRequest {
+    let route_path = match platform {
+        InstallPlatform::Slack => "/auth/slack/callback",
+        InstallPlatform::Discord => "/auth/discord/callback",
+    };
+
+    InstallOnboardingRequest {
+        account_id,
+        auth_user_id: Some(auth_user_id),
+        platform,
+        workspace_id: state.workspace_id.clone(),
+        workspace_name: state.workspace_name.clone(),
+        installer_identifier: state.installer_identifier.clone(),
+        installer_identifier_source: state.installer_identifier_source.clone(),
+        linked_owner_identifier_source: linked_owner_identifier_source(&linked_owner_identifier),
+        linked_owner_identifier,
+        public_channel_hint: state.public_channel_id.clone(),
+        event_key: Some(build_install_onboarding_event_key(
+            &format!("{}_reconnected", platform.as_str()),
+            account_id,
+            &state.workspace_id,
+            event_nonce,
+        )),
+        route_path: Some(route_path.to_string()),
+        trigger: InstallOnboardingTrigger::ReconnectSuccess,
         force: false,
     }
 }
@@ -345,6 +405,7 @@ fn execute_slack_install_onboarding(
     account_id: Uuid,
     auth_user_id: Uuid,
     installation: SlackInstallation,
+    event_nonce: &str,
 ) -> Result<InstallOnboardingRunResult, String> {
     let linked_owner_identifier =
         load_linked_owner_identifier(&state.account_store, account_id, InstallPlatform::Slack)
@@ -354,6 +415,7 @@ fn execute_slack_install_onboarding(
         auth_user_id,
         &installation,
         linked_owner_identifier,
+        event_nonce,
     );
     let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
     let client = SlackInstallOnboardingClient::new(installation);
@@ -372,6 +434,7 @@ fn execute_discord_install_onboarding(
     auth_user_id: Uuid,
     guild_id: String,
     guild_name: Option<String>,
+    event_nonce: &str,
 ) -> Result<InstallOnboardingRunResult, String> {
     let bot_token = state
         .discord_bot_token
@@ -387,6 +450,7 @@ fn execute_discord_install_onboarding(
         &guild_id,
         guild_name.clone(),
         linked_owner_identifier,
+        event_nonce,
     );
     let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
     let client = DiscordInstallOnboardingClient::new(guild_id, guild_name, bot_token);
@@ -397,6 +461,117 @@ fn execute_discord_install_onboarding(
         &client,
         request,
     )
+}
+
+fn execute_platform_reconnect_onboarding(
+    state: &AuthState,
+    account_id: Uuid,
+    auth_user_id: Uuid,
+    platform: InstallPlatform,
+    event_nonce: &str,
+) -> Result<usize, String> {
+    let onboarding_states = state
+        .account_store
+        .list_channel_install_onboarding_states(account_id, platform.as_str())
+        .map_err(|err| format!("failed to list onboarding states: {err}"))?;
+
+    if onboarding_states.is_empty() {
+        return Ok(0);
+    }
+
+    let linked_owner_identifier =
+        load_linked_owner_identifier(&state.account_store, account_id, platform)
+            .map_err(|err| format!("failed to resolve linked owner: {err}"))?;
+    let state_store = AccountStoreInstallOnboardingStateStore::new(state.account_store.clone());
+    let mut attempted = 0usize;
+
+    for onboarding_state in onboarding_states {
+        let request = build_reconnect_install_onboarding_request(
+            account_id,
+            auth_user_id,
+            platform,
+            &onboarding_state,
+            linked_owner_identifier.clone(),
+            event_nonce,
+        );
+
+        let run_result = match platform {
+            InstallPlatform::Slack => {
+                let installation = match state
+                    .slack_store
+                    .get_installation_or_env(&onboarding_state.workspace_id)
+                {
+                    Ok(installation) => installation,
+                    Err(err) => {
+                        warn!(
+                            "skipping Slack reconnect onboarding for account {} workspace {}: {}",
+                            account_id, onboarding_state.workspace_id, err
+                        );
+                        continue;
+                    }
+                };
+                let client = SlackInstallOnboardingClient::new(installation);
+                run_install_onboarding(
+                    &state.install_onboarding_config,
+                    &state_store,
+                    &state.account_store,
+                    &client,
+                    request,
+                )
+            }
+            InstallPlatform::Discord => {
+                let bot_token = match state
+                    .discord_bot_token
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    Some(token) => token,
+                    None => {
+                        warn!(
+                            "skipping Discord reconnect onboarding for account {} guild {}: discord bot token not configured",
+                            account_id, onboarding_state.workspace_id
+                        );
+                        continue;
+                    }
+                };
+                let client = DiscordInstallOnboardingClient::new(
+                    onboarding_state.workspace_id.clone(),
+                    onboarding_state.workspace_name.clone(),
+                    bot_token,
+                );
+                run_install_onboarding(
+                    &state.install_onboarding_config,
+                    &state_store,
+                    &state.account_store,
+                    &client,
+                    request,
+                )
+            }
+        };
+
+        match run_result {
+            Ok(result) => {
+                attempted += 1;
+                info!(
+                    "Reconnect onboarding processed for account {} {} {} (public={}, dm={})",
+                    account_id,
+                    platform.as_str(),
+                    onboarding_state.workspace_id,
+                    result.public_status.as_str(),
+                    result.dm_status.as_str()
+                );
+            }
+            Err(err) => warn!(
+                "Reconnect onboarding failed for account {} {} {}: {}",
+                account_id,
+                platform.as_str(),
+                onboarding_state.workspace_id,
+                err
+            ),
+        }
+    }
+
+    Ok(attempted)
 }
 
 fn execute_manual_install_onboarding_resend(
@@ -2804,6 +2979,40 @@ pub async fn discord_oauth_callback(
                     "provider": "discord",
                 }),
             );
+            let reconnect_state = state.clone();
+            let reconnect_event_nonce = oauth_callback_event_nonce(&params.code);
+            match task::spawn_blocking(move || {
+                execute_platform_reconnect_onboarding(
+                    &reconnect_state,
+                    account.id,
+                    account.auth_user_id,
+                    InstallPlatform::Discord,
+                    &reconnect_event_nonce,
+                )
+            })
+            .await
+            {
+                Ok(Ok(attempted)) => {
+                    if attempted > 0 {
+                        info!(
+                            "Replayed Discord onboarding for account {} across {} guild(s) after reconnect",
+                            account.id, attempted
+                        );
+                    }
+                }
+                Ok(Err(err)) => {
+                    warn!(
+                        "Discord reconnect onboarding failed for account {}: {}",
+                        account.id, err
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Discord reconnect onboarding task join failed for account {}: {}",
+                        account.id, err
+                    );
+                }
+            }
             redirect_to("/auth/index.html?discord=success")
         }
         Ok(Err(AccountStoreError::IdentifierTaken)) => {
@@ -3006,6 +3215,7 @@ pub async fn discord_bot_callback(
     let onboarding_state = state.clone();
     let onboarding_guild_id = guild_id.clone();
     let onboarding_guild_name = guild_name.clone();
+    let onboarding_event_nonce = oauth_callback_event_nonce(&params.code);
     let onboarding_result = task::spawn_blocking(move || {
         execute_discord_install_onboarding(
             &onboarding_state,
@@ -3013,6 +3223,7 @@ pub async fn discord_bot_callback(
             account.auth_user_id,
             onboarding_guild_id,
             onboarding_guild_name,
+            &onboarding_event_nonce,
         )
     })
     .await;
@@ -3365,6 +3576,40 @@ pub async fn slack_oauth_callback(
                     "provider": "slack",
                 }),
             );
+            let reconnect_state = state.clone();
+            let reconnect_event_nonce = oauth_callback_event_nonce(&params.code);
+            match task::spawn_blocking(move || {
+                execute_platform_reconnect_onboarding(
+                    &reconnect_state,
+                    account.id,
+                    account.auth_user_id,
+                    InstallPlatform::Slack,
+                    &reconnect_event_nonce,
+                )
+            })
+            .await
+            {
+                Ok(Ok(attempted)) => {
+                    if attempted > 0 {
+                        info!(
+                            "Replayed Slack onboarding for account {} across {} workspace(s) after reconnect",
+                            account.id, attempted
+                        );
+                    }
+                }
+                Ok(Err(err)) => {
+                    warn!(
+                        "Slack reconnect onboarding failed for account {}: {}",
+                        account.id, err
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Slack reconnect onboarding task join failed for account {}: {}",
+                        account.id, err
+                    );
+                }
+            }
             redirect_to("/auth/index.html?slack=success")
         }
         Ok(Err(AccountStoreError::IdentifierTaken)) => {
@@ -3615,12 +3860,14 @@ pub async fn slack_bot_callback(
 
     let onboarding_state = state.clone();
     let onboarding_installation = installation.clone();
+    let onboarding_event_nonce = oauth_callback_event_nonce(&params.code);
     let onboarding_result = task::spawn_blocking(move || {
         execute_slack_install_onboarding(
             &onboarding_state,
             account.id,
             account.auth_user_id,
             onboarding_installation,
+            &onboarding_event_nonce,
         )
     })
     .await;
@@ -5491,6 +5738,7 @@ mod tests {
     fn slack_install_onboarding_request_uses_install_success_wiring() {
         let account_id = Uuid::new_v4();
         let auth_user_id = Uuid::new_v4();
+        let event_nonce = "nonce1234";
         let installation = SlackInstallation {
             team_id: "T123".to_string(),
             team_name: Some("Acme".to_string()),
@@ -5504,6 +5752,7 @@ mod tests {
             auth_user_id,
             &installation,
             Some("Uowner".to_string()),
+            event_nonce,
         );
 
         assert_eq!(request.platform, InstallPlatform::Slack);
@@ -5516,7 +5765,7 @@ mod tests {
             request.linked_owner_identifier_source.as_deref(),
             Some("linked_account_owner")
         );
-        let expected_event_key = format!("slack_bot_installed:{}:T123", account_id);
+        let expected_event_key = format!("slack_bot_installed:{}:T123:{}", account_id, event_nonce);
         assert_eq!(
             request.event_key.as_deref(),
             Some(expected_event_key.as_str())
@@ -5531,12 +5780,14 @@ mod tests {
     fn discord_install_onboarding_request_uses_guild_context_and_safe_dm_fallback() {
         let account_id = Uuid::new_v4();
         let auth_user_id = Uuid::new_v4();
+        let event_nonce = "nonce1234";
         let request = build_discord_install_onboarding_request(
             account_id,
             auth_user_id,
             "987654321",
             Some("Launchpad".to_string()),
             None,
+            event_nonce,
         );
 
         assert_eq!(request.platform, InstallPlatform::Discord);
@@ -5546,7 +5797,10 @@ mod tests {
         assert_eq!(request.installer_identifier, None);
         assert_eq!(request.linked_owner_identifier, None);
         assert_eq!(request.linked_owner_identifier_source, None);
-        let expected_event_key = format!("discord_bot_installed:{}:987654321", account_id);
+        let expected_event_key = format!(
+            "discord_bot_installed:{}:987654321:{}",
+            account_id, event_nonce
+        );
         assert_eq!(
             request.event_key.as_deref(),
             Some(expected_event_key.as_str())
@@ -5613,5 +5867,71 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .starts_with("manual_resend:slack:T999:"));
+    }
+
+    #[test]
+    fn reconnect_request_reuses_workspace_state_with_unique_event_key() {
+        let account_id = Uuid::new_v4();
+        let auth_user_id = Uuid::new_v4();
+        let state = ChannelInstallOnboardingState {
+            account_id,
+            platform: "discord".to_string(),
+            workspace_id: "G123".to_string(),
+            workspace_name: Some("Guild".to_string()),
+            installer_identifier: Some("Uinstaller".to_string()),
+            installer_identifier_source: Some("installer".to_string()),
+            public_channel_id: Some("C123".to_string()),
+            public_channel_name: Some("general".to_string()),
+            dm_recipient_identifier: Some("Uinstaller".to_string()),
+            dm_recipient_source: Some("installer".to_string()),
+            last_event_key: Some("discord_bot_installed:old".to_string()),
+            last_public_status: Some("sent".to_string()),
+            last_public_error: None,
+            last_dm_status: Some("sent".to_string()),
+            last_dm_error: None,
+            last_skip_reason: None,
+            last_attempted_at: None,
+            last_succeeded_at: None,
+            last_manual_resend_at: None,
+        };
+
+        let request = build_reconnect_install_onboarding_request(
+            account_id,
+            auth_user_id,
+            InstallPlatform::Discord,
+            &state,
+            Some("Uowner".to_string()),
+            "nonce5678",
+        );
+
+        assert_eq!(request.platform, InstallPlatform::Discord);
+        assert_eq!(request.trigger, InstallOnboardingTrigger::ReconnectSuccess);
+        assert!(!request.force);
+        assert_eq!(request.workspace_id, "G123");
+        assert_eq!(request.workspace_name.as_deref(), Some("Guild"));
+        assert_eq!(request.installer_identifier.as_deref(), Some("Uinstaller"));
+        assert_eq!(request.public_channel_hint.as_deref(), Some("C123"));
+        assert_eq!(request.linked_owner_identifier.as_deref(), Some("Uowner"));
+        assert_eq!(
+            request.route_path.as_deref(),
+            Some("/auth/discord/callback")
+        );
+        let expected_event_key = format!("discord_reconnected:{}:G123:nonce5678", account_id);
+        assert_eq!(
+            request.event_key.as_deref(),
+            Some(expected_event_key.as_str())
+        );
+    }
+
+    #[test]
+    fn oauth_callback_event_nonce_is_stable_and_hides_raw_code() {
+        let first = oauth_callback_event_nonce("oauth-code-123");
+        let second = oauth_callback_event_nonce("oauth-code-123");
+        let different = oauth_callback_event_nonce("oauth-code-456");
+
+        assert_eq!(first, second);
+        assert_ne!(first, different);
+        assert_eq!(first.len(), 16);
+        assert!(!first.contains("oauth-code-123"));
     }
 }
