@@ -1,6 +1,5 @@
 use std::env;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
@@ -15,7 +14,6 @@ use crate::adapters::slack::SlackOutboundAdapter;
 use crate::channel::{Channel, ChannelMetadata, OutboundAdapter, OutboundMessage};
 use crate::slack_store::SlackInstallation;
 
-const DEFAULT_REINSTALL_COOLDOWN_HOURS: u64 = 24 * 7;
 const SLACK_SAFE_PUBLIC_CHANNEL_NAMES: &[&str] = &[
     "general",
     "team",
@@ -40,23 +38,13 @@ const DISCORD_TEXT_CHANNEL_TYPES: &[u8] = &[0, 5, 10, 11, 12, 15];
 pub struct InstallOnboardingConfig {
     pub(crate) slack_enabled: bool,
     pub(crate) discord_enabled: bool,
-    pub(crate) reinstall_cooldown: Duration,
 }
 
 impl InstallOnboardingConfig {
     pub fn from_env() -> Self {
         Self {
-            slack_enabled: env_flag("OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED", false),
-            discord_enabled: env_flag("OLIVER_DISCORD_INSTALL_ONBOARDING_ENABLED", false),
-            reinstall_cooldown: Duration::from_secs(
-                env::var("OLIVER_INSTALL_ONBOARDING_COOLDOWN_HOURS")
-                    .ok()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .filter(|value| *value > 0)
-                    .unwrap_or(DEFAULT_REINSTALL_COOLDOWN_HOURS)
-                    * 60
-                    * 60,
-            ),
+            slack_enabled: env_flag("OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED", true),
+            discord_enabled: env_flag("OLIVER_DISCORD_INSTALL_ONBOARDING_ENABLED", true),
         }
     }
 
@@ -97,6 +85,7 @@ impl InstallPlatform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstallOnboardingTrigger {
     InstallSuccess,
+    ReconnectSuccess,
     ManualResend,
 }
 
@@ -104,6 +93,7 @@ impl InstallOnboardingTrigger {
     fn as_str(self) -> &'static str {
         match self {
             InstallOnboardingTrigger::InstallSuccess => "install_success",
+            InstallOnboardingTrigger::ReconnectSuccess => "reconnect_success",
             InstallOnboardingTrigger::ManualResend => "manual_resend",
         }
     }
@@ -416,32 +406,6 @@ pub(crate) fn run_install_onboarding(
                 return Ok(InstallOnboardingRunResult {
                     skipped: true,
                     skip_reason: Some("duplicate_event".to_string()),
-                    public_status: state.last_public_status,
-                    dm_status: state.last_dm_status,
-                });
-            }
-        }
-        if let Some(last_attempted_at) = state.last_attempted_at {
-            let elapsed = Utc::now() - last_attempted_at;
-            let cooldown = chrono::Duration::from_std(config.reinstall_cooldown)
-                .map_err(|err| format!("invalid onboarding cooldown: {err}"))?;
-            if elapsed < cooldown {
-                state.last_skip_reason = Some("cooldown_active".to_string());
-                state_store.save(&state)?;
-                track_onboarding_event(
-                    analytics_store,
-                    "install_onboarding_skipped",
-                    &request,
-                    json!({
-                        "platform": request.platform.as_str(),
-                        "workspace_id": request.workspace_id,
-                        "reason": "cooldown_active",
-                        "cooldown_hours": config.reinstall_cooldown.as_secs() / 3600,
-                    }),
-                );
-                return Ok(InstallOnboardingRunResult {
-                    skipped: true,
-                    skip_reason: Some("cooldown_active".to_string()),
                     public_status: state.last_public_status,
                     dm_status: state.last_dm_status,
                 });
@@ -1387,7 +1351,6 @@ mod tests {
         InstallOnboardingConfig {
             slack_enabled: true,
             discord_enabled: true,
-            reinstall_cooldown: Duration::from_secs(3600),
         }
     }
 
@@ -1447,24 +1410,53 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_skips_reinstall_attempts() {
+    fn reinstall_with_new_event_key_is_allowed_immediately() {
         let store = MemoryStateStore::default();
         let analytics = test_account_store();
         let config = base_config();
-        let request = base_request(InstallPlatform::Slack);
-        let mut existing = InstallOnboardingStateRecord::new(
-            request.account_id,
-            InstallPlatform::Slack,
-            request.workspace_id.clone(),
-        );
-        existing.last_attempted_at = Some(Utc::now());
-        store.save(&existing).expect("save existing");
+        let first_request = base_request(InstallPlatform::Slack);
+        let mut second_request = base_request(InstallPlatform::Slack);
+        second_request.event_key = Some("event-2".to_string());
+        let client = FakePlatformClient {
+            public_targets: vec![OnboardingChannelTarget {
+                id: "C1".to_string(),
+                name: Some("general".to_string()),
+            }],
+            public_outcomes: vec![
+                SendAttemptOutcome {
+                    success: true,
+                    message_id: Some("pub1".to_string()),
+                    error: None,
+                },
+                SendAttemptOutcome {
+                    success: true,
+                    message_id: Some("pub2".to_string()),
+                    error: None,
+                },
+            ],
+            dm_outcomes: vec![
+                SendAttemptOutcome {
+                    success: true,
+                    message_id: Some("dm1".to_string()),
+                    error: None,
+                },
+                SendAttemptOutcome {
+                    success: true,
+                    message_id: Some("dm2".to_string()),
+                    error: None,
+                },
+            ],
+            ..FakePlatformClient::new(InstallPlatform::Slack)
+        };
 
-        let client = FakePlatformClient::new(InstallPlatform::Slack);
-        let result = run_install_onboarding(&config, &store, &analytics, &client, request)
-            .expect("cooldown result");
-        assert!(result.skipped);
-        assert_eq!(result.skip_reason.as_deref(), Some("cooldown_active"));
+        let first = run_install_onboarding(&config, &store, &analytics, &client, first_request)
+            .expect("first onboarding");
+        assert!(!first.skipped);
+
+        let second = run_install_onboarding(&config, &store, &analytics, &client, second_request)
+            .expect("second onboarding");
+        assert!(!second.skipped);
+        assert_eq!(client.public_attempts.lock().expect("lock").len(), 2);
     }
 
     #[test]
@@ -1523,21 +1515,13 @@ mod tests {
     }
 
     #[test]
-    fn manual_resend_bypasses_cooldown() {
+    fn manual_resend_allows_immediate_repeat_delivery() {
         let store = MemoryStateStore::default();
         let analytics = test_account_store();
         let config = base_config();
         let mut request = base_request(InstallPlatform::Slack);
         request.trigger = InstallOnboardingTrigger::ManualResend;
         request.force = true;
-
-        let mut existing = InstallOnboardingStateRecord::new(
-            request.account_id,
-            InstallPlatform::Slack,
-            request.workspace_id.clone(),
-        );
-        existing.last_attempted_at = Some(Utc::now());
-        store.save(&existing).expect("save existing");
 
         let client = FakePlatformClient {
             public_targets: vec![OnboardingChannelTarget {

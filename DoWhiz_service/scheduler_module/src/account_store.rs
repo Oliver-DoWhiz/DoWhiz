@@ -759,6 +759,65 @@ impl AccountStore {
         }))
     }
 
+    pub fn list_channel_install_onboarding_states(
+        &self,
+        account_id: Uuid,
+        platform: &str,
+    ) -> Result<Vec<ChannelInstallOnboardingState>, AccountStoreError> {
+        let mut conn = self.conn()?;
+        let rows = conn.query(
+            "SELECT
+                account_id,
+                platform,
+                workspace_id,
+                workspace_name,
+                installer_identifier,
+                installer_identifier_source,
+                public_channel_id,
+                public_channel_name,
+                dm_recipient_identifier,
+                dm_recipient_source,
+                last_event_key,
+                last_public_status,
+                last_public_error,
+                last_dm_status,
+                last_dm_error,
+                last_skip_reason,
+                last_attempted_at,
+                last_succeeded_at,
+                last_manual_resend_at
+             FROM channel_install_onboarding_state
+             WHERE account_id = $1 AND platform = $2
+             ORDER BY last_attempted_at DESC NULLS LAST, updated_at DESC, workspace_id ASC",
+            &[&account_id, &platform],
+        )?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ChannelInstallOnboardingState {
+                account_id: row.get(0),
+                platform: row.get(1),
+                workspace_id: row.get(2),
+                workspace_name: row.get(3),
+                installer_identifier: row.get(4),
+                installer_identifier_source: row.get(5),
+                public_channel_id: row.get(6),
+                public_channel_name: row.get(7),
+                dm_recipient_identifier: row.get(8),
+                dm_recipient_source: row.get(9),
+                last_event_key: row.get(10),
+                last_public_status: row.get(11),
+                last_public_error: row.get(12),
+                last_dm_status: row.get(13),
+                last_dm_error: row.get(14),
+                last_skip_reason: row.get(15),
+                last_attempted_at: row.get(16),
+                last_succeeded_at: row.get(17),
+                last_manual_resend_at: row.get(18),
+            })
+            .collect())
+    }
+
     pub fn upsert_channel_install_onboarding_state(
         &self,
         state: &ChannelInstallOnboardingState,
