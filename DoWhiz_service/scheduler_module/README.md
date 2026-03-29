@@ -85,6 +85,7 @@ For gateway/worker runtime and env policy, use:
 ## Install Onboarding
 
 Slack/Discord install onboarding is a V1 activation flow that runs from bot-install success, not from generic account linking.
+The auth dashboard separately shows a deterministic in-product setup card after generic connect success so users still see the next safe step without duplicating install tasks in Next Steps.
 
 Runtime flags:
 - `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`

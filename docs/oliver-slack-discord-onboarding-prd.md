@@ -1,7 +1,7 @@
 # Oliver Slack/Discord Onboarding PRD
 
 - Status: Draft
-- Last updated: 2026-03-28
+- Last updated: 2026-03-29
 - Audience: Product, design, frontend, backend
 - Scope: V1 onboarding experience after Slack or Discord bot installation
 
@@ -406,7 +406,9 @@ The current V1 implementation makes the following concrete choices:
 
 1. Triggering:
    - onboarding runs from Slack and Discord bot-install success callbacks
-   - generic Slack/Discord account-link success does not trigger onboarding
+   - generic Slack/Discord account-link success does not trigger outbound bot onboarding
+   - generic connect success in the auth dashboard triggers an in-product setup card in `Connected Apps` so users still get immediate next-step guidance
+   - Next Steps does not repeat Slack/Discord bot-install tasks after the provider itself is connected; those install CTAs live in `Connected Apps` instead
 
 2. Rollout flags:
    - `OLIVER_SLACK_INSTALL_ONBOARDING_ENABLED`
