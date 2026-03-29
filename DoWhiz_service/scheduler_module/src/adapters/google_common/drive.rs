@@ -4,6 +4,7 @@
 //! Google Workspace file types (Docs, Slides, Sheets).
 
 use tracing::{error, info};
+use urlencoding;
 
 use crate::channel::AdapterError;
 use crate::google_auth::GoogleAuth;
@@ -333,5 +334,219 @@ impl GoogleDriveClient {
         info!("Removed permission {} from file {}", permission_id, file_id);
 
         Ok(())
+    }
+
+    /// Move a file to a specific folder.
+    ///
+    /// # Arguments
+    /// * `file_id` - The ID of the file to move
+    /// * `folder_id` - The ID of the destination folder
+    ///
+    /// # Returns
+    /// The new parent folder ID.
+    pub fn move_to_folder(
+        &self,
+        file_id: &str,
+        folder_id: &str,
+    ) -> Result<String, AdapterError> {
+        let access_token = self
+            .auth
+            .get_access_token()
+            .map_err(|e| AdapterError::ConfigError(e.to_string()))?;
+
+        let client = reqwest::blocking::Client::new();
+
+        // First, get the current parents
+        let get_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}?fields=parents",
+            file_id
+        );
+
+        let get_response = client
+            .get(&get_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .map_err(|e| AdapterError::SendError(e.to_string()))?;
+
+        if !get_response.status().is_success() {
+            let status = get_response.status();
+            let body = get_response.text().unwrap_or_default();
+            error!("Failed to get file {} parents: {} - {}", file_id, status, body);
+            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+        }
+
+        let json: serde_json::Value = get_response
+            .json()
+            .map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        let current_parents: Vec<String> = json
+            .get("parents")
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Remove from current parents and add to new folder
+        let remove_parents = current_parents.join(",");
+        let update_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}?addParents={}&removeParents={}",
+            file_id, folder_id, remove_parents
+        );
+
+        let update_response = client
+            .patch(&update_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .map_err(|e| AdapterError::SendError(e.to_string()))?;
+
+        if !update_response.status().is_success() {
+            let status = update_response.status();
+            let body = update_response.text().unwrap_or_default();
+            error!(
+                "Failed to move file {} to folder {}: {} - {}",
+                file_id, folder_id, status, body
+            );
+            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+        }
+
+        info!("Moved file {} to folder {}", file_id, folder_id);
+
+        Ok(folder_id.to_string())
+    }
+
+    /// Create a new folder in Drive.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the folder
+    /// * `parent_folder_id` - Optional parent folder ID (root if None)
+    ///
+    /// # Returns
+    /// The ID of the newly created folder.
+    pub fn create_folder(
+        &self,
+        name: &str,
+        parent_folder_id: Option<&str>,
+    ) -> Result<String, AdapterError> {
+        let access_token = self
+            .auth
+            .get_access_token()
+            .map_err(|e| AdapterError::ConfigError(e.to_string()))?;
+
+        let client = reqwest::blocking::Client::new();
+
+        let url = "https://www.googleapis.com/drive/v3/files";
+
+        let mut metadata = serde_json::json!({
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder"
+        });
+
+        if let Some(parent_id) = parent_folder_id {
+            metadata["parents"] = serde_json::json!([parent_id]);
+        }
+
+        let response = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&metadata)
+            .send()
+            .map_err(|e| AdapterError::SendError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            error!("Failed to create folder '{}': {} - {}", name, status, body);
+            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        let folder_id = json
+            .get("id")
+            .and_then(|id| id.as_str())
+            .ok_or_else(|| AdapterError::ParseError("Missing folder ID in response".to_string()))?
+            .to_string();
+
+        info!("Created folder '{}' with ID {}", name, folder_id);
+
+        Ok(folder_id)
+    }
+
+    /// List folders in Drive (or in a specific parent folder).
+    ///
+    /// # Arguments
+    /// * `parent_folder_id` - Optional parent folder ID (root if None)
+    /// * `query` - Optional search query for folder name
+    ///
+    /// # Returns
+    /// A list of folders with their IDs and names.
+    pub fn list_folders(
+        &self,
+        parent_folder_id: Option<&str>,
+        query: Option<&str>,
+    ) -> Result<Vec<(String, String)>, AdapterError> {
+        let access_token = self
+            .auth
+            .get_access_token()
+            .map_err(|e| AdapterError::ConfigError(e.to_string()))?;
+
+        let client = reqwest::blocking::Client::new();
+
+        let mut q_parts = vec!["mimeType='application/vnd.google-apps.folder'".to_string()];
+
+        if let Some(parent_id) = parent_folder_id {
+            q_parts.push(format!("'{}' in parents", parent_id));
+        }
+
+        if let Some(name_query) = query {
+            q_parts.push(format!("name contains '{}'", name_query));
+        }
+
+        let q = q_parts.join(" and ");
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files?q={}&fields=files(id,name)",
+            urlencoding::encode(&q)
+        );
+
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .map_err(|e| AdapterError::SendError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            error!("Failed to list folders: {} - {}", status, body);
+            return Err(AdapterError::SendError(format!("HTTP {}: {}", status, body)));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        let folders: Vec<(String, String)> = json
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| {
+                        let id = f.get("id")?.as_str()?;
+                        let name = f.get("name")?.as_str()?;
+                        Some((id.to_string(), name.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(folders)
     }
 }

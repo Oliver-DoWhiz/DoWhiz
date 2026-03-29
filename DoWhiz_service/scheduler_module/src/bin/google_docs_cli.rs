@@ -54,6 +54,11 @@ Sharing & Permissions:
   list-permissions <file_id>                   List who has access to a file
   remove-permission <file_id> <permission_id>  Remove access from a file
 
+Drive Organization:
+  move-to-folder <file_id> --folder-id="folder_id"  Move file to a folder
+  create-folder --name="Folder Name" [--parent="parent_folder_id"]
+  list-folders [--parent="parent_folder_id"] [--query="search"]
+
 Environment Variables:
   GOOGLE_ACCESS_TOKEN    - Pre-generated access token (for sandbox environments)
   GOOGLE_CLIENT_ID       - Google OAuth client ID
@@ -413,6 +418,29 @@ fn main() {
                 exit(1);
             }
             cmd_remove_permission(&args[2], &args[3])
+        }
+        "move-to-folder" => {
+            if args.len() < 3 {
+                eprintln!("Error: file ID required");
+                print_usage();
+                exit(1);
+            }
+            let folder_id = parse_arg(&args, "--folder-id").unwrap_or_default();
+            if folder_id.is_empty() {
+                eprintln!("Error: --folder-id is required");
+                exit(1);
+            }
+            cmd_move_to_folder(&args[2], &folder_id)
+        }
+        "create-folder" => {
+            let name = parse_arg(&args, "--name").unwrap_or_else(|| "New Folder".to_string());
+            let parent = parse_arg(&args, "--parent");
+            cmd_create_folder(&name, parent.as_deref())
+        }
+        "list-folders" => {
+            let parent = parse_arg(&args, "--parent");
+            let query = parse_arg(&args, "--query");
+            cmd_list_folders(parent.as_deref(), query.as_deref())
         }
         "--help" | "-h" | "help" => {
             print_usage();
@@ -1040,4 +1068,59 @@ fn cmd_remove_permission(file_id: &str, permission_id: &str) -> Result<String, S
         "Removed permission {} from file {}\n",
         permission_id, file_id
     ))
+}
+
+fn cmd_move_to_folder(file_id: &str, folder_id: &str) -> Result<String, String> {
+    let auth = get_auth()?;
+    let client = GoogleDriveClient::new(auth);
+
+    client
+        .move_to_folder(file_id, folder_id)
+        .map_err(|e| format!("Failed to move file: {}", e))?;
+
+    let mut output = String::new();
+    output.push_str(&format!("Moved file {} to folder {}\n", file_id, folder_id));
+
+    Ok(output)
+}
+
+fn cmd_create_folder(name: &str, parent_id: Option<&str>) -> Result<String, String> {
+    let auth = get_auth()?;
+    let client = GoogleDriveClient::new(auth);
+
+    let folder_id = client
+        .create_folder(name, parent_id)
+        .map_err(|e| format!("Failed to create folder: {}", e))?;
+
+    let mut output = String::new();
+    output.push_str(&format!("Created folder: {}\n", name));
+    output.push_str(&format!("Folder ID: {}\n", folder_id));
+    output.push_str(&format!(
+        "URL: https://drive.google.com/drive/folders/{}\n",
+        folder_id
+    ));
+
+    Ok(output)
+}
+
+fn cmd_list_folders(parent_id: Option<&str>, query: Option<&str>) -> Result<String, String> {
+    let auth = get_auth()?;
+    let client = GoogleDriveClient::new(auth);
+
+    let folders = client
+        .list_folders(parent_id, query)
+        .map_err(|e| format!("Failed to list folders: {}", e))?;
+
+    let mut output = String::new();
+    output.push_str(&format!("Found {} folders:\n\n", folders.len()));
+
+    for (id, name) in &folders {
+        output.push_str(&format!("- {} ({})\n", name, id));
+    }
+
+    if folders.is_empty() {
+        output.push_str("No folders found.\n");
+    }
+
+    Ok(output)
 }
