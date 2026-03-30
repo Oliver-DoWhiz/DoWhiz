@@ -7,6 +7,7 @@ mod docker;
 mod env;
 mod errors;
 mod github_auth;
+pub mod pool_manager;
 mod prompt;
 mod scheduled;
 pub mod timing;
@@ -15,7 +16,8 @@ mod types;
 mod utils;
 mod workspace;
 
-pub use codex::cleanup_all_aci_containers;
+pub use codex::{cleanup_all_aci_containers, run_codex_warm_pool};
+pub use pool_manager::{PoolConfig, PoolManager};
 pub use timing::{
     clear_timing_log, get_timing_log_path, QueueLatencyCollector, StageStats, TaskTiming,
     TaskTimingBuilder, TimingStats, QUEUE_LATENCY_COLLECTOR, TIMING_COLLECTOR,

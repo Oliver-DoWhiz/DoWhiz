@@ -34,6 +34,7 @@ pub mod past_emails;
 pub mod secrets_store;
 pub mod service;
 pub mod user_store;
+pub mod warm_pool;
 
 mod scheduler;
 

@@ -3144,6 +3144,374 @@ fn collect_response_item_assistant_message(value: &serde_json::Value, target: &m
     appended
 }
 
+// ============================================================================
+// Warm Pool Execution (Queue-based)
+// ============================================================================
+
+use super::pool_manager::PoolManager;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+/// Task completion message received from the completion queue.
+#[derive(Debug, serde::Deserialize)]
+struct TaskCompletion {
+    task_id: String,
+    exit_code: i32,
+}
+
+/// Run a task using a warm container from the pool.
+///
+/// Instead of provisioning a new ACI container per task (2-4 min cold start),
+/// this submits the task to a queue where pre-provisioned warm containers
+/// pick it up and process it.
+///
+/// Flow:
+/// 1. Create ephemeral share and upload workspace
+/// 2. Push task message to queue (share_url, sas, agent_command)
+/// 3. Wait for completion message on completion queue
+/// 4. Download results from share
+/// 5. Cleanup and replenish pool
+pub fn run_codex_warm_pool(
+    pool_manager: &PoolManager,
+    workspace_dir: &Path,
+    task_json: &serde_json::Value,
+    timeout: Duration,
+    timing: &mut TaskTimingBuilder,
+) -> Result<RunTaskOutput, RunTaskError> {
+    let config = load_azure_aci_config()?;
+    let task_id = uuid::Uuid::new_v4().to_string();
+
+    eprintln!(
+        "[run_task] warm_pool task_id={} workspace={}",
+        task_id,
+        workspace_dir.display()
+    );
+
+    // 1. Create ephemeral share and upload workspace
+    timing.start_stage();
+    let share_name = format!("task-{}", uuid::Uuid::new_v4().simple());
+    create_ephemeral_share(&config, &share_name)?;
+    timing.end_ephemeral_create();
+
+    timing.start_stage();
+    let upload_result = upload_workspace_to_share(&config, &share_name, workspace_dir);
+    if let Err(e) = &upload_result {
+        eprintln!("[run_task] warm_pool upload failed, cleaning up share: {:?}", e);
+        let _ = delete_ephemeral_share(&config, &share_name);
+        return Err(upload_result.unwrap_err());
+    }
+    timing.end_ephemeral_upload();
+
+    // 2. Generate SAS token and share URL
+    let sas = generate_share_sas(&config, &share_name)?;
+    let share_url = format!(
+        "https://{}.file.core.windows.net/{}",
+        config.storage_account, share_name
+    );
+
+    // 3. Build agent command (reuse existing logic)
+    let agent_command = build_warm_pool_agent_command(workspace_dir, task_json)?;
+
+    // 4. Push task to queue
+    let task_msg = serde_json::json!({
+        "task_id": task_id,
+        "share_url": share_url,
+        "sas_token": sas,
+        "agent_command": agent_command,
+    });
+
+    push_to_queue(
+        pool_manager.storage_account(),
+        pool_manager.storage_key(),
+        pool_manager.task_queue(),
+        &task_msg,
+    )?;
+
+    eprintln!("[run_task] warm_pool task pushed to queue: {}", task_id);
+
+    // 5. Wait for completion message
+    timing.start_stage();
+    let completion = poll_completion_queue(
+        pool_manager.storage_account(),
+        pool_manager.storage_key(),
+        pool_manager.completion_queue(),
+        &task_id,
+        timeout,
+    )?;
+    timing.end_codex_execution();
+
+    eprintln!(
+        "[run_task] warm_pool task completed: {} exit_code={}",
+        task_id, completion.exit_code
+    );
+
+    // 6. Download results
+    timing.start_stage();
+    download_workspace_from_share(&config, &share_name, workspace_dir)?;
+    timing.end_result_download();
+
+    // 7. Cleanup ephemeral share
+    if let Err(e) = delete_ephemeral_share(&config, &share_name) {
+        eprintln!("[run_task] warm_pool failed to delete share: {:?}", e);
+    }
+
+    // 8. Replenish pool (container exited after processing)
+    pool_manager.replenish();
+
+    // 9. Read output files and construct response
+    let reply_html_path = workspace_dir.join("reply_message.html");
+    let reply_attachments_dir = workspace_dir.join("reply_attachments");
+
+    let codex_output_path = workspace_dir.join("codex_output.txt");
+    let codex_output = fs::read_to_string(&codex_output_path).unwrap_or_default();
+
+    // Extract scheduled tasks and actions from codex output
+    let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&codex_output);
+    let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&codex_output);
+
+    Ok(RunTaskOutput {
+        reply_html_path,
+        reply_attachments_dir,
+        codex_output,
+        scheduled_tasks,
+        scheduled_tasks_error,
+        scheduler_actions,
+        scheduler_actions_error,
+        token_usage: None,
+    })
+}
+
+/// Build the agent command for warm pool execution.
+/// This is a simplified version that runs inside the container's workspace.
+fn build_warm_pool_agent_command(
+    _workspace_dir: &Path,
+    task_json: &serde_json::Value,
+) -> Result<String, RunTaskError> {
+    let model_name = task_json
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CODEX_MODEL_NAME);
+
+    let sandbox_mode = task_json
+        .get("sandbox_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CODEX_SANDBOX_MODE);
+
+    // The workspace is at WORKSPACE_LOCAL_DIR inside the container
+    // warm_worker.sh sets this before running the command
+    let command = format!(
+        r#"cd "$WORKSPACE_LOCAL_DIR" && \
+npx @openai/codex@latest \
+    --skip-git-repo-check \
+    -m {model} \
+    --sandbox-mode {sandbox} \
+    "$(cat .codex_remote_prompt.txt)" \
+    > codex_output.txt 2>&1; \
+echo $? > codex_exit_code.txt"#,
+        model = shell_quote(model_name),
+        sandbox = shell_quote(sandbox_mode),
+    );
+
+    Ok(command)
+}
+
+/// Push a message to an Azure Storage Queue.
+fn push_to_queue(
+    account: &str,
+    key: &str,
+    queue: &str,
+    msg: &serde_json::Value,
+) -> Result<(), RunTaskError> {
+    let content = BASE64.encode(msg.to_string());
+
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("put")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--content")
+        .arg(&content)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message put failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Poll the completion queue for a specific task's completion message.
+fn poll_completion_queue(
+    account: &str,
+    key: &str,
+    queue: &str,
+    task_id: &str,
+    timeout: Duration,
+) -> Result<TaskCompletion, RunTaskError> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_secs(2);
+
+    eprintln!(
+        "[run_task] warm_pool polling completion queue for task_id={}",
+        task_id
+    );
+
+    while start.elapsed() < timeout {
+        let output = Command::new("az")
+            .arg("storage")
+            .arg("message")
+            .arg("get")
+            .arg("--queue-name")
+            .arg(queue)
+            .arg("--account-name")
+            .arg(account)
+            .arg("--account-key")
+            .arg(key)
+            .arg("--visibility-timeout")
+            .arg("30")
+            .arg("--output")
+            .arg("json")
+            .output()
+            .map_err(RunTaskError::Io)?;
+
+        if output.status.success() {
+            let msgs: Vec<serde_json::Value> =
+                serde_json::from_slice(&output.stdout).unwrap_or_default();
+
+            for msg in msgs {
+                let message_id = msg.get("id").and_then(|v| v.as_str());
+                let pop_receipt = msg.get("popReceipt").and_then(|v| v.as_str());
+                let content = msg.get("content").and_then(|v| v.as_str());
+
+                if let (Some(content), Some(msg_id), Some(receipt)) =
+                    (content, message_id, pop_receipt)
+                {
+                    if let Ok(decoded) = BASE64.decode(content) {
+                        if let Ok(completion) =
+                            serde_json::from_slice::<TaskCompletion>(&decoded)
+                        {
+                            if completion.task_id == task_id {
+                                // Delete the message
+                                let _ = delete_queue_message(account, key, queue, msg_id, receipt);
+                                return Ok(completion);
+                            } else {
+                                // Not our task, make it visible again immediately
+                                let _ = update_message_visibility(
+                                    account, key, queue, msg_id, receipt, 0,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        thread::sleep(poll_interval);
+    }
+
+    Err(RunTaskError::CommandTimeout {
+        command: "poll_completion_queue",
+        timeout_secs: timeout.as_secs(),
+        output: format!("Timeout waiting for task completion: {}", task_id),
+    })
+}
+
+/// Delete a message from an Azure Storage Queue.
+fn delete_queue_message(
+    account: &str,
+    key: &str,
+    queue: &str,
+    message_id: &str,
+    pop_receipt: &str,
+) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("delete")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--id")
+        .arg(message_id)
+        .arg("--pop-receipt")
+        .arg(pop_receipt)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message delete failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Update a message's visibility timeout (used to make messages visible again).
+fn update_message_visibility(
+    account: &str,
+    key: &str,
+    queue: &str,
+    message_id: &str,
+    pop_receipt: &str,
+    visibility_timeout: u32,
+) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("update")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--id")
+        .arg(message_id)
+        .arg("--pop-receipt")
+        .arg(pop_receipt)
+        .arg("--visibility-timeout")
+        .arg(visibility_timeout.to_string())
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message update failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
