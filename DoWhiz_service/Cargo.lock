@@ -3715,11 +3715,14 @@ dependencies = [
 name = "run_task_module"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
+ "uuid 1.21.0",
 ]
 
 [[package]]
