@@ -253,6 +253,15 @@ fn build_cross_channel_capabilities_section() -> &'static str {
 - `google-slides` - Create/read/edit presentations, share files, manage folders
 - `google-sheets` - Create/read/edit spreadsheets, share files, manage folders
 
+Google Docs Content Formatting:
+When writing content to Google Docs, use simple HTML format (NOT Markdown):
+- Headings: `<h1>Title</h1>`, `<h2>Section</h2>`
+- Paragraphs: `<p>Text here</p>`
+- Bold: `<b>bold text</b>`
+- Lists: `<ul><li>item 1</li><li>item 2</li></ul>`
+- Links: `<a href="url">link text</a>`
+Example: `google-docs append <doc_id> "<h1>Project Plan</h1><p>Overview of the project...</p>"`
+
 Discord Bot Tools (for Discord messages):
 - `discord_cli send-message <channel_id> <message>` - Send message to a channel
 - `discord_cli send-reply <channel_id> <message_id> <message>` - Reply to a specific message
