@@ -62,6 +62,10 @@ fn load_pool_config_from_env() -> Result<PoolConfig, String> {
         .or_else(|_| env::var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD"))
         .map_err(|_| "WARM_POOL_REGISTRY_PASSWORD or RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD not set")?;
 
+    let location = env::var("WARM_POOL_LOCATION")
+        .or_else(|_| env::var("RUN_TASK_AZURE_ACI_LOCATION"))
+        .map_err(|_| "WARM_POOL_LOCATION or RUN_TASK_AZURE_ACI_LOCATION not set")?;
+
     Ok(PoolConfig {
         resource_group,
         image,
@@ -74,6 +78,7 @@ fn load_pool_config_from_env() -> Result<PoolConfig, String> {
         registry_server,
         registry_username,
         registry_password,
+        location,
     })
 }
 
@@ -200,6 +205,7 @@ mod tests {
         std::env::set_var("RUN_TASK_AZURE_ACI_REGISTRY_SERVER", "testregistry.azurecr.io");
         std::env::set_var("RUN_TASK_AZURE_ACI_REGISTRY_USERNAME", "testuser");
         std::env::set_var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD", "testpass");
+        std::env::set_var("RUN_TASK_AZURE_ACI_LOCATION", "westus2");
 
         // Remove specific warm pool vars
         std::env::remove_var("WARM_POOL_RESOURCE_GROUP");
@@ -209,6 +215,7 @@ mod tests {
         std::env::remove_var("WARM_POOL_REGISTRY_SERVER");
         std::env::remove_var("WARM_POOL_REGISTRY_USERNAME");
         std::env::remove_var("WARM_POOL_REGISTRY_PASSWORD");
+        std::env::remove_var("WARM_POOL_LOCATION");
 
         let result = load_pool_config_from_env();
         assert!(result.is_ok());
@@ -223,6 +230,7 @@ mod tests {
         assert_eq!(config.registry_server, "testregistry.azurecr.io");
         assert_eq!(config.registry_username, "testuser");
         assert_eq!(config.registry_password, "testpass");
+        assert_eq!(config.location, "westus2");
 
         // Cleanup
         std::env::remove_var("RUN_TASK_AZURE_ACI_RESOURCE_GROUP");
@@ -232,6 +240,7 @@ mod tests {
         std::env::remove_var("RUN_TASK_AZURE_ACI_REGISTRY_SERVER");
         std::env::remove_var("RUN_TASK_AZURE_ACI_REGISTRY_USERNAME");
         std::env::remove_var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD");
+        std::env::remove_var("RUN_TASK_AZURE_ACI_LOCATION");
     }
 
     #[test]
@@ -255,6 +264,8 @@ mod tests {
         std::env::set_var("RUN_TASK_AZURE_ACI_REGISTRY_USERNAME", "fallbackuser");
         std::env::set_var("WARM_POOL_REGISTRY_PASSWORD", "warmpass");
         std::env::set_var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD", "fallbackpass");
+        std::env::set_var("WARM_POOL_LOCATION", "eastus");
+        std::env::set_var("RUN_TASK_AZURE_ACI_LOCATION", "westus2");
 
         let result = load_pool_config_from_env();
         assert!(result.is_ok());
@@ -269,6 +280,7 @@ mod tests {
         assert_eq!(config.registry_server, "warmregistry.azurecr.io");
         assert_eq!(config.registry_username, "warmuser");
         assert_eq!(config.registry_password, "warmpass");
+        assert_eq!(config.location, "eastus");
 
         // Cleanup
         std::env::remove_var("WARM_POOL_RESOURCE_GROUP");
@@ -287,6 +299,8 @@ mod tests {
         std::env::remove_var("RUN_TASK_AZURE_ACI_REGISTRY_USERNAME");
         std::env::remove_var("WARM_POOL_REGISTRY_PASSWORD");
         std::env::remove_var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD");
+        std::env::remove_var("WARM_POOL_LOCATION");
+        std::env::remove_var("RUN_TASK_AZURE_ACI_LOCATION");
     }
 
     #[test]
