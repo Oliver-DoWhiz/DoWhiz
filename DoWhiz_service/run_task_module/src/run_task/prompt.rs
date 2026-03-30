@@ -263,6 +263,17 @@ Discord Bot Tools (for Discord messages):
 IMPORTANT: For Discord operations (DMs, channel messages), ALWAYS use `discord_cli`.
 Do NOT use browser automation for Discord - the bot token is already configured.
 
+GitHub CLI (`gh`) - for GitHub repository operations:
+- `gh repo create <name> --public/--private` - Create new repository
+- `gh repo create <org>/<name> --public` - Create repo in an organization
+- `gh issue create --title "..." --body "..."` - Create issue
+- `gh issue list` - List issues
+- `gh pr create --title "..." --body "..."` - Create pull request
+- `gh release create <tag> --notes "..."` - Create release
+
+IMPORTANT: For GitHub operations, ALWAYS use `gh` CLI (already authenticated).
+Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
+
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
 
