@@ -36,6 +36,12 @@ pub struct PoolConfig {
     pub task_queue_name: String,
     /// Queue name for completion signals
     pub completion_queue_name: String,
+    /// ACR registry server
+    pub registry_server: String,
+    /// ACR registry username
+    pub registry_username: String,
+    /// ACR registry password
+    pub registry_password: String,
 }
 
 /// Manages a pool of warm ACI containers.
@@ -184,6 +190,12 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(&config.memory_gb)
                 .arg("--restart-policy")
                 .arg("Never")
+                .arg("--registry-login-server")
+                .arg(&config.registry_server)
+                .arg("--registry-username")
+                .arg(&config.registry_username)
+                .arg("--registry-password")
+                .arg(&config.registry_password)
                 .arg("--environment-variables")
                 .arg(format!("TASK_QUEUE_NAME={}", config.task_queue_name))
                 .arg(format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name))
@@ -246,6 +258,9 @@ mod tests {
             queue_storage_key: "testkey".to_string(),
             task_queue_name: "test-tasks".to_string(),
             completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
         };
 
         let manager = PoolManager::new(config, Some(5));
@@ -266,6 +281,9 @@ mod tests {
             queue_storage_key: "testkey".to_string(),
             task_queue_name: "test-tasks".to_string(),
             completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
         };
 
         let manager = PoolManager::new(config, None);
