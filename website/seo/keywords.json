@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "updated_at": "2026-03-30",
+  "keywords": [
+    {
+      "keyword": "startup workspace for founders",
+      "cluster": "founder-workspace",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/blog/startup-workspace-for-founders-product-update/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Current founder-facing product narrative."
+    },
+    {
+      "keyword": "ai chief of staff for founders",
+      "cluster": "founder-workspace",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/blog/startup-workspace-for-founders-product-update/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "High-intent adjacent founder positioning."
+    },
+    {
+      "keyword": "startup operating system for founders",
+      "cluster": "founder-workspace",
+      "intent": "commercial",
+      "target_url": "",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "planned",
+      "notes": "Tracked opportunity without a dedicated target page yet."
+    },
+    {
+      "keyword": "ai digital employees",
+      "cluster": "brand-platform",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Homepage category term."
+    },
+    {
+      "keyword": "ai workflow automation",
+      "cluster": "workflow-automation",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/solutions/ai-workflow-automation/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Primary solution keyword."
+    },
+    {
+      "keyword": "ai workflow automation checklist",
+      "cluster": "workflow-automation",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/ai-workflow-automation-checklist/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Information-seeking cluster support."
+    },
+    {
+      "keyword": "email task automation",
+      "cluster": "workflow-automation",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/solutions/email-task-automation/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Commercial solution page target."
+    },
+    {
+      "keyword": "email task automation playbook",
+      "cluster": "workflow-automation",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/email-task-automation-playbook/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Operational guide version of the same cluster."
+    },
+    {
+      "keyword": "slack task automation",
+      "cluster": "workflow-automation",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/solutions/slack-task-automation/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Commercial solution page target."
+    },
+    {
+      "keyword": "slack task automation guide",
+      "cluster": "workflow-automation",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/slack-task-automation-ops-guide/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Operations-oriented support article."
+    },
+    {
+      "keyword": "github issue automation",
+      "cluster": "workflow-automation",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/solutions/github-issue-automation/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Commercial solution page target."
+    },
+    {
+      "keyword": "github issue automation best practices",
+      "cluster": "workflow-automation",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/github-issue-automation-best-practices/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Engineering execution guide."
+    },
+    {
+      "keyword": "google docs automation",
+      "cluster": "workflow-automation",
+      "intent": "commercial",
+      "target_url": "https://dowhiz.com/solutions/google-docs-automation/",
+      "language": "en",
+      "country": "US",
+      "priority": "high",
+      "status": "tracked",
+      "notes": "Commercial solution page target."
+    },
+    {
+      "keyword": "google docs automation for meeting follow-ups",
+      "cluster": "workflow-automation",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/google-docs-automation-for-meeting-followups/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Meeting operations guide."
+    },
+    {
+      "keyword": "digital employee onboarding checklist",
+      "cluster": "enablement",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/digital-employee-onboarding-checklist/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Onboarding checklist cluster."
+    },
+    {
+      "keyword": "ai agent memory best practices",
+      "cluster": "memory-governance",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/ai-agent-memory-best-practices/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Useful trust and implementation topic."
+    },
+    {
+      "keyword": "ai employee trust safety governance",
+      "cluster": "memory-governance",
+      "intent": "informational",
+      "target_url": "https://dowhiz.com/blog/ai-employee-trust-safety-governance/",
+      "language": "en",
+      "country": "US",
+      "priority": "medium",
+      "status": "tracked",
+      "notes": "Trust and safety thought leadership cluster."
+    },
+    {
+      "keyword": "dowhiz help center",
+      "cluster": "brand-platform",
+      "intent": "navigational",
+      "target_url": "https://dowhiz.com/help-center/",
+      "language": "en",
+      "country": "US",
+      "priority": "low",
+      "status": "tracked",
+      "notes": "Support surface."
+    },
+    {
+      "keyword": "dowhiz integrations",
+      "cluster": "brand-platform",
+      "intent": "navigational",
+      "target_url": "https://dowhiz.com/integrations/",
+      "language": "en",
+      "country": "US",
+      "priority": "low",
+      "status": "tracked",
+      "notes": "Integration discovery page."
+    }
+  ]
+}

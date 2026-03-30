@@ -92,6 +92,7 @@ const GOOGLE_WORKSPACE_CLI_CREDENTIAL_COMPONENT_KEYS: &[&str] = &[
 ];
 const GOOGLE_WORKSPACE_CLI_CREDENTIALS_REL_PATH: &str =
     ".secrets/google_workspace_cli_credentials.json";
+const DISCORD_CONTEXT_REL_PATH: &str = ".discord_context.json";
 const BRIGHT_DATA_API_KEY_ENV_KEY: &str = "BRIGHT_DATA_API_KEY";
 const BRIGHTDATA_API_KEY_ENV_KEY: &str = "BRIGHTDATA_API_KEY";
 const BRIGHT_DATA_OPTIONAL_ENV_KEYS: &[&str] = &[
@@ -374,6 +375,11 @@ pub(super) fn run_codex_task(
     let payment_env_overrides = collect_payment_env_overrides();
     let bright_data_env_overrides = collect_bright_data_env_overrides();
     let google_workspace_cli_env_overrides = collect_google_workspace_cli_env_overrides(
+        host_workspace_dir
+            .as_deref()
+            .unwrap_or(request.workspace_dir),
+    )?;
+    ensure_discord_context_file(
         host_workspace_dir
             .as_deref()
             .unwrap_or(request.workspace_dir),
@@ -911,6 +917,7 @@ fn run_codex_task_azure_aci(
     let bright_data_env_overrides = collect_bright_data_env_overrides();
     let google_workspace_cli_env_overrides =
         collect_google_workspace_cli_env_overrides(&host_workspace_dir)?;
+    ensure_discord_context_file(&host_workspace_dir)?;
     let browserbase_env_overrides = collect_browserbase_env_overrides(&container_workspace_dir);
     let human_approval_gate_env_overrides = collect_human_approval_gate_env_overrides();
     let lark_env_overrides = collect_lark_env_overrides();
@@ -2686,6 +2693,28 @@ fn load_google_workspace_cli_credential_parts() -> Option<GoogleWorkspaceCliCred
         refresh_token,
         credential_type,
     })
+}
+
+/// Write `.discord_context.json` to workspace with the bot token.
+/// This allows `discord_cli` to authenticate without passing the token via env var.
+fn ensure_discord_context_file(workspace_dir: &Path) -> Result<(), RunTaskError> {
+    let Some(token) = read_env_trimmed("DISCORD_BOT_TOKEN") else {
+        // No bot token configured - skip
+        return Ok(());
+    };
+
+    let context_path = workspace_dir.join(DISCORD_CONTEXT_REL_PATH);
+    let payload = serde_json::json!({
+        "bot_token": token,
+    });
+    let rendered = serde_json::to_string_pretty(&payload)
+        .map_err(|err| RunTaskError::Io(io::Error::other(err.to_string())))?;
+    fs::write(&context_path, format!("{rendered}\n"))?;
+    eprintln!(
+        "[run_task] wrote discord context file: {}",
+        context_path.display()
+    );
+    Ok(())
 }
 
 fn codex_add_dirs(workspace_dir: &Path, use_docker: bool) -> Result<Vec<String>, RunTaskError> {

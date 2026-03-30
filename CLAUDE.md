@@ -186,6 +186,31 @@ Inbound (Email/Slack/Discord/SMS/Telegram/WhatsApp/Google Docs/iMessage)
 | `run_task_module/src/lib.rs` | Codex/Claude CLI invocation |
 | `scheduler_module/src/adapters/whatsapp.rs` | WhatsApp inbound/outbound adapter |
 | `DoWhiz_service/employee.toml` | Employee registry (addresses, runners, models) |
+| `run_task_module/src/run_task/prompt.rs` | Agent prompt builder (IMPORTANT: update when adding new tools) |
+
+### Feature Development Checklist
+
+When adding new features (especially CLI tools or agent capabilities), **always verify these items**:
+
+1. **Update Agent Prompt** (`run_task_module/src/run_task/prompt.rs`):
+   - Add tool documentation to `build_cross_channel_capabilities_section()` for new CLIs
+   - Include command syntax, parameters, and usage examples
+   - Add explicit instructions about when to use the tool vs alternatives (e.g., "use CLI, not browser")
+
+2. **CI/CD Binary Deployment**:
+   - Add new binaries to `.github/workflows/CICD-staging.yml` and `CICD-production.yml`
+   - Update both `archive` and `install` steps
+   - Add to `required_runtime_bins` array in ACI image validation
+
+3. **Skill Files** (if applicable):
+   - Create `.claude/skills/<tool-name>/SKILL.md` with detailed usage instructions
+   - Include examples, error handling, and troubleshooting tips
+
+4. **Test Coverage**:
+   - Add unit tests for new functionality
+   - Add E2E tests (agent-triggered, not manual CLI invocation)
+
+**Common Mistake**: Adding a new CLI tool without updating the prompt causes the agent to not know about it, leading to fallback behavior (e.g., browser automation instead of API calls).
 
 ### Runtime State
 ```
