@@ -38,6 +38,7 @@ pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
             scheduler_actions: Vec::new(),
             scheduler_actions_error: None,
             token_usage: None,
+            recovery_note: None,
         });
     }
 

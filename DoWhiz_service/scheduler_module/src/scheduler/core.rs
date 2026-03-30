@@ -774,9 +774,7 @@ fn notify_run_task_failure(
             let from = task
                 .reply_from
                 .clone()
-                .or_else(|| std::env::var("ADMIN_EMAIL").ok())
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
+                .or_else(notification_sender_email)
                 .ok_or_else(|| {
                     SchedulerError::TaskFailed(
                         "from address missing for failure notice".to_string(),
@@ -888,20 +886,33 @@ fn build_run_task_report_html(
     )
 }
 
+fn read_non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn notification_sender_email() -> Option<String> {
+    ["POSTMARK_FROM_EMAIL", "HUMAN_APPROVAL_FROM", "ADMIN_EMAIL"]
+        .iter()
+        .find_map(|key| read_non_empty_env(key))
+}
+
 fn send_admin_report(
     report_file_name: String,
     subject: String,
     html_body: String,
     log_label: &str,
 ) -> Result<(), SchedulerError> {
-    let admin_email = std::env::var("ADMIN_EMAIL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let admin_email = read_non_empty_env("ADMIN_EMAIL");
     let Some(admin_email) = admin_email else {
         warn!("ADMIN_EMAIL not set; skipping {}", log_label);
         return Ok(());
     };
+    let from = notification_sender_email().ok_or_else(|| {
+        SchedulerError::TaskFailed("notification sender missing for admin report".to_string())
+    })?;
 
     let report_dir = std::env::temp_dir().join(RUN_TASK_FAILURE_REPORT_DIR);
     std::fs::create_dir_all(&report_dir)?;
@@ -915,7 +926,7 @@ fn send_admin_report(
         subject,
         html_path: report_path,
         attachments_dir: report_attachments,
-        from: Some(admin_email.clone()),
+        from: Some(from),
         to: vec![admin_email],
         cc: vec![],
         bcc: vec![],
@@ -1018,6 +1029,38 @@ fn slack_thread_ts_from_thread_key(thread_key: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = env::var(key).ok();
+            env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     /// Test that the channel whitelist for status sync includes Google Workspace channels.
     /// This is a simple unit test to verify the match statement includes all expected channels.
@@ -1141,6 +1184,32 @@ mod tests {
         assert_eq!(
             super::slack_thread_ts_from_thread_key(Some("1700000000.002")),
             Some("1700000000.002".to_string())
+        );
+    }
+
+    #[test]
+    fn notification_sender_email_prefers_verified_sender_env() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let _admin = EnvGuard::set("ADMIN_EMAIL", "admin@example.com");
+        let _human = EnvGuard::set("HUMAN_APPROVAL_FROM", "verified@example.com");
+        let _postmark = EnvGuard::set("POSTMARK_FROM_EMAIL", "postmark@example.com");
+
+        assert_eq!(
+            notification_sender_email().as_deref(),
+            Some("postmark@example.com")
+        );
+    }
+
+    #[test]
+    fn notification_sender_email_falls_back_to_admin_email() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let _admin = EnvGuard::set("ADMIN_EMAIL", "admin@example.com");
+        let _human = EnvGuard::unset("HUMAN_APPROVAL_FROM");
+        let _postmark = EnvGuard::unset("POSTMARK_FROM_EMAIL");
+
+        assert_eq!(
+            notification_sender_email().as_deref(),
+            Some("admin@example.com")
         );
     }
 }

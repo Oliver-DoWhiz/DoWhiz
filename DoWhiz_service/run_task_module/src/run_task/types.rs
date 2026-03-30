@@ -146,4 +146,5 @@ pub struct RunTaskOutput {
     pub scheduler_actions: Vec<SchedulerActionRequest>,
     pub scheduler_actions_error: Option<String>,
     pub token_usage: Option<TokenUsage>,
+    pub recovery_note: Option<String>,
 }

@@ -123,6 +123,7 @@ pub enum FakeCodexMode {
     Success,
     NoOutput,
     Fail,
+    ReplyThenFail,
     TurnAborted,
     GithubEnvCheck,
     X402EnvCheck,
@@ -159,6 +160,16 @@ echo '{"type":"item.delta","item":{"type":"agent_message"},"delta":{"text":"ok"}
             r#"#!/bin/sh
 echo "simulated failure" >&2
 exit 2
+"#
+        }
+        FakeCodexMode::ReplyThenFail => {
+            r#"#!/bin/sh
+set -e
+echo "<html><body>Recovered reply</body></html>" > reply_email_draft.html
+mkdir -p reply_email_attachments
+echo "attachment" > reply_email_attachments/attachment.txt
+echo "response.failed event received" >&2
+exit 23
 "#
         }
         FakeCodexMode::TurnAborted => {
