@@ -36,6 +36,12 @@ pub struct PoolConfig {
     pub task_queue_name: String,
     /// Queue name for completion signals
     pub completion_queue_name: String,
+    /// ACR registry server
+    pub registry_server: String,
+    /// ACR registry username
+    pub registry_username: String,
+    /// ACR registry password
+    pub registry_password: String,
 }
 
 /// Manages a pool of warm ACI containers.
@@ -62,6 +68,10 @@ impl PoolManager {
             "[pool_manager] Initializing warm pool with {} containers",
             self.target_size
         );
+
+        // Ensure queues exist (idempotent)
+        ensure_queue_exists(&self.config, &self.config.task_queue_name)?;
+        ensure_queue_exists(&self.config, &self.config.completion_queue_name)?;
 
         let mut handles = Vec::new();
         for _ in 0..self.target_size {
@@ -184,6 +194,12 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(&config.memory_gb)
                 .arg("--restart-policy")
                 .arg("Never")
+                .arg("--registry-login-server")
+                .arg(&config.registry_server)
+                .arg("--registry-username")
+                .arg(&config.registry_username)
+                .arg("--registry-password")
+                .arg(&config.registry_password)
                 .arg("--environment-variables")
                 .arg(format!("TASK_QUEUE_NAME={}", config.task_queue_name))
                 .arg(format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name))
@@ -206,6 +222,36 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
     }
 
     Ok(container_name)
+}
+
+/// Ensure an Azure Storage Queue exists (idempotent).
+fn ensure_queue_exists(config: &PoolConfig, queue_name: &str) -> Result<(), String> {
+    eprintln!("[pool_manager] Ensuring queue exists: {}", queue_name);
+
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("queue")
+        .arg("create")
+        .arg("--name")
+        .arg(queue_name)
+        .arg("--account-name")
+        .arg(&config.queue_storage_account)
+        .arg("--account-key")
+        .arg(&config.queue_storage_key)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(|e| format!("az command failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "az storage queue create failed for {}: {}",
+            queue_name,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
 }
 
 /// Delete an ACI container.
@@ -246,6 +292,9 @@ mod tests {
             queue_storage_key: "testkey".to_string(),
             task_queue_name: "test-tasks".to_string(),
             completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
         };
 
         let manager = PoolManager::new(config, Some(5));
@@ -266,6 +315,9 @@ mod tests {
             queue_storage_key: "testkey".to_string(),
             task_queue_name: "test-tasks".to_string(),
             completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
         };
 
         let manager = PoolManager::new(config, None);
