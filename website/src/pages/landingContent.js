@@ -6,7 +6,8 @@ const EN_LANDING_CONTENT = {
     canonicalUrl: 'https://dowhiz.com/',
     ogLocale: 'en_US',
     themeColor: '#2C2C2E',
-    htmlLang: 'en'
+    htmlLang: 'en',
+    robots: 'index, follow'
   },
   nav: {
     homePath: '/',
@@ -581,10 +582,11 @@ const ZH_LANDING_CONTENT = {
     title: 'DoWhiz 中文 | Email、Slack、GitHub 里的 AI 数字员工',
     description:
       '先从 Email、Slack 或 Discord 里的 Oliver 开始。DoWhiz 会把真实请求推进到 GitHub、文档和更多协作工具里，直接返回完成结果。',
-    canonicalUrl: 'https://dowhiz.com/cn',
+    canonicalUrl: 'https://dowhiz.com/',
     ogLocale: 'zh_CN',
     themeColor: '#2C2C2E',
-    htmlLang: 'zh-CN'
+    htmlLang: 'zh-CN',
+    robots: 'noindex, follow'
   },
   nav: {
     homePath: '/cn',
