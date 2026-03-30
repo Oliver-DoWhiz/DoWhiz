@@ -26,6 +26,9 @@ Open the local URL shown in the terminal (defaults to http://localhost:5173).
 - Production build: `npm run build`
 - Preview production build: `npm run preview`
 - Responsive audit: `npm run test:responsive`
+- SEO artifact generation: `npm run seo:build`
+- SEO keyword report: `npm run seo:report`
+- New SEO blog scaffold: `npm run seo:new-blog -- --slug my-post --headline "My headline" --description "Meta description" --owner Oliver`
 - SEO crawl report: `npm run seo:crawl`
 
 Build output goes to `website/dist/`.
@@ -69,6 +72,7 @@ If you are using a dedicated API subdomain (example: `api.dowhiz.com`) for the R
 - `website/src/components/`: reusable UI blocks for landing/workspace sections.
 - `website/src/styles/`: modular style layers (`tokens`, `base`, `landing`, `layout`, `responsive`).
 - `website/public/`: static pages and assets copied as-is.
+- `website/seo/`: SEO source-of-truth data, templates, fixtures, and generated exports.
 - `website/vercel.json`: hosting redirects/rewrites for Vercel deployment.
 
 ## Core route map
