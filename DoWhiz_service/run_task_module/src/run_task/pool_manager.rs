@@ -69,6 +69,10 @@ impl PoolManager {
             self.target_size
         );
 
+        // Ensure queues exist (idempotent)
+        ensure_queue_exists(&self.config, &self.config.task_queue_name)?;
+        ensure_queue_exists(&self.config, &self.config.completion_queue_name)?;
+
         let mut handles = Vec::new();
         for _ in 0..self.target_size {
             let config = self.config.clone();
@@ -218,6 +222,36 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
     }
 
     Ok(container_name)
+}
+
+/// Ensure an Azure Storage Queue exists (idempotent).
+fn ensure_queue_exists(config: &PoolConfig, queue_name: &str) -> Result<(), String> {
+    eprintln!("[pool_manager] Ensuring queue exists: {}", queue_name);
+
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("queue")
+        .arg("create")
+        .arg("--name")
+        .arg(queue_name)
+        .arg("--account-name")
+        .arg(&config.queue_storage_account)
+        .arg("--account-key")
+        .arg(&config.queue_storage_key)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(|e| format!("az command failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "az storage queue create failed for {}: {}",
+            queue_name,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
 }
 
 /// Delete an ACI container.
