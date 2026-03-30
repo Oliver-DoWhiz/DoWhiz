@@ -1066,6 +1066,7 @@ function LandingPage({ locale }) {
     updateMetaContent('meta[property="og:locale"]', content.metadata.ogLocale);
     updateMetaContent('meta[name="twitter:title"]', content.metadata.title);
     updateMetaContent('meta[name="twitter:description"]', content.metadata.description);
+    updateMetaContent('meta[name="robots"]', content.metadata.robots);
     updateMetaContent('meta[name="theme-color"]', content.metadata.themeColor);
     updateLinkHref('link[rel="canonical"]', content.metadata.canonicalUrl);
   }, [content.metadata]);

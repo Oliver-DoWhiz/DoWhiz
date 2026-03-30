@@ -1,0 +1,689 @@
+{
+  "version": 1,
+  "updated_at": "2026-03-30",
+  "pages": [
+    {
+      "id": "home",
+      "sort_order": 10,
+      "slug": "home",
+      "url_path": "/",
+      "canonical_url": "https://dowhiz.com/",
+      "file_path": "index.html",
+      "title": "DoWhiz | AI digital employees in email, Slack, and GitHub",
+      "description": "Start with Oliver in email, Slack, or Discord. DoWhiz turns real requests into finished work across GitHub, docs, and shared tools.",
+      "page_type": "landing",
+      "primary_keyword": "AI digital employees",
+      "secondary_keywords": [
+        "digital employees",
+        "AI employees",
+        "multi-channel AI work"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "blog-index",
+      "sort_order": 20,
+      "slug": "blog",
+      "url_path": "/blog/",
+      "canonical_url": "https://dowhiz.com/blog/",
+      "file_path": "public/blog/index.html",
+      "title": "DoWhiz Blog | Founder Workspace and AI Operations Guides",
+      "description": "Read founder workspace updates, AI operations guides, and multi-channel automation playbooks for email, GitHub, Slack, and Google Docs.",
+      "page_type": "blog_index",
+      "primary_keyword": "AI operations guides",
+      "secondary_keywords": [
+        "founder workspace guides",
+        "workflow automation playbooks"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "blog-startup-workspace-for-founders-product-update",
+      "sort_order": 30,
+      "slug": "startup-workspace-for-founders-product-update",
+      "url_path": "/blog/startup-workspace-for-founders-product-update/",
+      "canonical_url": "https://dowhiz.com/blog/startup-workspace-for-founders-product-update/",
+      "file_path": "public/blog/startup-workspace-for-founders-product-update/index.html",
+      "title": "Startup Workspace Product Update for Founders | DoWhiz",
+      "description": "See how DoWhiz is refactoring into a startup workspace for founders and one-person companies with Team Brief, Team Workspace, and AI chief of staff guidance.",
+      "page_type": "blog_post",
+      "primary_keyword": "startup workspace for founders",
+      "secondary_keywords": [
+        "AI chief of staff for founders",
+        "one-person company workspace"
+      ],
+      "lastmod": "2026-03-28",
+      "published_at": "2026-03-19",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "featured_on_blog_index": true,
+      "blog_tag": "Product Update",
+      "blog_index_title": "Startup workspace for founders: DoWhiz product update",
+      "blog_related_description": "New focus: Team Brief setup, Team Workspace, and Chief of Staff recommendations.",
+      "blog_summary": "How DoWhiz is moving from a channel-only assistant into a startup workspace for founders and one-person companies with Team Brief onboarding, Team Workspace, and AI chief of staff recommendations.",
+      "blog_highlights": [
+        "Primary keywords: startup workspace for founders, AI chief of staff for founders",
+        "Covers Team Brief onboarding, Team Workspace, recommendation modes, and current product focus",
+        "Owner: Oliver"
+      ]
+    },
+    {
+      "id": "blog-ai-workflow-automation-checklist",
+      "sort_order": 31,
+      "slug": "ai-workflow-automation-checklist",
+      "url_path": "/blog/ai-workflow-automation-checklist/",
+      "canonical_url": "https://dowhiz.com/blog/ai-workflow-automation-checklist/",
+      "file_path": "public/blog/ai-workflow-automation-checklist/index.html",
+      "title": "AI Workflow Automation Checklist for Lean Teams | DoWhiz",
+      "description": "Use this AI workflow automation checklist to launch reliable multi-channel task delivery with clear ownership, approvals, and measurable outcomes.",
+      "page_type": "blog_post",
+      "primary_keyword": "ai workflow automation checklist",
+      "secondary_keywords": [
+        "workflow automation rollout checklist",
+        "AI workflow automation"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "AI workflow automation checklist for lean teams",
+      "blog_related_description": "Owner: Rachel - Status: Published",
+      "blog_summary": "A practical rollout framework for trigger design, quality gates, and weekly delivery metrics.",
+      "blog_highlights": [
+        "Primary keyword: AI workflow automation checklist",
+        "Includes title, meta description, H1, and internal links",
+        "Owner: Rachel"
+      ]
+    },
+    {
+      "id": "blog-github-issue-automation-best-practices",
+      "sort_order": 32,
+      "slug": "github-issue-automation-best-practices",
+      "url_path": "/blog/github-issue-automation-best-practices/",
+      "canonical_url": "https://dowhiz.com/blog/github-issue-automation-best-practices/",
+      "file_path": "public/blog/github-issue-automation-best-practices/index.html",
+      "title": "GitHub Issue Automation Best Practices | DoWhiz",
+      "description": "Learn GitHub issue automation best practices to move from assignment to tested pull request with clearer scope, faster delivery, and cleaner reviews.",
+      "page_type": "blog_post",
+      "primary_keyword": "github issue automation best practices",
+      "secondary_keywords": [
+        "github issue automation",
+        "issue to PR workflow"
+      ],
+      "lastmod": "2026-03-28",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "GitHub issue automation best practices for engineering teams",
+      "blog_related_description": "Owner: Devin - Status: Published",
+      "blog_summary": "A repeatable issue-to-PR model focused on scope contracts, validation, and clean reviewer handoff.",
+      "blog_highlights": [
+        "Primary keyword: GitHub issue automation best practices",
+        "Owner: Devin"
+      ]
+    },
+    {
+      "id": "blog-email-task-automation-playbook",
+      "sort_order": 33,
+      "slug": "email-task-automation-playbook",
+      "url_path": "/blog/email-task-automation-playbook/",
+      "canonical_url": "https://dowhiz.com/blog/email-task-automation-playbook/",
+      "file_path": "public/blog/email-task-automation-playbook/index.html",
+      "title": "Email Task Automation Playbook for Operations Teams | DoWhiz",
+      "description": "Use this email task automation playbook to convert inbound threads into structured execution, progress updates, and complete deliverables.",
+      "page_type": "blog_post",
+      "primary_keyword": "email task automation playbook",
+      "secondary_keywords": [
+        "email task automation",
+        "inbox automation playbook"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "Email task automation playbook for operations teams",
+      "blog_related_description": "Owner: Oliver - Status: Published",
+      "blog_summary": "A structured approach to inbound email intake, execution tracking, and concise final replies.",
+      "blog_highlights": [
+        "Primary keyword: email task automation playbook",
+        "Owner: Oliver"
+      ]
+    },
+    {
+      "id": "blog-slack-task-automation-ops-guide",
+      "sort_order": 34,
+      "slug": "slack-task-automation-ops-guide",
+      "url_path": "/blog/slack-task-automation-ops-guide/",
+      "canonical_url": "https://dowhiz.com/blog/slack-task-automation-ops-guide/",
+      "file_path": "public/blog/slack-task-automation-ops-guide/index.html",
+      "title": "Slack Task Automation Guide for Operations Leaders | DoWhiz",
+      "description": "This Slack task automation guide covers triage rules, ownership routing, and response patterns that keep operations channels fast and predictable.",
+      "page_type": "blog_post",
+      "primary_keyword": "slack task automation guide",
+      "secondary_keywords": [
+        "slack task automation",
+        "slack operations automation"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "Slack task automation guide for operations leaders",
+      "blog_related_description": "Owner: Rachel - Status: Published",
+      "blog_summary": "Channel governance and routing patterns that keep Slack actions visible and low-noise.",
+      "blog_highlights": [
+        "Primary keyword: Slack task automation guide",
+        "Owner: Rachel"
+      ]
+    },
+    {
+      "id": "blog-google-docs-automation-for-meeting-followups",
+      "sort_order": 35,
+      "slug": "google-docs-automation-for-meeting-followups",
+      "url_path": "/blog/google-docs-automation-for-meeting-followups/",
+      "canonical_url": "https://dowhiz.com/blog/google-docs-automation-for-meeting-followups/",
+      "file_path": "public/blog/google-docs-automation-for-meeting-followups/index.html",
+      "title": "Google Docs Automation for Meeting Follow-Ups | DoWhiz",
+      "description": "Google Docs automation can turn meeting notes into tracked owners, due dates, and follow-up messages without manual copy-paste.",
+      "page_type": "blog_post",
+      "primary_keyword": "google docs automation for meeting follow-ups",
+      "secondary_keywords": [
+        "google docs automation",
+        "meeting follow-up automation"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "Google Docs automation for meeting follow-ups",
+      "blog_related_description": "Owner: Maggie - Status: Published",
+      "blog_summary": "Convert comments and notes into owner-tracked actions with clear due dates and status updates.",
+      "blog_highlights": [
+        "Primary keyword: Google Docs automation for meeting follow-ups",
+        "Owner: Maggie"
+      ]
+    },
+    {
+      "id": "blog-digital-employee-onboarding-checklist",
+      "sort_order": 36,
+      "slug": "digital-employee-onboarding-checklist",
+      "url_path": "/blog/digital-employee-onboarding-checklist/",
+      "canonical_url": "https://dowhiz.com/blog/digital-employee-onboarding-checklist/",
+      "file_path": "public/blog/digital-employee-onboarding-checklist/index.html",
+      "title": "Digital Employee Onboarding Checklist for New Teams | DoWhiz",
+      "description": "Use this digital employee onboarding checklist to configure channels, permissions, memory, and acceptance criteria before production rollout.",
+      "page_type": "blog_post",
+      "primary_keyword": "digital employee onboarding checklist",
+      "secondary_keywords": [
+        "digital employee onboarding",
+        "AI employee onboarding checklist"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "Digital employee onboarding checklist for new teams",
+      "blog_related_description": "Owner: Oliver - Status: Published",
+      "blog_summary": "Step-by-step onboarding guidance for channel setup, permissions, memory, and done criteria.",
+      "blog_highlights": [
+        "Primary keyword: digital employee onboarding checklist",
+        "Owner: Oliver"
+      ]
+    },
+    {
+      "id": "blog-ai-agent-memory-best-practices",
+      "sort_order": 37,
+      "slug": "ai-agent-memory-best-practices",
+      "url_path": "/blog/ai-agent-memory-best-practices/",
+      "canonical_url": "https://dowhiz.com/blog/ai-agent-memory-best-practices/",
+      "file_path": "public/blog/ai-agent-memory-best-practices/index.html",
+      "title": "AI Agent Memory Best Practices Across Channels | DoWhiz",
+      "description": "AI agent memory best practices for operations teams: what to persist, what to avoid, and how to keep context accurate across channels.",
+      "page_type": "blog_post",
+      "primary_keyword": "ai agent memory best practices",
+      "secondary_keywords": [
+        "AI agent memory",
+        "cross-channel memory management"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "AI agent memory best practices across channels",
+      "blog_related_description": "Owner: Maggie - Status: Published",
+      "blog_summary": "Rules for storing durable context while reducing stale or risky memory entries.",
+      "blog_highlights": [
+        "Primary keyword: AI agent memory best practices",
+        "Owner: Maggie"
+      ]
+    },
+    {
+      "id": "blog-ai-employee-trust-safety-governance",
+      "sort_order": 38,
+      "slug": "ai-employee-trust-safety-governance",
+      "url_path": "/blog/ai-employee-trust-safety-governance/",
+      "canonical_url": "https://dowhiz.com/blog/ai-employee-trust-safety-governance/",
+      "file_path": "public/blog/ai-employee-trust-safety-governance/index.html",
+      "title": "AI Employee Trust, Safety, and Governance Framework | DoWhiz",
+      "description": "A practical governance framework for AI employees covering permissions, auditing, escalation paths, and safe execution defaults.",
+      "page_type": "blog_post",
+      "primary_keyword": "ai employee trust safety governance",
+      "secondary_keywords": [
+        "AI employee governance",
+        "AI employee safety framework"
+      ],
+      "lastmod": "2026-03-11",
+      "published_at": "2026-02-26",
+      "status": "published",
+      "include_in_sitemap": true,
+      "include_in_blog_index": true,
+      "blog_tag": "SEO",
+      "blog_index_title": "AI employee trust, safety, and governance framework",
+      "blog_related_description": "Owner: Claw - Status: Published",
+      "blog_summary": "Governance basics for permission scoping, auditable task trails, and escalation triggers.",
+      "blog_highlights": [
+        "Primary keyword: AI employee trust safety governance",
+        "Owner: Claw"
+      ]
+    },
+    {
+      "id": "demo-videos",
+      "sort_order": 40,
+      "slug": "demo-videos",
+      "url_path": "/demo-videos/",
+      "canonical_url": "https://dowhiz.com/demo-videos/",
+      "file_path": "public/demo-videos/index.html",
+      "title": "DoWhiz Demo Videos | AI Digital Employee Walkthroughs",
+      "description": "Watch DoWhiz demo videos with one full desktop walkthrough and quick mobile examples across channels.",
+      "page_type": "resource",
+      "primary_keyword": "DoWhiz demo videos",
+      "secondary_keywords": [
+        "AI digital employee demo",
+        "DoWhiz walkthrough"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "privacy",
+      "sort_order": 50,
+      "slug": "privacy",
+      "url_path": "/privacy/",
+      "canonical_url": "https://dowhiz.com/privacy/",
+      "file_path": "public/privacy/index.html",
+      "title": "DoWhiz Privacy | Multi-Channel Data Handling and Access",
+      "description": "DoWhiz privacy policy covering multi-channel data handling, integration permissions, and our no-user-credentials access model.",
+      "page_type": "policy",
+      "primary_keyword": "DoWhiz privacy",
+      "secondary_keywords": [
+        "AI digital employee privacy",
+        "DoWhiz data handling"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "terms",
+      "sort_order": 60,
+      "slug": "terms",
+      "url_path": "/terms/",
+      "canonical_url": "https://dowhiz.com/terms/",
+      "file_path": "public/terms/index.html",
+      "title": "DoWhiz Terms | Multi-Channel Digital Employee Service Terms",
+      "description": "DoWhiz terms of service for multi-channel digital employee usage, integration authorization, and access responsibilities.",
+      "page_type": "policy",
+      "primary_keyword": "DoWhiz terms",
+      "secondary_keywords": [
+        "DoWhiz terms of service",
+        "AI digital employee terms"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "user-guide",
+      "sort_order": 70,
+      "slug": "user-guide",
+      "url_path": "/user-guide/",
+      "canonical_url": "https://dowhiz.com/user-guide/",
+      "file_path": "public/user-guide/index.html",
+      "title": "DoWhiz User Guide | Multi-Channel Triggers and Shared Memory",
+      "description": "DoWhiz user guide for multi-channel triggers, tool-native execution, and shared memory across email, chat, GitHub, and shared workspaces.",
+      "page_type": "guide",
+      "primary_keyword": "DoWhiz user guide",
+      "secondary_keywords": [
+        "multi-channel triggers",
+        "shared memory guide"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "help-center",
+      "sort_order": 80,
+      "slug": "help-center",
+      "url_path": "/help-center/",
+      "canonical_url": "https://dowhiz.com/help-center/",
+      "file_path": "public/help-center/index.html",
+      "title": "DoWhiz Help Center FAQ | Setup, Integrations, Security",
+      "description": "Get answers about setup, integrations, permissions, memory, outputs, and support for DoWhiz AI digital employees.",
+      "page_type": "faq",
+      "primary_keyword": "DoWhiz FAQ",
+      "secondary_keywords": [
+        "DoWhiz help center",
+        "DoWhiz support"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "integrations",
+      "sort_order": 90,
+      "slug": "integrations",
+      "url_path": "/integrations/",
+      "canonical_url": "https://dowhiz.com/integrations/",
+      "file_path": "public/integrations/index.html",
+      "title": "DoWhiz Integrations | Email, Slack, GitHub, Docs, Notion",
+      "description": "See how DoWhiz AI digital employees work across email, Slack, Discord, GitHub, Google Docs, and Notion with trigger-to-outcome examples.",
+      "page_type": "integration_hub",
+      "primary_keyword": "DoWhiz integrations",
+      "secondary_keywords": [
+        "email slack github docs automation",
+        "DoWhiz channels"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "solution-ai-workflow-automation",
+      "sort_order": 100,
+      "slug": "ai-workflow-automation",
+      "url_path": "/solutions/ai-workflow-automation/",
+      "canonical_url": "https://dowhiz.com/solutions/ai-workflow-automation/",
+      "file_path": "public/solutions/ai-workflow-automation/index.html",
+      "title": "AI Workflow Automation for Teams | DoWhiz",
+      "description": "Automate cross-tool workflows with AI digital employees. Trigger from email, Slack, GitHub, and docs, then receive finished outputs in-thread.",
+      "page_type": "solution",
+      "primary_keyword": "ai workflow automation",
+      "secondary_keywords": [
+        "workflow automation for teams",
+        "cross-tool AI workflow automation"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "solution-github-issue-automation",
+      "sort_order": 110,
+      "slug": "github-issue-automation",
+      "url_path": "/solutions/github-issue-automation/",
+      "canonical_url": "https://dowhiz.com/solutions/github-issue-automation/",
+      "file_path": "public/solutions/github-issue-automation/index.html",
+      "title": "GitHub Issue Automation to PR Delivery | DoWhiz",
+      "description": "Turn assigned GitHub issues into scoped implementation updates, tested pull requests, and concise review summaries with DoWhiz.",
+      "page_type": "solution",
+      "primary_keyword": "github issue automation",
+      "secondary_keywords": [
+        "issue to PR automation",
+        "GitHub workflow automation"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "solution-slack-task-automation",
+      "sort_order": 120,
+      "slug": "slack-task-automation",
+      "url_path": "/solutions/slack-task-automation/",
+      "canonical_url": "https://dowhiz.com/solutions/slack-task-automation/",
+      "file_path": "public/solutions/slack-task-automation/index.html",
+      "title": "Slack Task Automation for Execution Teams | DoWhiz",
+      "description": "Convert Slack requests and thread mentions into structured execution plans, owner-tracked action items, and delivered outputs.",
+      "page_type": "solution",
+      "primary_keyword": "slack task automation",
+      "secondary_keywords": [
+        "slack workflow automation",
+        "slack execution automation"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "solution-email-task-automation",
+      "sort_order": 130,
+      "slug": "email-task-automation",
+      "url_path": "/solutions/email-task-automation/",
+      "canonical_url": "https://dowhiz.com/solutions/email-task-automation/",
+      "file_path": "public/solutions/email-task-automation/index.html",
+      "title": "Email Task Automation for Operations | DoWhiz",
+      "description": "Route email requests to DoWhiz digital employees and get completed deliverables, summaries, and follow-up actions back in the same thread.",
+      "page_type": "solution",
+      "primary_keyword": "email task automation",
+      "secondary_keywords": [
+        "email workflow automation",
+        "inbox task automation"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "solution-google-docs-automation",
+      "sort_order": 140,
+      "slug": "google-docs-automation",
+      "url_path": "/solutions/google-docs-automation/",
+      "canonical_url": "https://dowhiz.com/solutions/google-docs-automation/",
+      "file_path": "public/solutions/google-docs-automation/index.html",
+      "title": "Google Docs Action Item Automation | DoWhiz",
+      "description": "Use @mentions in Google Docs comments to generate action items, rewrites, summaries, and tracked follow-ups with shared context.",
+      "page_type": "solution",
+      "primary_keyword": "google docs automation",
+      "secondary_keywords": [
+        "google docs action item automation",
+        "docs follow-up automation"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "trust-safety",
+      "sort_order": 150,
+      "slug": "trust-safety",
+      "url_path": "/trust-safety/",
+      "canonical_url": "https://dowhiz.com/trust-safety/",
+      "file_path": "public/trust-safety/index.html",
+      "title": "DoWhiz Trust & Safety | Secure AI Digital Employee Ops",
+      "description": "See how DoWhiz secures AI digital employee workflows with isolated execution, permission-based access, auditability, and no credential handoff.",
+      "page_type": "trust",
+      "primary_keyword": "AI digital employee security",
+      "secondary_keywords": [
+        "AI employee trust and safety",
+        "secure AI operations"
+      ],
+      "lastmod": "2026-03-28",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-oliver",
+      "sort_order": 160,
+      "slug": "oliver",
+      "url_path": "/agents/oliver/",
+      "canonical_url": "https://dowhiz.com/agents/oliver/",
+      "file_path": "public/agents/oliver/index.html",
+      "title": "Oliver | DoWhiz Generalist Digital Employee",
+      "description": "Meet Oliver, the DoWhiz Generalist digital employee for multi-channel requests and tool-native delivery.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Oliver",
+      "secondary_keywords": [
+        "generalist digital employee",
+        "DoWhiz generalist"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-maggie",
+      "sort_order": 170,
+      "slug": "maggie",
+      "url_path": "/agents/maggie/",
+      "canonical_url": "https://dowhiz.com/agents/maggie/",
+      "file_path": "public/agents/maggie/index.html",
+      "title": "Maggie | DoWhiz TPM Digital Employee",
+      "description": "Meet Maggie, the DoWhiz TPM digital employee for planning, status, and cross-team follow-up workflows.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Maggie",
+      "secondary_keywords": [
+        "TPM digital employee",
+        "project coordination digital employee"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-devin",
+      "sort_order": 180,
+      "slug": "devin",
+      "url_path": "/agents/devin/",
+      "canonical_url": "https://dowhiz.com/agents/devin/",
+      "file_path": "public/agents/devin/index.html",
+      "title": "Devin | DoWhiz Coder Digital Employee",
+      "description": "Meet Devin, the DoWhiz Coder digital employee for issue-to-PR execution and engineering handoffs.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Devin",
+      "secondary_keywords": [
+        "coder digital employee",
+        "engineering digital employee"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-lumio",
+      "sort_order": 190,
+      "slug": "lumio",
+      "url_path": "/agents/lumio/",
+      "canonical_url": "https://dowhiz.com/agents/lumio/",
+      "file_path": "public/agents/lumio/index.html",
+      "title": "Lumio | DoWhiz CEO Digital Employee",
+      "description": "Meet Lumio, the DoWhiz CEO digital employee for strategic planning and executive decision support.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Lumio",
+      "secondary_keywords": [
+        "CEO digital employee",
+        "strategy digital employee"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-claw",
+      "sort_order": 200,
+      "slug": "claw",
+      "url_path": "/agents/claw/",
+      "canonical_url": "https://dowhiz.com/agents/claw/",
+      "file_path": "public/agents/claw/index.html",
+      "title": "Claw | DoWhiz Workflow Specialist",
+      "description": "Meet Claw, the DoWhiz workflow specialist focused on safe, accessible, tool-native automation across channels.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Claw",
+      "secondary_keywords": [
+        "workflow specialist digital employee",
+        "workflow automation specialist"
+      ],
+      "lastmod": "2026-03-13",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-jeffery",
+      "sort_order": 210,
+      "slug": "jeffery",
+      "url_path": "/agents/jeffery/",
+      "canonical_url": "https://dowhiz.com/agents/jeffery/",
+      "file_path": "public/agents/jeffery/index.html",
+      "title": "Jeffery | DoWhiz DeepTutor Digital Employee",
+      "description": "Meet Jeffery, the DoWhiz DeepTutor digital employee for document comprehension and structured takeaways.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Jeffery",
+      "secondary_keywords": [
+        "document comprehension digital employee",
+        "DeepTutor digital employee"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-anna",
+      "sort_order": 220,
+      "slug": "anna",
+      "url_path": "/agents/anna/",
+      "canonical_url": "https://dowhiz.com/agents/anna/",
+      "file_path": "public/agents/anna/index.html",
+      "title": "Anna | DoWhiz Role Design Digital Employee",
+      "description": "Meet Anna, the DoWhiz role-design digital employee for defining new specialist scopes and pilot plans.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Anna",
+      "secondary_keywords": [
+        "role design digital employee",
+        "specialist role planning"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    },
+    {
+      "id": "agent-rachel",
+      "sort_order": 230,
+      "slug": "rachel",
+      "url_path": "/agents/rachel/",
+      "canonical_url": "https://dowhiz.com/agents/rachel/",
+      "file_path": "public/agents/rachel/index.html",
+      "title": "Rachel | DoWhiz GTM Specialist Digital Employee",
+      "description": "Meet Rachel, the DoWhiz GTM specialist digital employee for launch planning and per-channel content operations.",
+      "page_type": "agent_profile",
+      "primary_keyword": "DoWhiz Rachel",
+      "secondary_keywords": [
+        "GTM specialist digital employee",
+        "launch planning digital employee"
+      ],
+      "lastmod": "2026-03-11",
+      "status": "published",
+      "include_in_sitemap": true
+    }
+  ]
+}
