@@ -42,6 +42,8 @@ pub struct PoolConfig {
     pub registry_username: String,
     /// ACR registry password
     pub registry_password: String,
+    /// Azure location/region
+    pub location: String,
 }
 
 /// Manages a pool of warm ACI containers.
@@ -194,6 +196,8 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(&config.memory_gb)
                 .arg("--restart-policy")
                 .arg("Never")
+                .arg("--os-type")
+                .arg("Linux")
                 .arg("--registry-login-server")
                 .arg(&config.registry_server)
                 .arg("--registry-username")
@@ -207,6 +211,9 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key))
                 .arg("--command-line")
                 .arg("/bin/bash -lc 'warm_worker.sh'")
+                .arg("--location")
+                .arg(&config.location)
+                .arg("--only-show-errors")
                 .output()
         }
     })
@@ -295,6 +302,7 @@ mod tests {
             registry_server: "testregistry.azurecr.io".to_string(),
             registry_username: "testuser".to_string(),
             registry_password: "testpass".to_string(),
+            location: "westus2".to_string(),
         };
 
         let manager = PoolManager::new(config, Some(5));
@@ -318,6 +326,7 @@ mod tests {
             registry_server: "testregistry.azurecr.io".to_string(),
             registry_username: "testuser".to_string(),
             registry_password: "testpass".to_string(),
+            location: "westus2".to_string(),
         };
 
         let manager = PoolManager::new(config, None);
