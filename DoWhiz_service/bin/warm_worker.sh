@@ -25,11 +25,16 @@ echo "[warm_worker] Starting, polling queue: $TASK_QUEUE"
 
 while true; do
     # Get message from queue
-    MSG=$(az storage message get \
+    AZ_OUTPUT=$(az storage message get \
         --queue-name "$TASK_QUEUE" \
         --account-name "$STORAGE_ACCOUNT" \
         --account-key "$STORAGE_KEY" \
-        --output json 2>/dev/null | jq -r '.[0] // empty')
+        --output json 2>&1) || {
+        echo "[warm_worker] az command failed: $AZ_OUTPUT" >&2
+        sleep "$POLL_INTERVAL"
+        continue
+    }
+    MSG=$(echo "$AZ_OUTPUT" | jq -r '.[0] // empty' 2>/dev/null || echo "")
 
     if [ -n "$MSG" ]; then
         MESSAGE_ID=$(echo "$MSG" | jq -r '.id')
