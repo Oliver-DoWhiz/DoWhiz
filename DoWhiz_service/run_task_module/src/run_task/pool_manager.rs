@@ -12,6 +12,7 @@
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 const DEFAULT_POOL_SIZE: usize = 5;
@@ -51,6 +52,8 @@ pub struct PoolManager {
     config: PoolConfig,
     active_count: AtomicUsize,
     target_size: usize,
+    /// Tokio runtime handle captured during initialization for use in sync contexts
+    runtime_handle: OnceLock<tokio::runtime::Handle>,
 }
 
 impl PoolManager {
@@ -60,12 +63,16 @@ impl PoolManager {
             config,
             active_count: AtomicUsize::new(0),
             target_size: target_size.unwrap_or(DEFAULT_POOL_SIZE),
+            runtime_handle: OnceLock::new(),
         }
     }
 
     /// Initialize the pool by provisioning N warm containers.
     /// Containers start polling the task queue immediately.
     pub async fn initialize(&self) -> Result<(), String> {
+        // Capture the Tokio runtime handle for later use in sync contexts (replenish)
+        let _ = self.runtime_handle.set(tokio::runtime::Handle::current());
+
         eprintln!(
             "[pool_manager] Initializing warm pool with {} containers",
             self.target_size
@@ -117,10 +124,19 @@ impl PoolManager {
             return;
         }
 
+        // Use the runtime handle captured during initialize() to spawn from sync context
+        let handle = match self.runtime_handle.get() {
+            Some(h) => h,
+            None => {
+                eprintln!("[pool_manager] No runtime handle available, skipping replenish");
+                return;
+            }
+        };
+
         let config = self.config.clone();
         let active_count = &self.active_count as *const AtomicUsize as usize;
 
-        tokio::spawn(async move {
+        handle.spawn(async move {
             eprintln!("[pool_manager] Replenishing pool...");
             match provision_warm_container(&config).await {
                 Ok(name) => {
