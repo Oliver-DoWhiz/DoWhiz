@@ -30,6 +30,7 @@ use crate::secrets_store::{
 use crate::slack_store::{emit_slack_channel_not_found_alert, resolve_slack_bot_token_for_runtime};
 use crate::thread_state::{current_thread_epoch, find_thread_state_path};
 use crate::user_store::lookup_user_id_by_identifier;
+use crate::warm_pool::{get_global_pool_manager, is_warm_pool_enabled};
 use run_task_module::UserIdentities;
 use uuid::Uuid;
 
@@ -1372,31 +1373,87 @@ impl TaskExecutor for ModuleExecutor {
                     thread_epoch: task.thread_epoch,
                     thread_state_path: task.thread_state_path.clone(),
                 };
-                let output = match run_task_module::run_task(&params) {
-                    Ok(output) => output,
-                    Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
-                        info!(
-                            "run_task superseded while executing in {}: {}",
-                            task.workspace_dir.display(),
-                            reason
+                // Choose execution path: warm pool or direct ACI
+                let output = if is_warm_pool_enabled() {
+                    if let Some(pool_manager) = get_global_pool_manager() {
+                        // Build task JSON for warm pool
+                        let task_json = json!({
+                            "model": task.model_name,
+                        });
+                        let timeout = Duration::from_secs(
+                            std::env::var("RUN_TASK_TIMEOUT_SECS")
+                                .ok()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(3600),
                         );
-                        return Ok(superseded_task_execution(reason));
-                    }
-                    Err(err) => {
-                        if let Some(account_id) = account_id {
-                            track_scheduler_event(
-                                "task_failed",
-                                account_id,
-                                Some(format!("task_failed:{}:run_task", task_dedupe_key)),
-                                task,
-                                json!({
-                                    "error_reason": "run_task_failed",
-                                    "error": err.to_string(),
-                                    "channel": task.channel.to_string(),
-                                }),
-                            );
+                        let mut timing = run_task_module::TaskTimingBuilder::new(
+                            &task.workspace_dir.display().to_string(),
+                        );
+
+                        match run_task_module::run_codex_warm_pool(
+                            &pool_manager,
+                            &task.workspace_dir,
+                            &task_json,
+                            timeout,
+                            &mut timing,
+                        ) {
+                            Ok(output) => output,
+                            Err(err) => {
+                                if let Some(account_id) = account_id {
+                                    track_scheduler_event(
+                                        "task_failed",
+                                        account_id,
+                                        Some(format!("task_failed:{}:warm_pool", task_dedupe_key)),
+                                        task,
+                                        json!({
+                                            "error_reason": "warm_pool_failed",
+                                            "error": err.to_string(),
+                                            "channel": task.channel.to_string(),
+                                        }),
+                                    );
+                                }
+                                return Err(SchedulerError::TaskFailed(err.to_string()));
+                            }
                         }
-                        return Err(SchedulerError::TaskFailed(err.to_string()));
+                    } else {
+                        warn!("Warm pool enabled but not initialized, falling back to direct ACI");
+                        match run_task_module::run_task(&params) {
+                            Ok(output) => output,
+                            Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                                return Ok(superseded_task_execution(reason));
+                            }
+                            Err(err) => {
+                                return Err(SchedulerError::TaskFailed(err.to_string()));
+                            }
+                        }
+                    }
+                } else {
+                    match run_task_module::run_task(&params) {
+                        Ok(output) => output,
+                        Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                            info!(
+                                "run_task superseded while executing in {}: {}",
+                                task.workspace_dir.display(),
+                                reason
+                            );
+                            return Ok(superseded_task_execution(reason));
+                        }
+                        Err(err) => {
+                            if let Some(account_id) = account_id {
+                                track_scheduler_event(
+                                    "task_failed",
+                                    account_id,
+                                    Some(format!("task_failed:{}:run_task", task_dedupe_key)),
+                                    task,
+                                    json!({
+                                        "error_reason": "run_task_failed",
+                                        "error": err.to_string(),
+                                        "channel": task.channel.to_string(),
+                                    }),
+                                );
+                            }
+                            return Err(SchedulerError::TaskFailed(err.to_string()));
+                        }
                     }
                 };
 
@@ -1544,7 +1601,7 @@ impl TaskExecutor for ModuleExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
                     superseded: false,
-                    terminal_note: None,
+                    terminal_note: output.recovery_note,
                 })
             }
             TaskKind::Noop => Ok(TaskExecution::empty()),

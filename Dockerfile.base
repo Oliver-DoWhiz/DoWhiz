@@ -30,6 +30,7 @@ RUN if [ -f /etc/apt/sources.list ]; then \
     git \
     gh \
     docker.io \
+    jq \
     pandoc \
     libreoffice \
     poppler-utils \
@@ -75,6 +76,9 @@ RUN arch="$(dpkg --print-architecture)" \
   && curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/${pkg}" -o /tmp/cloudflared.deb \
   && dpkg -i /tmp/cloudflared.deb \
   && rm /tmp/cloudflared.deb
+
+# Install Azure CLI for warm pool queue operations
+RUN curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
 
 # Install Python packages required by skills
 RUN python3 -m pip install --break-system-packages --no-cache-dir \

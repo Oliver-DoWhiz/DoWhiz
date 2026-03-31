@@ -265,6 +265,65 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
     }
 }
 
+fn reply_artifact_ready(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if path.file_name().and_then(|value| value.to_str()) == Some(".notion_api_replied") {
+        return true;
+    }
+    match fs::read_to_string(path) {
+        Ok(contents) => !contents.trim().is_empty(),
+        Err(_) => fs::metadata(path)
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false),
+    }
+}
+
+fn maybe_recover_from_ready_reply_artifact(
+    request: &RunTaskRequest<'_>,
+    expected_reply_path: &Path,
+    exit_status: Option<i32>,
+    failure_output: &str,
+) -> Option<String> {
+    if request.reply_to.is_empty() || !reply_artifact_ready(expected_reply_path) {
+        return None;
+    }
+
+    let lowered = failure_output.to_ascii_lowercase();
+    let reason = if lowered.contains("response.failed event received") {
+        "Recovered ready reply artifact after Codex stream disconnect during finalization"
+            .to_string()
+    } else if lowered.contains("cannot assist with that request") {
+        "Recovered ready reply artifact after a late Codex refusal".to_string()
+    } else if lowered.contains("task_complete reported status=") {
+        "Recovered ready reply artifact after Codex reported a late task_complete failure"
+            .to_string()
+    } else if let Some(code) = exit_status.filter(|code| *code != 0) {
+        format!(
+            "Recovered ready reply artifact after Codex exited with status {code} after writing output"
+        )
+    } else {
+        "Recovered ready reply artifact after Codex reported a late failure".to_string()
+    };
+
+    Some(reason)
+}
+
+fn record_codex_success(
+    trace: &mut RunTaskTraceRecorder,
+    exit_status: Option<i32>,
+    output_tail: &str,
+    recovery_note: Option<&str>,
+    token_usage: Option<&TokenUsage>,
+) {
+    let _ = trace.record_text("logs/assistant_output_tail.txt", output_tail);
+    if let Some(note) = recovery_note {
+        let _ = trace.record_text("logs/recovery_note.txt", note);
+    }
+    let _ = trace.finish(exit_status, true, None, token_usage);
+}
+
 pub(super) fn run_codex_task(
     request: RunTaskRequest<'_>,
     runner: &str,
@@ -744,6 +803,8 @@ pub(super) fn run_codex_task(
         );
     let token_usage = extract_token_usage(&combined_output);
     let output_tail = tail_string(&combined_output, 2000);
+    let expected_reply_path =
+        resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
 
     if !output.status.success() {
         let err = if use_docker {
@@ -757,6 +818,31 @@ pub(super) fn run_codex_task(
                 output: output_tail.clone(),
             }
         };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            &request,
+            &expected_reply_path,
+            output.status.code(),
+            &err.to_string(),
+        ) {
+            record_codex_success(
+                &mut trace,
+                output.status.code(),
+                &output_tail,
+                Some(&recovery_note),
+                token_usage.as_ref(),
+            );
+            return Ok(RunTaskOutput {
+                reply_html_path: expected_reply_path,
+                reply_attachments_dir,
+                codex_output: output_tail,
+                scheduled_tasks,
+                scheduled_tasks_error,
+                scheduler_actions,
+                scheduler_actions_error,
+                token_usage,
+                recovery_note: Some(recovery_note),
+            });
+        }
         let _ = trace.finish(
             output.status.code(),
             false,
@@ -788,14 +874,37 @@ pub(super) fn run_codex_task(
                 output: failure_output,
             }
         };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            &request,
+            &expected_reply_path,
+            status,
+            &err.to_string(),
+        ) {
+            record_codex_success(
+                &mut trace,
+                status,
+                &output_tail,
+                Some(&recovery_note),
+                token_usage.as_ref(),
+            );
+            return Ok(RunTaskOutput {
+                reply_html_path: expected_reply_path,
+                reply_attachments_dir,
+                codex_output: output_tail,
+                scheduled_tasks,
+                scheduled_tasks_error,
+                scheduler_actions,
+                scheduler_actions_error,
+                token_usage,
+                recovery_note: Some(recovery_note),
+            });
+        }
         let _ = trace.finish(status, false, Some(&err.to_string()), token_usage.as_ref());
         return Err(err);
     }
 
     // Only check for reply file if a reply was expected
     // Use cross-channel routing to determine actual expected path
-    let expected_reply_path =
-        resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
     if !request.reply_to.is_empty() && !expected_reply_path.exists() {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
@@ -809,8 +918,13 @@ pub(super) fn run_codex_task(
         );
         return Err(err);
     }
-    let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
-    let _ = trace.finish(output.status.code(), true, None, token_usage.as_ref());
+    record_codex_success(
+        &mut trace,
+        output.status.code(),
+        &output_tail,
+        None,
+        token_usage.as_ref(),
+    );
 
     Ok(RunTaskOutput {
         reply_html_path: expected_reply_path,
@@ -821,6 +935,7 @@ pub(super) fn run_codex_task(
         scheduler_actions,
         scheduler_actions_error,
         token_usage,
+        recovery_note: None,
     })
 }
 
@@ -1219,6 +1334,8 @@ fn run_codex_task_azure_aci(
         );
     let token_usage = extract_token_usage(&combined_output);
     let output_tail = tail_string(&combined_output, 4000);
+    let expected_reply_path =
+        resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
 
     if !azure_aci_execution_succeeded(&execution, exit_status) {
         let err = RunTaskError::CodexFailed {
@@ -1234,6 +1351,32 @@ fn run_codex_task_azure_aci(
                 output_tail
             ),
         };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            &request,
+            &expected_reply_path,
+            exit_status,
+            &err.to_string(),
+        ) {
+            record_codex_success(
+                &mut trace,
+                exit_status,
+                &output_tail,
+                Some(&recovery_note),
+                token_usage.as_ref(),
+            );
+            TIMING_COLLECTOR.record(timing.finish());
+            return Ok(RunTaskOutput {
+                reply_html_path: expected_reply_path,
+                reply_attachments_dir,
+                codex_output: output_tail,
+                scheduled_tasks,
+                scheduled_tasks_error,
+                scheduler_actions,
+                scheduler_actions_error,
+                token_usage,
+                recovery_note: Some(recovery_note),
+            });
+        }
         let _ = trace.finish(
             exit_status,
             false,
@@ -1244,8 +1387,6 @@ fn run_codex_task_azure_aci(
     }
 
     // Use cross-channel routing to determine actual expected path
-    let expected_reply_path =
-        resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
     if !request.reply_to.is_empty() && !expected_reply_path.exists() {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
@@ -1259,8 +1400,13 @@ fn run_codex_task_azure_aci(
         );
         return Err(err);
     }
-    let _ = trace.record_text("logs/assistant_output_tail.txt", &output_tail);
-    let _ = trace.finish(exit_status, true, None, token_usage.as_ref());
+    record_codex_success(
+        &mut trace,
+        exit_status,
+        &output_tail,
+        None,
+        token_usage.as_ref(),
+    );
 
     TIMING_COLLECTOR.record(timing.finish());
 
@@ -1273,6 +1419,7 @@ fn run_codex_task_azure_aci(
         scheduler_actions,
         scheduler_actions_error,
         token_usage,
+        recovery_note: None,
     })
 }
 
@@ -3173,6 +3320,376 @@ fn collect_response_item_assistant_message(value: &serde_json::Value, target: &m
     appended
 }
 
+// ============================================================================
+// Warm Pool Execution (Queue-based)
+// ============================================================================
+
+use super::pool_manager::PoolManager;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+/// Task completion message received from the completion queue.
+#[derive(Debug, serde::Deserialize)]
+struct TaskCompletion {
+    task_id: String,
+    exit_code: i32,
+}
+
+/// Run a task using a warm container from the pool.
+///
+/// Instead of provisioning a new ACI container per task (2-4 min cold start),
+/// this submits the task to a queue where pre-provisioned warm containers
+/// pick it up and process it.
+///
+/// Flow:
+/// 1. Create ephemeral share and upload workspace
+/// 2. Push task message to queue (share_url, sas, agent_command)
+/// 3. Wait for completion message on completion queue
+/// 4. Download results from share
+/// 5. Cleanup and replenish pool
+pub fn run_codex_warm_pool(
+    pool_manager: &PoolManager,
+    workspace_dir: &Path,
+    task_json: &serde_json::Value,
+    timeout: Duration,
+    timing: &mut TaskTimingBuilder,
+) -> Result<RunTaskOutput, RunTaskError> {
+    let config = load_azure_aci_config()?;
+    let task_id = uuid::Uuid::new_v4().to_string();
+
+    eprintln!(
+        "[run_task] warm_pool task_id={} workspace={}",
+        task_id,
+        workspace_dir.display()
+    );
+
+    // 1. Create ephemeral share and upload workspace
+    timing.start_stage();
+    let share_name = format!("task-{}", uuid::Uuid::new_v4().simple());
+    create_ephemeral_share(&config, &share_name)?;
+    timing.end_ephemeral_create();
+
+    timing.start_stage();
+    let upload_result = upload_workspace_to_share(&config, &share_name, workspace_dir);
+    if let Err(e) = &upload_result {
+        eprintln!(
+            "[run_task] warm_pool upload failed, cleaning up share: {:?}",
+            e
+        );
+        let _ = delete_ephemeral_share(&config, &share_name);
+        return Err(upload_result.unwrap_err());
+    }
+    timing.end_ephemeral_upload();
+
+    // 2. Generate SAS token and share URL
+    let sas = generate_share_sas(&config, &share_name)?;
+    let share_url = format!(
+        "https://{}.file.core.windows.net/{}",
+        config.storage_account, share_name
+    );
+
+    // 3. Build agent command (reuse existing logic)
+    let agent_command = build_warm_pool_agent_command(workspace_dir, task_json)?;
+
+    // 4. Push task to queue
+    let task_msg = serde_json::json!({
+        "task_id": task_id,
+        "share_url": share_url,
+        "sas_token": sas,
+        "agent_command": agent_command,
+    });
+
+    push_to_queue(
+        pool_manager.storage_account(),
+        pool_manager.storage_key(),
+        pool_manager.task_queue(),
+        &task_msg,
+    )?;
+
+    eprintln!("[run_task] warm_pool task pushed to queue: {}", task_id);
+
+    // 5. Wait for completion message
+    timing.start_stage();
+    let completion = poll_completion_queue(
+        pool_manager.storage_account(),
+        pool_manager.storage_key(),
+        pool_manager.completion_queue(),
+        &task_id,
+        timeout,
+    )?;
+    timing.end_codex_execution();
+
+    eprintln!(
+        "[run_task] warm_pool task completed: {} exit_code={}",
+        task_id, completion.exit_code
+    );
+
+    // 6. Download results
+    timing.start_stage();
+    download_workspace_from_share(&config, &share_name, workspace_dir)?;
+    timing.end_result_download();
+
+    // 7. Cleanup ephemeral share
+    if let Err(e) = delete_ephemeral_share(&config, &share_name) {
+        eprintln!("[run_task] warm_pool failed to delete share: {:?}", e);
+    }
+
+    // 8. Replenish pool (container exited after processing)
+    pool_manager.replenish();
+
+    // 9. Read output files and construct response
+    let reply_html_path = workspace_dir.join("reply_message.html");
+    let reply_attachments_dir = workspace_dir.join("reply_attachments");
+
+    let codex_output_path = workspace_dir.join("codex_output.txt");
+    let codex_output = fs::read_to_string(&codex_output_path).unwrap_or_default();
+
+    // Extract scheduled tasks and actions from codex output
+    let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&codex_output);
+    let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&codex_output);
+
+    Ok(RunTaskOutput {
+        reply_html_path,
+        reply_attachments_dir,
+        codex_output,
+        scheduled_tasks,
+        scheduled_tasks_error,
+        scheduler_actions,
+        scheduler_actions_error,
+        token_usage: None,
+        recovery_note: None,
+    })
+}
+
+/// Build the agent command for warm pool execution.
+/// This is a simplified version that runs inside the container's workspace.
+fn build_warm_pool_agent_command(
+    _workspace_dir: &Path,
+    task_json: &serde_json::Value,
+) -> Result<String, RunTaskError> {
+    let model_name = task_json
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CODEX_MODEL_NAME);
+
+    let sandbox_mode = task_json
+        .get("sandbox_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or(CODEX_SANDBOX_MODE);
+
+    // The workspace is at WORKSPACE_LOCAL_DIR inside the container
+    // warm_worker.sh sets this before running the command
+    let command = format!(
+        r#"cd "$WORKSPACE_LOCAL_DIR" && \
+npx @openai/codex@latest \
+    --skip-git-repo-check \
+    -m {model} \
+    --sandbox-mode {sandbox} \
+    "$(cat .codex_remote_prompt.txt)" \
+    > codex_output.txt 2>&1; \
+echo $? > codex_exit_code.txt"#,
+        model = shell_quote(model_name),
+        sandbox = shell_quote(sandbox_mode),
+    );
+
+    Ok(command)
+}
+
+/// Push a message to an Azure Storage Queue.
+fn push_to_queue(
+    account: &str,
+    key: &str,
+    queue: &str,
+    msg: &serde_json::Value,
+) -> Result<(), RunTaskError> {
+    let content = BASE64.encode(msg.to_string());
+
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("put")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--content")
+        .arg(&content)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message put failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Poll the completion queue for a specific task's completion message.
+fn poll_completion_queue(
+    account: &str,
+    key: &str,
+    queue: &str,
+    task_id: &str,
+    timeout: Duration,
+) -> Result<TaskCompletion, RunTaskError> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_secs(2);
+
+    eprintln!(
+        "[run_task] warm_pool polling completion queue for task_id={}",
+        task_id
+    );
+
+    while start.elapsed() < timeout {
+        let output = Command::new("az")
+            .arg("storage")
+            .arg("message")
+            .arg("get")
+            .arg("--queue-name")
+            .arg(queue)
+            .arg("--account-name")
+            .arg(account)
+            .arg("--account-key")
+            .arg(key)
+            .arg("--visibility-timeout")
+            .arg("30")
+            .arg("--output")
+            .arg("json")
+            .output()
+            .map_err(RunTaskError::Io)?;
+
+        if output.status.success() {
+            let msgs: Vec<serde_json::Value> =
+                serde_json::from_slice(&output.stdout).unwrap_or_default();
+
+            for msg in msgs {
+                let message_id = msg.get("id").and_then(|v| v.as_str());
+                let pop_receipt = msg.get("popReceipt").and_then(|v| v.as_str());
+                let content = msg.get("content").and_then(|v| v.as_str());
+
+                if let (Some(content), Some(msg_id), Some(receipt)) =
+                    (content, message_id, pop_receipt)
+                {
+                    if let Ok(decoded) = BASE64.decode(content) {
+                        if let Ok(completion) = serde_json::from_slice::<TaskCompletion>(&decoded) {
+                            if completion.task_id == task_id {
+                                // Delete the message
+                                let _ = delete_queue_message(account, key, queue, msg_id, receipt);
+                                return Ok(completion);
+                            } else {
+                                // Not our task, make it visible again immediately
+                                let _ = update_message_visibility(
+                                    account, key, queue, msg_id, receipt, 0,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        thread::sleep(poll_interval);
+    }
+
+    Err(RunTaskError::CommandTimeout {
+        command: "poll_completion_queue",
+        timeout_secs: timeout.as_secs(),
+        output: format!("Timeout waiting for task completion: {}", task_id),
+    })
+}
+
+/// Delete a message from an Azure Storage Queue.
+fn delete_queue_message(
+    account: &str,
+    key: &str,
+    queue: &str,
+    message_id: &str,
+    pop_receipt: &str,
+) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("delete")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--id")
+        .arg(message_id)
+        .arg("--pop-receipt")
+        .arg(pop_receipt)
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message delete failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Update a message's visibility timeout (used to make messages visible again).
+fn update_message_visibility(
+    account: &str,
+    key: &str,
+    queue: &str,
+    message_id: &str,
+    pop_receipt: &str,
+    visibility_timeout: u32,
+) -> Result<(), RunTaskError> {
+    let output = Command::new("az")
+        .arg("storage")
+        .arg("message")
+        .arg("update")
+        .arg("--queue-name")
+        .arg(queue)
+        .arg("--account-name")
+        .arg(account)
+        .arg("--account-key")
+        .arg(key)
+        .arg("--id")
+        .arg(message_id)
+        .arg("--pop-receipt")
+        .arg(pop_receipt)
+        .arg("--visibility-timeout")
+        .arg(visibility_timeout.to_string())
+        .arg("--output")
+        .arg("none")
+        .output()
+        .map_err(RunTaskError::Io)?;
+
+    if !output.status.success() {
+        return Err(RunTaskError::CodexFailed {
+            status: output.status.code(),
+            output: format!(
+                "az storage message update failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4190,6 +4707,48 @@ printf '%s\n' "$@" > "$capture_file"
         assert!(azure_aci_execution_succeeded(&execution, Some(0)));
         assert!(!azure_aci_execution_succeeded(&execution, Some(1)));
         assert!(!azure_aci_execution_succeeded(&execution, None));
+    }
+
+    #[test]
+    fn test_reply_artifact_ready_rejects_empty_email_reply() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "   \n\t").expect("write reply");
+
+        assert!(!reply_artifact_ready(&reply));
+    }
+
+    #[test]
+    fn test_maybe_recover_from_ready_reply_artifact_returns_note() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "<html><body>ready</body></html>").expect("write reply");
+
+        let request = RunTaskRequest {
+            workspace_dir: temp.path(),
+            input_email_dir: Path::new("incoming_email"),
+            input_attachments_dir: Path::new("incoming_attachments"),
+            memory_dir: Path::new("memory"),
+            reference_dir: Path::new("references"),
+            model_name: "gpt-5.4",
+            reply_to: &["user@example.com".to_string()],
+            channel: "email",
+            google_access_token: None,
+            has_unified_account: false,
+            user_identities: &super::super::types::UserIdentities::default(),
+            thread_epoch: None,
+            thread_state_path: None,
+        };
+
+        let note = maybe_recover_from_ready_reply_artifact(
+            &request,
+            &reply,
+            Some(23),
+            "response.failed event received",
+        )
+        .expect("expected recovery note");
+
+        assert!(note.contains("Recovered ready reply artifact"));
     }
 
     #[test]

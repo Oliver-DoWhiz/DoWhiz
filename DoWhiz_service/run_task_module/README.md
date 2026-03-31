@@ -24,6 +24,13 @@ Output files are channel-aware:
 - email/google workspace channels -> `reply_email_draft.html` + `reply_email_attachments/`
 - chat channels (slack/discord/telegram/sms/whatsapp/bluebubbles) -> `reply_message.txt` + `reply_attachments/`
 
+Late-finalization recovery:
+- when Codex has already written the expected reply artifact, `run_task` now treats that artifact as
+  a recoverable completion signal even if the CLI later disconnects, refuses, or exits non-zero
+  during finalization
+- recovered runs surface a `recovery_note` in `RunTaskOutput` and write
+  `.run_task_trace/logs/recovery_note.txt` for debugging
+
 ## Execution Backend
 
 Control via `RUN_TASK_EXECUTION_BACKEND=local|azure_aci|auto`.

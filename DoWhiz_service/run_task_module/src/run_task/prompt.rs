@@ -283,6 +283,22 @@ GitHub CLI (`gh`) - for GitHub repository operations:
 IMPORTANT: For GitHub operations, ALWAYS use `gh` CLI (already authenticated).
 Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
 
+Identity Lookup CLI (`identity_lookup_cli`) - for finding DoWhiz-linked identities:
+- `identity_lookup_cli discord-to-email <discord_user_id>` - Get email linked to a Discord user's DoWhiz account
+- `identity_lookup_cli discord-to-github <discord_user_id>` - Get GitHub username linked to a Discord user
+- `identity_lookup_cli lookup <discord_user_id>` - Get all linked identities (email, github, account_id)
+- `identity_lookup_cli guild-identities <guild_id> [--type email,github]` - Get identities for all guild members
+
+Use this when you need to invite Discord guild members to shared resources:
+- To invite to Google Docs/Drive: look up their email with `identity_lookup_cli discord-to-email <user_id>`
+- To add to GitHub repos: look up their GitHub with `identity_lookup_cli discord-to-github <user_id>`
+- Returns null for users without DoWhiz accounts (they need to register at dowhiz.com)
+
+Example workflow for group project setup:
+1. List guild members: `discord_cli list-guild-members <guild_id>`
+2. Look up their emails: `identity_lookup_cli guild-identities <guild_id> --type email`
+3. Share Google Doc with members who have linked emails
+
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
 

@@ -194,6 +194,7 @@ pub(super) fn run_claude_task(
         scheduler_actions,
         scheduler_actions_error,
         token_usage: None, // TODO: Extract from Claude API response
+        recovery_note: None,
     })
 }
 
