@@ -43,6 +43,16 @@ codex.rs                                Azure Task Queue
 └─ pool_manager.replenish() ─────────────▶ [new container provisioned]
 ```
 
+## Azure Queue Polling within Warm Container
+
+┌─────────────────┐     push task      ┌──────────────────┐     poll      ┌─────────────────┐
+│    Scheduler    │ ─────────────────▶ │   Azure Queue    │ ◀──────────── │  Container 1    │
+└─────────────────┘                    │  (dowhiz-tasks)  │ ◀──────────── │  Container 2    │
+                                       └──────────────────┘ ◀──────────── │  Container 3    │
+                                                                          └─────────────────┘
+                                                                          (all polling same queue)
+
+
 ## Why Azure Queue?
 
 The polling for a task happens **within the ACI container**. Since ACI doesn't support injecting environment variables after container creation, we need an external mechanism (the queue) to pass task-specific credentials (SAS token, share URL) to pre-provisioned containers.
