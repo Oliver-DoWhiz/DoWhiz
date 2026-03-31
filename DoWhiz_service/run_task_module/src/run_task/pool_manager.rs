@@ -172,17 +172,69 @@ impl PoolManager {
 }
 
 /// Provision a single warm container that polls the task queue.
+/// Collect environment variables to pass to warm containers.
+/// These are needed for Codex and other tools to function.
+fn collect_warm_container_env_vars(config: &PoolConfig) -> Vec<String> {
+    let mut env_vars = vec![
+        format!("TASK_QUEUE_NAME={}", config.task_queue_name),
+        format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name),
+        format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account),
+        format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key),
+    ];
+
+    // API keys and endpoints needed for Codex/LLM calls
+    let passthrough_keys = [
+        "OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY_BACKUP",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT_BACKUP",
+        "ANTHROPIC_API_KEY",
+        // Payment/Stripe
+        "STRIPE_SECRET_KEY",
+        // Bright Data
+        "BRIGHT_DATA_API_KEY",
+        "BRIGHTDATA_API_KEY",
+        // Google
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        // Browserbase
+        "BROWSERBASE_API_KEY",
+        "BROWSERBASE_PROJECT_ID",
+        // Human approval gate
+        "HUMAN_APPROVAL_GATE_URL",
+        "POSTMARK_SERVER_TOKEN",
+        // Lark
+        "LARK_APP_ID",
+        "LARK_APP_SECRET",
+        // Deploy target
+        "DEPLOY_TARGET",
+        "EMPLOYEE_ID",
+    ];
+
+    for key in passthrough_keys {
+        if let Ok(value) = std::env::var(key) {
+            if !value.trim().is_empty() {
+                env_vars.push(format!("{}={}", key, value));
+            }
+        }
+    }
+
+    env_vars
+}
+
 async fn provision_warm_container(config: &PoolConfig) -> Result<String, String> {
     let container_name = format!("{}{}", CONTAINER_PREFIX, Uuid::new_v4().simple());
 
     eprintln!("[pool_manager] Provisioning container: {}", container_name);
 
+    let env_vars = collect_warm_container_env_vars(config);
+
     let output = tokio::task::spawn_blocking({
         let config = config.clone();
         let container_name = container_name.clone();
         move || {
-            Command::new("az")
-                .arg("container")
+            let mut cmd = Command::new("az");
+            cmd.arg("container")
                 .arg("create")
                 .arg("--resource-group")
                 .arg(&config.resource_group)
@@ -204,12 +256,13 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(&config.registry_username)
                 .arg("--registry-password")
                 .arg(&config.registry_password)
-                .arg("--environment-variables")
-                .arg(format!("TASK_QUEUE_NAME={}", config.task_queue_name))
-                .arg(format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name))
-                .arg(format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account))
-                .arg(format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key))
-                .arg("--command-line")
+                .arg("--environment-variables");
+
+            for env_var in &env_vars {
+                cmd.arg(env_var);
+            }
+
+            cmd.arg("--command-line")
                 .arg("/bin/bash -lc 'warm_worker.sh'")
                 .arg("--location")
                 .arg(&config.location)
@@ -331,5 +384,83 @@ mod tests {
 
         let manager = PoolManager::new(config, None);
         assert_eq!(manager.target_size(), 5); // DEFAULT_POOL_SIZE
+    }
+
+    fn test_config() -> PoolConfig {
+        PoolConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test-image".to_string(),
+            cpu: "2.0".to_string(),
+            memory_gb: "4.0".to_string(),
+            queue_storage_account: "teststorage".to_string(),
+            queue_storage_key: "testkey".to_string(),
+            task_queue_name: "test-tasks".to_string(),
+            completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
+            location: "westus2".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_includes_queue_config() {
+        let config = test_config();
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"TASK_QUEUE_NAME=test-tasks".to_string()));
+        assert!(env_vars.contains(&"COMPLETION_QUEUE_NAME=test-completions".to_string()));
+        assert!(env_vars.contains(&"QUEUE_STORAGE_ACCOUNT=teststorage".to_string()));
+        assert!(env_vars.contains(&"QUEUE_STORAGE_KEY=testkey".to_string()));
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_passes_through_api_keys() {
+        let config = test_config();
+
+        // Set some env vars
+        std::env::set_var("OPENAI_API_KEY", "test-openai-key");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"OPENAI_API_KEY=test-openai-key".to_string()));
+        assert!(env_vars.contains(&"AZURE_OPENAI_ENDPOINT=https://test.openai.azure.com".to_string()));
+
+        // Cleanup
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_skips_empty_values() {
+        let config = test_config();
+
+        // Set an empty env var
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        // Should not include empty values
+        assert!(!env_vars.iter().any(|v| v.starts_with("ANTHROPIC_API_KEY=")));
+
+        // Cleanup
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_skips_whitespace_only_values() {
+        let config = test_config();
+
+        // Set a whitespace-only env var
+        std::env::set_var("STRIPE_SECRET_KEY", "   ");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        // Should not include whitespace-only values
+        assert!(!env_vars.iter().any(|v| v.starts_with("STRIPE_SECRET_KEY=")));
+
+        // Cleanup
+        std::env::remove_var("STRIPE_SECRET_KEY");
     }
 }
