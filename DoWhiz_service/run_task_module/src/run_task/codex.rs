@@ -3205,6 +3205,24 @@ pub fn run_codex_warm_pool(
     let prompt_path = workspace_dir.join(".codex_remote_prompt.txt");
     fs::write(&prompt_path, &prompt)?;
 
+    // 0b. Create codex config in workspace (will be uploaded to container)
+    // Container's CODEX_HOME is set to /app/.workspace/task/.codex
+    let azure_endpoint = azure_endpoint_from_env()?;
+    let container_workspace = Path::new("/app/.workspace/task");
+    let codex_home = workspace_dir.join(".codex");
+    ensure_codex_config_at(&codex_home, container_workspace, &azure_endpoint)?;
+
+    // 0c. Create GitHub askpass script in workspace (for git operations)
+    let _ = resolve_github_auth(Some(&codex_home))?;
+
+    // 0d. Materialize Google Workspace CLI credentials if available
+    let _ = collect_google_workspace_cli_env_overrides(workspace_dir)?;
+
+    // 0e. Write Google access token to workspace if provided
+    if let Some(ref token) = request.google_access_token {
+        fs::write(workspace_dir.join(".google_access_token"), token)?;
+    }
+
     // 1. Create ephemeral share and upload workspace
     timing.start_stage();
     let share_name = format!("task-{}", uuid::Uuid::new_v4().simple());
@@ -3228,7 +3246,7 @@ pub fn run_codex_warm_pool(
     );
 
     // 3. Build agent command (reuse existing logic)
-    let agent_command = build_warm_pool_agent_command(workspace_dir, &request.model_name)?;
+    let agent_command = build_warm_pool_agent_command(workspace_dir, &request.model_name, &request.channel)?;
 
     // 4. Push task to queue
     let task_msg = serde_json::json!({
@@ -3277,8 +3295,18 @@ pub fn run_codex_warm_pool(
     pool_manager.replenish();
 
     // 9. Read output files and construct response
-    let reply_html_path = workspace_dir.join("reply_message.html");
-    let reply_attachments_dir = workspace_dir.join("reply_attachments");
+    // Use channel-specific reply path (same logic as ACI flow)
+    let default_reply_path = match request.channel.to_lowercase().as_str() {
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" => workspace_dir.join("reply_message.txt"),
+        _ => workspace_dir.join("reply_email_draft.html"),
+    };
+    let reply_html_path = resolve_expected_reply_path(workspace_dir, default_reply_path);
+    let reply_attachments_dir = match request.channel.to_lowercase().as_str() {
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" | "notion" => workspace_dir.join("reply_attachments"),
+        _ => workspace_dir.join("reply_email_attachments"),
+    };
 
     let codex_output_path = workspace_dir.join("codex_output.txt");
     let codex_output = fs::read_to_string(&codex_output_path).unwrap_or_default();
@@ -3300,32 +3328,108 @@ pub fn run_codex_warm_pool(
 }
 
 /// Build the agent command for warm pool execution.
-/// This is a simplified version that runs inside the container's workspace.
+/// Mirrors the ACI flow command with all necessary flags.
 fn build_warm_pool_agent_command(
-    _workspace_dir: &Path,
+    workspace_dir: &Path,
     model_name: &str,
+    channel: &str,
 ) -> Result<String, RunTaskError> {
-    let model_name = if model_name.is_empty() {
-        CODEX_MODEL_NAME
+    // Use model from request, fallback to env var, then constant (same as ACI flow)
+    let model_name = if model_name.trim().is_empty() {
+        env::var("CODEX_MODEL").unwrap_or_else(|_| CODEX_MODEL_NAME.to_string())
     } else {
-        model_name
+        model_name.to_string()
     };
+    let model_name = model_name.as_str();
 
-    let sandbox_mode = CODEX_SANDBOX_MODE;
+    // Bypass sandbox for Google Docs (same as ACI flow)
+    let channel_lower = channel.to_ascii_lowercase();
+    let is_google_docs = channel_lower == "google_docs" || channel_lower == "googledocs";
+    let has_google_token = workspace_dir.join(".google_access_token").exists();
+    let bypass_sandbox = codex_bypass_sandbox() || is_google_docs || has_google_token;
+    let sandbox_mode = effective_codex_sandbox_mode(&codex_sandbox_mode(), bypass_sandbox);
 
-    // The workspace is at WORKSPACE_LOCAL_DIR inside the container
-    // warm_worker.sh sets this before running the command
+    let model_name_sh = shell_quote(model_name);
+    let sandbox_mode_sh = shell_quote(&sandbox_mode);
+    let web_search_cfg = shell_quote("web_search=\"live\"");
+    let ask_for_approval_cfg = shell_quote("ask_for_approval=\"never\"");
+    let sandbox_cfg = shell_quote(&format!("sandbox=\"{}\"", sandbox_mode));
+    let model_provider_cfg = shell_quote("model_provider=\"azure\"");
+    let azure_env_cfg =
+        shell_quote("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"");
+    let bypass_enabled = if bypass_sandbox { "1" } else { "0" };
+
+    // Build command similar to ACI flow with feature detection
     let command = format!(
-        r#"cd "$WORKSPACE_LOCAL_DIR" && \
-npx @openai/codex@latest \
-    --skip-git-repo-check \
-    -m {model} \
-    --sandbox-mode {sandbox} \
-    "$(cat .codex_remote_prompt.txt)" \
-    > codex_output.txt 2>&1; \
-echo $? > codex_exit_code.txt"#,
-        model = shell_quote(model_name),
-        sandbox = shell_quote(sandbox_mode),
+        r#"set -euo pipefail
+cd "$WORKSPACE_LOCAL_DIR"
+mkdir -p .config/gh .codex
+
+# GitHub CLI/Git env vars (same as ACI flow github_auth.env_overrides)
+export GH_PROMPT_DISABLED=1
+export GH_NO_UPDATE_NOTIFIER=1
+export GIT_EDITOR=true
+export VISUAL=true
+export EDITOR=true
+if [ -n "${{GITHUB_USERNAME:-}}" ]; then
+  export GIT_AUTHOR_NAME="${{GITHUB_USERNAME}}"
+  export GIT_COMMITTER_NAME="${{GITHUB_USERNAME}}"
+  export GIT_AUTHOR_EMAIL="${{GITHUB_USERNAME}}@users.noreply.github.com"
+  export GIT_COMMITTER_EMAIL="${{GITHUB_USERNAME}}@users.noreply.github.com"
+fi
+
+# Set GIT_ASKPASS to use the uploaded askpass script (same as ACI flow)
+askpass_script="$(find .codex -name 'dowhiz-git-askpass-*' -type f 2>/dev/null | head -n1)"
+if [ -n "$askpass_script" ] && [ -x "$askpass_script" ]; then
+  export GIT_ASKPASS="$PWD/$askpass_script"
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+# Set Google access token env vars from file (same as ACI flow)
+if [ -f .google_access_token ]; then
+  token="$(cat .google_access_token)"
+  export GOOGLE_ACCESS_TOKEN="$token"
+  export GOOGLE_WORKSPACE_CLI_TOKEN="$token"
+fi
+
+codex_help="$(codex exec --help 2>/dev/null || true)"
+codex_cmd=(codex exec --json)
+if printf '%s' "$codex_help" | grep -q -- '--search'; then
+  codex_cmd+=(--search)
+else
+  codex_cmd+=(-c {web_search_cfg})
+fi
+if printf '%s' "$codex_help" | grep -q -- '--ask-for-approval'; then
+  codex_cmd+=(--ask-for-approval never)
+else
+  codex_cmd+=(-c {ask_for_approval_cfg})
+fi
+if printf '%s' "$codex_help" | grep -q -- '--sandbox'; then
+  codex_cmd+=(--sandbox {sandbox_mode})
+else
+  codex_cmd+=(-c {sandbox_cfg})
+fi
+if [ "{bypass}" = "1" ]; then
+  if printf '%s' "$codex_help" | grep -q -- '--dangerously-bypass-approvals-and-sandbox'; then
+    codex_cmd+=(--dangerously-bypass-approvals-and-sandbox)
+  elif printf '%s' "$codex_help" | grep -q -- '--yolo'; then
+    codex_cmd+=(--yolo)
+  fi
+fi
+codex_cmd+=(--add-dir "$WORKSPACE_LOCAL_DIR/.config/gh" --skip-git-repo-check -m {model_name} -c {model_provider_cfg} -c {azure_env_cfg} "$(cat .codex_remote_prompt.txt)")
+set +e
+"${{codex_cmd[@]}}" > codex_output.txt 2>&1
+status=$?
+printf '%s' "$status" > codex_exit_code.txt
+exit 0"#,
+        web_search_cfg = web_search_cfg,
+        ask_for_approval_cfg = ask_for_approval_cfg,
+        sandbox_mode = sandbox_mode_sh,
+        sandbox_cfg = sandbox_cfg,
+        bypass = bypass_enabled,
+        model_name = model_name_sh,
+        model_provider_cfg = model_provider_cfg,
+        azure_env_cfg = azure_env_cfg,
     );
 
     Ok(command)
