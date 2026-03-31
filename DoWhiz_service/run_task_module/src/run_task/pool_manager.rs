@@ -67,23 +67,34 @@ impl PoolManager {
         }
     }
 
-    /// Initialize the pool by provisioning N warm containers.
-    /// Containers start polling the task queue immediately.
+    /// Initialize the pool by provisioning warm containers up to target size.
+    /// Checks for existing containers first to avoid creating duplicates.
     pub async fn initialize(&self) -> Result<(), String> {
         // Capture the Tokio runtime handle for later use in sync contexts (replenish)
         let _ = self.runtime_handle.set(tokio::runtime::Handle::current());
-
-        eprintln!(
-            "[pool_manager] Initializing warm pool with {} containers",
-            self.target_size
-        );
 
         // Ensure queues exist (idempotent)
         ensure_queue_exists(&self.config, &self.config.task_queue_name)?;
         ensure_queue_exists(&self.config, &self.config.completion_queue_name)?;
 
+        // Count existing warm containers
+        let existing_count = count_existing_containers(&self.config.resource_group)?;
+        self.active_count.store(existing_count, Ordering::SeqCst);
+
+        let containers_needed = self.target_size.saturating_sub(existing_count);
+
+        eprintln!(
+            "[pool_manager] Found {} existing containers, need {} total, provisioning {} new",
+            existing_count, self.target_size, containers_needed
+        );
+
+        if containers_needed == 0 {
+            eprintln!("[pool_manager] Pool already at target size, skipping provisioning");
+            return Ok(());
+        }
+
         let mut handles = Vec::new();
-        for _ in 0..self.target_size {
+        for _ in 0..containers_needed {
             let config = self.config.clone();
             handles.push(tokio::spawn(async move {
                 provision_warm_container(&config).await
@@ -101,9 +112,10 @@ impl PoolManager {
             }
         }
 
+        let final_count = self.active_count.load(Ordering::SeqCst);
         eprintln!(
-            "[pool_manager] Pool ready with {} containers",
-            self.active_count.load(Ordering::SeqCst)
+            "[pool_manager] Pool ready with {} containers (target: {})",
+            final_count, self.target_size
         );
         Ok(())
     }
@@ -386,6 +398,33 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
     Ok(container_name)
 }
 
+/// Count existing warm containers in the resource group.
+fn count_existing_containers(resource_group: &str) -> Result<usize, String> {
+    let output = Command::new("az")
+        .arg("container")
+        .arg("list")
+        .arg("--resource-group")
+        .arg(resource_group)
+        .arg("--query")
+        .arg(format!("[?starts_with(name, '{}')].name", CONTAINER_PREFIX))
+        .arg("-o")
+        .arg("tsv")
+        .output()
+        .map_err(|e| format!("az command failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "az container list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+
+    Ok(count)
+}
+
 /// Ensure an Azure Storage Queue exists (idempotent).
 fn ensure_queue_exists(config: &PoolConfig, queue_name: &str) -> Result<(), String> {
     eprintln!("[pool_manager] Ensuring queue exists: {}", queue_name);
@@ -574,5 +613,71 @@ mod tests {
 
         // Cleanup
         std::env::remove_var("STRIPE_SECRET_KEY");
+    }
+
+    #[test]
+    fn test_containers_needed_calculation() {
+        // Test the saturating_sub logic used in initialize()
+        let target_size: usize = 5;
+
+        // No existing containers -> need all 5
+        assert_eq!(target_size.saturating_sub(0), 5);
+
+        // 3 existing -> need 2 more
+        assert_eq!(target_size.saturating_sub(3), 2);
+
+        // Already at target -> need 0
+        assert_eq!(target_size.saturating_sub(5), 0);
+
+        // More than target (shouldn't happen, but handle gracefully) -> need 0
+        assert_eq!(target_size.saturating_sub(7), 0);
+    }
+
+    #[test]
+    fn test_container_prefix_constant() {
+        // Ensure prefix is what we expect for az queries
+        assert_eq!(CONTAINER_PREFIX, "dwz-warm-");
+    }
+
+    #[test]
+    fn test_pool_manager_active_count_starts_at_zero() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(5));
+
+        // Before initialize, active_count should be 0
+        assert_eq!(manager.active_count(), 0);
+    }
+
+    #[test]
+    fn test_pool_manager_replenish_decrements_count() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(5));
+
+        // Manually set active count to simulate initialized state
+        manager.active_count.store(5, Ordering::SeqCst);
+        assert_eq!(manager.active_count(), 5);
+
+        // replenish() decrements the count (note: won't spawn without runtime handle)
+        manager.replenish();
+        assert_eq!(manager.active_count(), 4);
+
+        manager.replenish();
+        assert_eq!(manager.active_count(), 3);
+    }
+
+    #[test]
+    fn test_pool_manager_replenish_skips_when_at_target() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(3));
+
+        // Set active count above target
+        manager.active_count.store(5, Ordering::SeqCst);
+
+        // replenish decrements but logs "skipping" since still >= target
+        manager.replenish(); // 5 -> 4, still >= 3
+        assert_eq!(manager.active_count(), 4);
+
+        manager.replenish(); // 4 -> 3, still >= 3
+        assert_eq!(manager.active_count(), 3);
     }
 }
