@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Ensure standard paths are available (login shell may reset PATH)
+export PATH="/app/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+
 # Warm pool worker script.
 # Polls Azure Queue for tasks, processes them, and signals completion.
 #
