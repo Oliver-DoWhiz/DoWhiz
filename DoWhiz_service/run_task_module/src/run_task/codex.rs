@@ -28,6 +28,7 @@ use super::env::{
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
+use super::types::RunTaskParams;
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::timing::{TaskTimingBuilder, TIMING_COLLECTOR};
 use super::trace::RunTaskTraceRecorder;
@@ -3172,19 +3173,37 @@ struct TaskCompletion {
 /// 5. Cleanup and replenish pool
 pub fn run_codex_warm_pool(
     pool_manager: &PoolManager,
-    workspace_dir: &Path,
-    task_json: &serde_json::Value,
+    request: &RunTaskParams,
     timeout: Duration,
     timing: &mut TaskTimingBuilder,
 ) -> Result<RunTaskOutput, RunTaskError> {
     let config = load_azure_aci_config()?;
     let task_id = uuid::Uuid::new_v4().to_string();
+    let workspace_dir = &request.workspace_dir;
 
     eprintln!(
         "[run_task] warm_pool task_id={} workspace={}",
         task_id,
         workspace_dir.display()
     );
+
+    // 0. Build and write prompt to workspace (required by agent command)
+    let memory_context = load_memory_context(&request.workspace_dir, &request.memory_dir)?;
+    let prompt = build_prompt(
+        &request.input_email_dir,
+        &request.input_attachments_dir,
+        &request.memory_dir,
+        &request.reference_dir,
+        &request.workspace_dir,
+        &request.runner,
+        &memory_context,
+        !request.reply_to.is_empty(),
+        &request.channel,
+        request.has_unified_account,
+        &request.user_identities,
+    );
+    let prompt_path = workspace_dir.join(".codex_remote_prompt.txt");
+    fs::write(&prompt_path, &prompt)?;
 
     // 1. Create ephemeral share and upload workspace
     timing.start_stage();
@@ -3209,7 +3228,7 @@ pub fn run_codex_warm_pool(
     );
 
     // 3. Build agent command (reuse existing logic)
-    let agent_command = build_warm_pool_agent_command(workspace_dir, task_json)?;
+    let agent_command = build_warm_pool_agent_command(workspace_dir, &request.model_name)?;
 
     // 4. Push task to queue
     let task_msg = serde_json::json!({
@@ -3284,17 +3303,15 @@ pub fn run_codex_warm_pool(
 /// This is a simplified version that runs inside the container's workspace.
 fn build_warm_pool_agent_command(
     _workspace_dir: &Path,
-    task_json: &serde_json::Value,
+    model_name: &str,
 ) -> Result<String, RunTaskError> {
-    let model_name = task_json
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or(CODEX_MODEL_NAME);
+    let model_name = if model_name.is_empty() {
+        CODEX_MODEL_NAME
+    } else {
+        model_name
+    };
 
-    let sandbox_mode = task_json
-        .get("sandbox_mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or(CODEX_SANDBOX_MODE);
+    let sandbox_mode = CODEX_SANDBOX_MODE;
 
     // The workspace is at WORKSPACE_LOCAL_DIR inside the container
     // warm_worker.sh sets this before running the command

@@ -1376,10 +1376,6 @@ impl TaskExecutor for ModuleExecutor {
                 // Choose execution path: warm pool or direct ACI
                 let output = if is_warm_pool_enabled() {
                     if let Some(pool_manager) = get_global_pool_manager() {
-                        // Build task JSON for warm pool
-                        let task_json = json!({
-                            "model": task.model_name,
-                        });
                         let timeout = Duration::from_secs(
                             std::env::var("RUN_TASK_TIMEOUT_SECS")
                                 .ok()
@@ -1390,8 +1386,7 @@ impl TaskExecutor for ModuleExecutor {
 
                         match run_task_module::run_codex_warm_pool(
                             &pool_manager,
-                            &task.workspace_dir,
-                            &task_json,
+                            &params,
                             timeout,
                             &mut timing,
                         ) {
