@@ -44,6 +44,7 @@ codex.rs                                Azure Task Queue
 ```
 
 ## Azure Queue Polling within Warm Container
+```
 
 ┌─────────────────┐     push task      ┌──────────────────┐     poll      ┌─────────────────┐
 │    Scheduler    │ ─────────────────▶ │   Azure Queue    │ ◀──────────── │  Container 1    │
@@ -51,6 +52,7 @@ codex.rs                                Azure Task Queue
                                        └──────────────────┘ ◀──────────── │  Container 3    │
                                                                           └─────────────────┘
                                                                           (all polling same queue)
+```
 
 
 ## Why Azure Queue?
