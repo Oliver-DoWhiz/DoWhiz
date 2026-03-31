@@ -3420,8 +3420,7 @@ codex_cmd+=(--add-dir "$WORKSPACE_LOCAL_DIR/.config/gh" --skip-git-repo-check -m
 set +e
 "${{codex_cmd[@]}}" > codex_output.txt 2>&1
 status=$?
-printf '%s' "$status" > codex_exit_code.txt
-exit 0"#,
+printf '%s' "$status" > codex_exit_code.txt"#,
         web_search_cfg = web_search_cfg,
         ask_for_approval_cfg = ask_for_approval_cfg,
         sandbox_mode = sandbox_mode_sh,
