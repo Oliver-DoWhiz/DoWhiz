@@ -57,20 +57,21 @@ Shell script that runs inside the container, polling for tasks:
 #!/bin/bash
 set -euo pipefail
 
-QUEUE_NAME="${TASK_QUEUE_NAME:?TASK_QUEUE_NAME not set}"
+TASK_QUEUE="${TASK_QUEUE_NAME:?TASK_QUEUE_NAME not set}"
+COMPLETION_QUEUE="${COMPLETION_QUEUE_NAME:?COMPLETION_QUEUE_NAME not set}"
 STORAGE_ACCOUNT="${QUEUE_STORAGE_ACCOUNT:?QUEUE_STORAGE_ACCOUNT not set}"
 STORAGE_KEY="${QUEUE_STORAGE_KEY:?QUEUE_STORAGE_KEY not set}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
+export WORKSPACE_LOCAL_DIR="${WORKSPACE_LOCAL_DIR:-/app/.workspace/task}"
 
-echo "[warm_worker] Polling queue: $QUEUE_NAME"
+echo "[warm_worker] Starting, polling queue: $TASK_QUEUE"
 
 while true; do
-    # Get message from queue (visibility timeout 300s = 5min)
+    # Get message from queue
     MSG=$(az storage message get \
-        --queue-name "$QUEUE_NAME" \
+        --queue-name "$TASK_QUEUE" \
         --account-name "$STORAGE_ACCOUNT" \
         --account-key "$STORAGE_KEY" \
-        --visibility-timeout 300 \
         --output json 2>/dev/null | jq -r '.[0] // empty')
 
     if [ -n "$MSG" ]; then
@@ -78,51 +79,57 @@ while true; do
         POP_RECEIPT=$(echo "$MSG" | jq -r '.popReceipt')
         CONTENT=$(echo "$MSG" | jq -r '.content' | base64 -d)
 
-        echo "[warm_worker] Received task: $MESSAGE_ID"
+        TASK_ID=$(echo "$CONTENT" | jq -r '.task_id')
+        echo "[warm_worker] Received task: $TASK_ID"
 
-        # Extract task info from Azure queue
+        # True dequeue: delete immediately to avoid visibility timeout issues
+        az storage message delete \
+            --queue-name "$TASK_QUEUE" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --id "$MESSAGE_ID" \
+            --pop-receipt "$POP_RECEIPT" \
+            --output none
+
+        # Extract task info and export for workspace_sync.sh
         export WORKSPACE_SHARE_URL=$(echo "$CONTENT" | jq -r '.share_url')
         export WORKSPACE_SAS_TOKEN=$(echo "$CONTENT" | jq -r '.sas_token')
-        export WORKSPACE_LOCAL_DIR="/app/.workspace/task"
         AGENT_COMMAND=$(echo "$CONTENT" | jq -r '.agent_command')
-        COMPLETION_QUEUE=$(echo "$CONTENT" | jq -r '.completion_queue')
-        TASK_ID=$(echo "$CONTENT" | jq -r '.task_id')
 
         # Process task
         echo "[warm_worker] Downloading workspace..."
-        workspace_sync.sh download  # replaces mount
+        workspace_sync.sh download
 
         echo "[warm_worker] Running agent..."
         AGENT_EXIT_CODE=0
         eval "$AGENT_COMMAND" || AGENT_EXIT_CODE=$?
+        echo "[warm_worker] Agent exited with code: $AGENT_EXIT_CODE"
 
         echo "[warm_worker] Uploading results..."
         workspace_sync.sh upload
 
-        # Signal completion by pushing onto COMPLETION_QUEUE
-        COMPLETION_MSG=$(jq -n --arg tid "$TASK_ID" --arg code "$AGENT_EXIT_CODE" \
+        # Signal completion (scheduler handles retry logic based on exit_code)
+        COMPLETION_MSG=$(jq -n \
+            --arg tid "$TASK_ID" \
+            --argjson code "$AGENT_EXIT_CODE" \
             '{task_id: $tid, exit_code: $code}' | base64 -w0)
+
         az storage message put \
             --queue-name "$COMPLETION_QUEUE" \
             --account-name "$STORAGE_ACCOUNT" \
             --account-key "$STORAGE_KEY" \
-            --content "$COMPLETION_MSG"
+            --content "$COMPLETION_MSG" \
+            --output none
 
-        # Delete processed message (pop from queue)
-        az storage message delete \
-            --queue-name "$QUEUE_NAME" \
-            --account-name "$STORAGE_ACCOUNT" \
-            --account-key "$STORAGE_KEY" \
-            --id "$MESSAGE_ID" \
-            --pop-receipt "$POP_RECEIPT"
-
-        echo "[warm_worker] Task complete, exiting"
+        echo "[warm_worker] Task $TASK_ID complete, exiting"
         exit "$AGENT_EXIT_CODE"
     fi
 
     sleep "$POLL_INTERVAL"
 done
 ```
+
+**Note:** We use "true dequeue" (delete immediately after get) instead of visibility timeout. This avoids race conditions where a long-running task could be picked up by another container. If the container crashes, the scheduler's completion queue poll times out and retry logic kicks in.
 
 ### 2. bin/workspace_sync.sh
 
@@ -185,6 +192,10 @@ pub struct PoolConfig {
     pub queue_storage_key: String,
     pub task_queue_name: String,
     pub completion_queue_name: String,
+    pub registry_server: String,
+    pub registry_username: String,
+    pub registry_password: String,
+    pub location: String,
 }
 
 pub struct PoolManager {
@@ -204,6 +215,10 @@ impl PoolManager {
 
     /// Initialize pool with N warm containers
     pub async fn initialize(&self) -> Result<(), String> {
+        // Ensure queues exist (idempotent)
+        ensure_queue_exists(&self.config, &self.config.task_queue_name)?;
+        ensure_queue_exists(&self.config, &self.config.completion_queue_name)?;
+
         let mut handles = Vec::new();
         for _ in 0..self.target_size {
             let config = self.config.clone();
@@ -242,6 +257,24 @@ impl PoolManager {
     }
 }
 
+/// Ensure an Azure Storage Queue exists (idempotent).
+fn ensure_queue_exists(config: &PoolConfig, queue_name: &str) -> Result<(), String> {
+    let output = Command::new("az")
+        .arg("storage").arg("queue").arg("create")
+        .arg("--name").arg(queue_name)
+        .arg("--account-name").arg(&config.queue_storage_account)
+        .arg("--account-key").arg(&config.queue_storage_key)
+        .arg("--output").arg("none")
+        .output()
+        .map_err(|e| format!("az command failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!("az storage queue create failed: {}",
+            String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(())
+}
+
 async fn provision_warm_container(config: &PoolConfig) -> Result<String, String> {
     let container_name = format!("{}{}", CONTAINER_PREFIX, Uuid::new_v4().simple());
 
@@ -253,12 +286,19 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
         .arg("--cpu").arg(&config.cpu)
         .arg("--memory").arg(&config.memory_gb)
         .arg("--restart-policy").arg("Never")
+        .arg("--os-type").arg("Linux")
+        .arg("--location").arg(&config.location)
+        .arg("--registry-login-server").arg(&config.registry_server)
+        .arg("--registry-username").arg(&config.registry_username)
+        .arg("--registry-password").arg(&config.registry_password)
         .arg("--environment-variables")
         .arg(format!("TASK_QUEUE_NAME={}", config.task_queue_name))
+        .arg(format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name))
         .arg(format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account))
         .arg(format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key))
         .arg("--command-line")
         .arg("/bin/bash -lc 'warm_worker.sh'")
+        .arg("--only-show-errors")
         .output()
         .map_err(|e| format!("az command failed: {}", e))?;
 
@@ -302,12 +342,13 @@ pub fn run_codex_warm_pool(
     let agent_command = build_agent_command(task_json)?;
 
     // 4. Push task to queue
+    // Note: completion_queue is NOT in the message - container gets it from
+    // COMPLETION_QUEUE_NAME env var set at provisioning time
     let task_msg = serde_json::json!({
         "task_id": task_id,
         "share_url": share_url,
         "sas_token": sas,
         "agent_command": agent_command,
-        "completion_queue": pool_manager.completion_queue(),
     });
     push_to_queue(
         pool_manager.storage_account(),
@@ -352,6 +393,29 @@ pub fn is_warm_pool_enabled() -> bool {
     env::var("USE_WARM_POOL")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Load pool configuration from environment variables.
+/// Falls back to RUN_TASK_AZURE_ACI_* vars for seamless integration.
+fn load_pool_config_from_env() -> Result<PoolConfig, String> {
+    // All fields support WARM_POOL_* or RUN_TASK_AZURE_ACI_* fallback
+    // See Environment Variables table for full list
+    Ok(PoolConfig {
+        resource_group: env::var("WARM_POOL_RESOURCE_GROUP")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_RESOURCE_GROUP"))?,
+        image: env::var("WARM_POOL_IMAGE")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_IMAGE"))?,
+        // ... cpu, memory_gb, queue_storage_account, queue_storage_key,
+        //     task_queue_name, completion_queue_name ...
+        registry_server: env::var("WARM_POOL_REGISTRY_SERVER")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_REGISTRY_SERVER"))?,
+        registry_username: env::var("WARM_POOL_REGISTRY_USERNAME")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_REGISTRY_USERNAME"))?,
+        registry_password: env::var("WARM_POOL_REGISTRY_PASSWORD")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD"))?,
+        location: env::var("WARM_POOL_LOCATION")
+            .or_else(|_| env::var("RUN_TASK_AZURE_ACI_LOCATION"))?,
+    })
 }
 
 pub async fn initialize_global_pool_manager() -> Result<bool, String> {
@@ -425,6 +489,10 @@ let output = if is_warm_pool_enabled() {
 | `WARM_POOL_COMPLETION_QUEUE` | `dowhiz-completions` | No |
 | `WARM_POOL_CPU` | `RUN_TASK_AZURE_ACI_CPU` or `2.0` | No |
 | `WARM_POOL_MEMORY_GB` | `RUN_TASK_AZURE_ACI_MEMORY_GB` or `4.0` | No |
+| `WARM_POOL_REGISTRY_SERVER` | `RUN_TASK_AZURE_ACI_REGISTRY_SERVER` | No |
+| `WARM_POOL_REGISTRY_USERNAME` | `RUN_TASK_AZURE_ACI_REGISTRY_USERNAME` | No |
+| `WARM_POOL_REGISTRY_PASSWORD` | `RUN_TASK_AZURE_ACI_REGISTRY_PASSWORD` | No |
+| `WARM_POOL_LOCATION` | `RUN_TASK_AZURE_ACI_LOCATION` | No |
 
 ## Minimal Setup
 
@@ -435,6 +503,8 @@ export USE_WARM_POOL=1
 ```
 
 All other values will fall back to existing ACI configuration.
+
+**Note:** Azure Storage Queues (`dowhiz-tasks` and `dowhiz-completions`) are auto-created on first startup if they don't exist.
 
 ## Data Flow Summary
 
