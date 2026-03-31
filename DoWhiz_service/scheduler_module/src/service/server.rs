@@ -126,10 +126,12 @@ pub async fn run_server(
             .map_err(|err| -> BoxError { err.into() })??;
     let message_router = Arc::new(MessageRouter::new());
 
-    // Initialize warm container pool if enabled
-    if let Err(err) = crate::warm_pool::initialize_global_pool_manager().await {
-        warn!("Failed to initialize warm pool: {} (falling back to direct ACI)", err);
-    }
+    // Initialize warm container pool in background (don't block server startup)
+    tokio::spawn(async {
+        if let Err(err) = crate::warm_pool::initialize_global_pool_manager().await {
+            warn!("Failed to initialize warm pool: {} (falling back to direct ACI)", err);
+        }
+    });
 
     let bootstrap_user_store = user_store.clone();
     let bootstrap_index_store = index_store.clone();
