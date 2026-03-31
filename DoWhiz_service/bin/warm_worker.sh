@@ -24,12 +24,11 @@ export WORKSPACE_LOCAL_DIR="${WORKSPACE_LOCAL_DIR:-/app/.workspace/task}"
 echo "[warm_worker] Starting, polling queue: $TASK_QUEUE"
 
 while true; do
-    # Get message from queue (visibility timeout 600s = 10min)
+    # Get message from queue
     MSG=$(az storage message get \
         --queue-name "$TASK_QUEUE" \
         --account-name "$STORAGE_ACCOUNT" \
         --account-key "$STORAGE_KEY" \
-        --visibility-timeout 600 \
         --output json 2>/dev/null | jq -r '.[0] // empty')
 
     if [ -n "$MSG" ]; then
@@ -39,6 +38,15 @@ while true; do
 
         TASK_ID=$(echo "$CONTENT" | jq -r '.task_id')
         echo "[warm_worker] Received task: $TASK_ID"
+
+        # True dequeue: delete immediately to avoid visibility timeout issues
+        az storage message delete \
+            --queue-name "$TASK_QUEUE" \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_KEY" \
+            --id "$MESSAGE_ID" \
+            --pop-receipt "$POP_RECEIPT" \
+            --output none
 
         # Extract task info and export for workspace_sync.sh
         export WORKSPACE_SHARE_URL=$(echo "$CONTENT" | jq -r '.share_url')
@@ -57,7 +65,7 @@ while true; do
         echo "[warm_worker] Uploading results..."
         workspace_sync.sh upload
 
-        # Signal completion
+        # Signal completion (scheduler handles retry logic based on exit_code)
         COMPLETION_MSG=$(jq -n \
             --arg tid "$TASK_ID" \
             --argjson code "$AGENT_EXIT_CODE" \
@@ -68,15 +76,6 @@ while true; do
             --account-name "$STORAGE_ACCOUNT" \
             --account-key "$STORAGE_KEY" \
             --content "$COMPLETION_MSG" \
-            --output none
-
-        # Delete processed message from task queue
-        az storage message delete \
-            --queue-name "$TASK_QUEUE" \
-            --account-name "$STORAGE_ACCOUNT" \
-            --account-key "$STORAGE_KEY" \
-            --id "$MESSAGE_ID" \
-            --pop-receipt "$POP_RECEIPT" \
             --output none
 
         echo "[warm_worker] Task $TASK_ID complete, exiting"
