@@ -211,6 +211,8 @@ Docker execution path (local worker):
 - `RUN_TASK_USE_DOCKER=1`
 - `RUN_TASK_DOCKER_IMAGE=<image>`
 - optional `RUN_TASK_DOCKER_REQUIRED=1`
+- optional `RUN_TASK_CODEX_FALLBACK_TO_CLAUDE=1` to retry Codex-specific failures with the Claude runner
+- optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
 
 Azure ACI execution path (required vars):
 - `RUN_TASK_AZURE_ACI_RESOURCE_GROUP`

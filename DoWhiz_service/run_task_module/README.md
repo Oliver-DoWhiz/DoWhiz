@@ -57,6 +57,8 @@ Common optional controls:
 - `CODEX_MODEL`, `CLAUDE_MODEL`
 - `RUN_TASK_TIMEOUT_SECS`
 - `CODEX_SANDBOX_MODE`, `CODEX_BYPASS_SANDBOX`
+- `RUN_TASK_CODEX_FALLBACK_TO_CLAUDE=1` to retry Codex-specific failures with the Claude runner
+- optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
 - Bright Data social scraping:
   - `BRIGHT_DATA_API_KEY`
   - optional `BRIGHT_DATA_XIAOHONGSHU_COLLECTOR`
@@ -110,3 +112,8 @@ cargo test -p run_task_module
 
 See also:
 - `DoWhiz_service/run_task_module/tests/README.md`
+
+When the fallback is enabled and fires:
+- the primary Codex trace is preserved under `.run_task_trace_codex_primary/`
+- the final Claude attempt writes the active `.run_task_trace/`
+- a short handoff note is written to `.run_task_trace/recovery/codex_to_claude_fallback.txt`
