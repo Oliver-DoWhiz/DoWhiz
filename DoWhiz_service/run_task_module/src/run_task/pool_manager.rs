@@ -175,11 +175,18 @@ impl PoolManager {
 /// Collect environment variables to pass to warm containers.
 /// These are needed for Codex and other tools to function.
 fn collect_warm_container_env_vars(config: &PoolConfig) -> Vec<String> {
+    // Workspace location in the container (must match warm_worker.sh)
+    let workspace_dir = "/app/.workspace/task";
+
     let mut env_vars = vec![
         format!("TASK_QUEUE_NAME={}", config.task_queue_name),
         format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name),
         format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account),
         format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key),
+        // HOME and CODEX_HOME are required for Codex to find its config
+        format!("HOME={}", workspace_dir),
+        format!("CODEX_HOME={}/.codex", workspace_dir),
+        format!("WORKSPACE_LOCAL_DIR={}", workspace_dir),
     ];
 
     // API keys and endpoints needed for Codex/LLM calls
@@ -190,22 +197,101 @@ fn collect_warm_container_env_vars(config: &PoolConfig) -> Vec<String> {
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_ENDPOINT_BACKUP",
         "ANTHROPIC_API_KEY",
-        // Payment/Stripe
+        // Payment (GOATX402, GOAT, X402)
         "STRIPE_SECRET_KEY",
+        "GOATX402_API_URL",
+        "GOATX402_MERCHANT_ID",
+        "GOATX402_API_KEY",
+        "GOATX402_API_SECRET",
+        "GOATX402_WALLET_ADDRESS",
+        "GOATX402_AGENT_ID",
+        "GOATX402_CHAIN_ID",
+        "GOATX402_RPC_URL",
+        "GOATX402_EXPLORER_URL",
+        "GOATX402_USDC_ADDRESS",
+        "GOATX402_USDT_ADDRESS",
+        "GOAT_WALLET_ADDRESS",
+        "GOAT_AGENT_ID",
+        "GOAT_CHAIN_ID",
+        "GOAT_RPC_URL",
+        "GOAT_EXPLORER_URL",
+        "GOAT_USDC_ADDRESS",
+        "GOAT_USDT_ADDRESS",
+        "X402_API_URL",
+        "X402_MERCHANT_ID",
+        "X402_API_KEY",
+        "X402_API_SECRET",
         // Bright Data
         "BRIGHT_DATA_API_KEY",
         "BRIGHTDATA_API_KEY",
+        "BRIGHT_DATA_XIAOHONGSHU_COLLECTOR",
+        "BRIGHT_DATA_XIAOHONGSHU_TRIGGER_URL",
         // Google
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_PASSWORD",
         // Browserbase
         "BROWSERBASE_API_KEY",
         "BROWSERBASE_PROJECT_ID",
+        "BROWSERBASE_STATE_DIR",
+        "BROWSERBASE_ACTIVE_SESSION_PATH",
+        // Browser handoff
+        "BROWSER_HANDOFF_BASE_URL",
+        "BROWSER_HANDOFF_SIGNING_SECRET",
         // Human approval gate
         "HUMAN_APPROVAL_GATE_URL",
         "POSTMARK_SERVER_TOKEN",
+        "POSTMARK_API_BASE_URL",
+        "HUMAN_APPROVAL_FROM",
+        "HUMAN_APPROVAL_REPLY_TO",
         // Lark
         "LARK_APP_ID",
         "LARK_APP_SECRET",
+        // Discord
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_BOT_USER_ID",
+        "DISCORD_CLIENT_ID",
+        "DISCORD_CLIENT_SECRET",
+        "DISCORD_REDIRECT_URI",
+        "DISCORD_API_BASE_URL",
+        // Slack
+        "SLACK_BOT_TOKEN",
+        "SLACK_BOT_USER_ID",
+        "SLACK_CLIENT_ID",
+        "SLACK_CLIENT_SECRET",
+        "SLACK_AUTH_REDIRECT_URI",
+        "SLACK_REDIRECT_URI",
+        "SLACK_SIGNING_SECRET",
+        "SLACK_APP_ID",
+        "SLACK_API_BASE_URL",
+        // WeChat
+        "WECHAT_TOKEN",
+        "WECHAT_ENCODING_AES_KEY",
+        "WECHAT_CORP_ID",
+        "WECHAT_AGENT_ID",
+        "WECHAT_SECRET",
+        // Twilio
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_API_BASE_URL",
+        "TWILIO_WEBHOOK_URL",
+        // Notion
+        "NOTION_WEBHOOK_SECRET",
+        "NOTION_INTEGRATION_ID",
+        "NOTION_CLIENT_ID",
+        "NOTION_CLIENT_SECRET",
+        "NOTION_REDIRECT_URI",
+        "NOTION_API_TOKEN",
+        // GitHub
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "GITHUB_USERNAME",
+        // Google Workspace CLI
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_CLIENT_ID",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_CLIENT_SECRET",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_REFRESH_TOKEN",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_TYPE",
+        "GOOGLE_ACCESS_TOKEN",
         // Deploy target
         "DEPLOY_TARGET",
         "EMPLOYEE_ID",
@@ -412,6 +498,16 @@ mod tests {
         assert!(env_vars.contains(&"COMPLETION_QUEUE_NAME=test-completions".to_string()));
         assert!(env_vars.contains(&"QUEUE_STORAGE_ACCOUNT=teststorage".to_string()));
         assert!(env_vars.contains(&"QUEUE_STORAGE_KEY=testkey".to_string()));
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_includes_home_and_codex_home() {
+        let config = test_config();
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"HOME=/app/.workspace/task".to_string()));
+        assert!(env_vars.contains(&"CODEX_HOME=/app/.workspace/task/.codex".to_string()));
+        assert!(env_vars.contains(&"WORKSPACE_LOCAL_DIR=/app/.workspace/task".to_string()));
     }
 
     #[test]
