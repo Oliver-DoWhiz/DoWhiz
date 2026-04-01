@@ -3179,6 +3179,7 @@ pub fn run_codex_warm_pool(
 ) -> Result<RunTaskOutput, RunTaskError> {
     let config = load_azure_aci_config()?;
     let task_id = uuid::Uuid::new_v4().to_string();
+    timing.set_task_id(&task_id);
     let workspace_dir = &request.workspace_dir;
 
     eprintln!(
@@ -3314,6 +3315,8 @@ pub fn run_codex_warm_pool(
     // Extract scheduled tasks and actions from codex output
     let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&codex_output);
     let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&codex_output);
+
+    TIMING_COLLECTOR.record(timing.finish());
 
     Ok(RunTaskOutput {
         reply_html_path,
