@@ -31,6 +31,7 @@ use super::prompt::{build_prompt, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::timing::{TaskTimingBuilder, TIMING_COLLECTOR};
 use super::trace::RunTaskTraceRecorder;
+use super::types::RunTaskParams;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
 use super::utils::{
     run_command_with_timeout, run_command_with_timeout_and_cancel, run_task_timeout, tail_string,
@@ -281,12 +282,12 @@ fn reply_artifact_ready(path: &Path) -> bool {
 }
 
 fn maybe_recover_from_ready_reply_artifact(
-    request: &RunTaskRequest<'_>,
+    reply_expected: bool,
     expected_reply_path: &Path,
     exit_status: Option<i32>,
     failure_output: &str,
 ) -> Option<String> {
-    if request.reply_to.is_empty() || !reply_artifact_ready(expected_reply_path) {
+    if !reply_expected || !reply_artifact_ready(expected_reply_path) {
         return None;
     }
 
@@ -322,6 +323,63 @@ fn record_codex_success(
         let _ = trace.record_text("logs/recovery_note.txt", note);
     }
     let _ = trace.finish(exit_status, true, None, token_usage);
+}
+
+fn validate_warm_pool_codex_result(
+    reply_expected: bool,
+    expected_reply_path: &Path,
+    exit_status: i32,
+    codex_output: &str,
+) -> Result<Option<String>, RunTaskError> {
+    let output_tail = tail_string(codex_output, 4000);
+    if exit_status != 0 {
+        let err = RunTaskError::CodexFailed {
+            status: Some(exit_status),
+            output: output_tail.clone(),
+        };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            reply_expected,
+            expected_reply_path,
+            Some(exit_status),
+            &err.to_string(),
+        ) {
+            return Ok(Some(recovery_note));
+        }
+        return Err(err);
+    }
+
+    if let Some(runtime_failure) = detect_codex_runtime_failure(codex_output) {
+        let status = runtime_failure
+            .status_code
+            .or(Some(exit_status).filter(|code| *code != 0));
+        let mut failure_output = runtime_failure.message;
+        if !output_tail.is_empty() {
+            failure_output.push('\n');
+            failure_output.push_str(&output_tail);
+        }
+        let err = RunTaskError::CodexFailed {
+            status,
+            output: failure_output,
+        };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            reply_expected,
+            expected_reply_path,
+            status,
+            &err.to_string(),
+        ) {
+            return Ok(Some(recovery_note));
+        }
+        return Err(err);
+    }
+
+    if reply_expected && !reply_artifact_ready(expected_reply_path) {
+        return Err(RunTaskError::OutputMissing {
+            path: expected_reply_path.to_path_buf(),
+            output: output_tail,
+        });
+    }
+
+    Ok(None)
 }
 
 pub(super) fn run_codex_task(
@@ -819,7 +877,7 @@ pub(super) fn run_codex_task(
             }
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             output.status.code(),
             &err.to_string(),
@@ -875,7 +933,7 @@ pub(super) fn run_codex_task(
             }
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             status,
             &err.to_string(),
@@ -905,7 +963,7 @@ pub(super) fn run_codex_task(
 
     // Only check for reply file if a reply was expected
     // Use cross-channel routing to determine actual expected path
-    if !request.reply_to.is_empty() && !expected_reply_path.exists() {
+    if !request.reply_to.is_empty() && !reply_artifact_ready(&expected_reply_path) {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail.clone(),
@@ -1352,7 +1410,7 @@ fn run_codex_task_azure_aci(
             ),
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             exit_status,
             &err.to_string(),
@@ -1387,7 +1445,7 @@ fn run_codex_task_azure_aci(
     }
 
     // Use cross-channel routing to determine actual expected path
-    if !request.reply_to.is_empty() && !expected_reply_path.exists() {
+    if !request.reply_to.is_empty() && !reply_artifact_ready(&expected_reply_path) {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail,
@@ -3348,19 +3406,56 @@ struct TaskCompletion {
 /// 5. Cleanup and replenish pool
 pub fn run_codex_warm_pool(
     pool_manager: &PoolManager,
-    workspace_dir: &Path,
-    task_json: &serde_json::Value,
+    request: &RunTaskParams,
     timeout: Duration,
     timing: &mut TaskTimingBuilder,
 ) -> Result<RunTaskOutput, RunTaskError> {
     let config = load_azure_aci_config()?;
     let task_id = uuid::Uuid::new_v4().to_string();
+    timing.set_task_id(&task_id);
+    let workspace_dir = &request.workspace_dir;
 
     eprintln!(
         "[run_task] warm_pool task_id={} workspace={}",
         task_id,
         workspace_dir.display()
     );
+
+    // 0. Build and write prompt to workspace (required by agent command)
+    let memory_context = load_memory_context(&request.workspace_dir, &request.memory_dir)?;
+    let prompt = build_prompt(
+        &request.input_email_dir,
+        &request.input_attachments_dir,
+        &request.memory_dir,
+        &request.reference_dir,
+        &request.workspace_dir,
+        &request.runner,
+        &memory_context,
+        !request.reply_to.is_empty(),
+        &request.channel,
+        request.has_unified_account,
+        &request.user_identities,
+    );
+    let prompt_path = workspace_dir.join(".codex_remote_prompt.txt");
+    fs::write(&prompt_path, &prompt)?;
+
+    // 0b. Create codex config in workspace (will be uploaded to container)
+    // Container's CODEX_HOME is set to /app/.workspace/task/.codex
+    let azure_endpoint = azure_endpoint_from_env()?;
+    let container_workspace = Path::new("/app/.workspace/task");
+    let codex_home = workspace_dir.join(".codex");
+    ensure_codex_config_at(&codex_home, container_workspace, &azure_endpoint)?;
+
+    // 0c. Create GitHub askpass script in workspace (for git operations)
+    let _ = resolve_github_auth(Some(&codex_home))?;
+
+    // 0d. Materialize Google Workspace CLI credentials if available
+    let _ = collect_google_workspace_cli_env_overrides(workspace_dir)?;
+
+    // 0e. Write Google access token to workspace if provided
+    if let Some(ref token) = request.google_access_token {
+        fs::write(workspace_dir.join(".google_access_token"), token)?;
+    }
 
     // 1. Create ephemeral share and upload workspace
     timing.start_stage();
@@ -3388,7 +3483,8 @@ pub fn run_codex_warm_pool(
     );
 
     // 3. Build agent command (reuse existing logic)
-    let agent_command = build_warm_pool_agent_command(workspace_dir, task_json)?;
+    let agent_command =
+        build_warm_pool_agent_command(workspace_dir, &request.model_name, &request.channel)?;
 
     // 4. Push task to queue
     let task_msg = serde_json::json!({
@@ -3437,15 +3533,34 @@ pub fn run_codex_warm_pool(
     pool_manager.replenish();
 
     // 9. Read output files and construct response
-    let reply_html_path = workspace_dir.join("reply_message.html");
-    let reply_attachments_dir = workspace_dir.join("reply_attachments");
+    // Use channel-specific reply path (same logic as ACI flow)
+    let default_reply_path = match request.channel.to_lowercase().as_str() {
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" => workspace_dir.join("reply_message.txt"),
+        _ => workspace_dir.join("reply_email_draft.html"),
+    };
+    let reply_html_path = resolve_expected_reply_path(workspace_dir, default_reply_path);
+    let reply_attachments_dir = match request.channel.to_lowercase().as_str() {
+        "slack" | "discord" | "telegram" | "sms" | "whatsapp" | "bluebubbles" | "lark"
+        | "wechat" | "notion" => workspace_dir.join("reply_attachments"),
+        _ => workspace_dir.join("reply_email_attachments"),
+    };
 
     let codex_output_path = workspace_dir.join("codex_output.txt");
     let codex_output = fs::read_to_string(&codex_output_path).unwrap_or_default();
+    let token_usage = extract_token_usage(&codex_output);
+    let recovery_note = validate_warm_pool_codex_result(
+        !request.reply_to.is_empty(),
+        &reply_html_path,
+        completion.exit_code,
+        &codex_output,
+    )?;
 
     // Extract scheduled tasks and actions from codex output
     let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&codex_output);
     let (scheduler_actions, scheduler_actions_error) = extract_scheduler_actions(&codex_output);
+
+    TIMING_COLLECTOR.record(timing.finish());
 
     Ok(RunTaskOutput {
         reply_html_path,
@@ -3455,40 +3570,113 @@ pub fn run_codex_warm_pool(
         scheduled_tasks_error,
         scheduler_actions,
         scheduler_actions_error,
-        token_usage: None,
-        recovery_note: None,
+        token_usage,
+        recovery_note,
     })
 }
 
 /// Build the agent command for warm pool execution.
-/// This is a simplified version that runs inside the container's workspace.
+/// Mirrors the ACI flow command with all necessary flags.
 fn build_warm_pool_agent_command(
-    _workspace_dir: &Path,
-    task_json: &serde_json::Value,
+    workspace_dir: &Path,
+    model_name: &str,
+    channel: &str,
 ) -> Result<String, RunTaskError> {
-    let model_name = task_json
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or(CODEX_MODEL_NAME);
+    // Use model from request, fallback to env var, then constant (same as ACI flow)
+    let model_name = if model_name.trim().is_empty() {
+        env::var("CODEX_MODEL").unwrap_or_else(|_| CODEX_MODEL_NAME.to_string())
+    } else {
+        model_name.to_string()
+    };
+    let model_name = model_name.as_str();
 
-    let sandbox_mode = task_json
-        .get("sandbox_mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or(CODEX_SANDBOX_MODE);
+    // Bypass sandbox for Google Docs (same as ACI flow)
+    let channel_lower = channel.to_ascii_lowercase();
+    let is_google_docs = channel_lower == "google_docs" || channel_lower == "googledocs";
+    let has_google_token = workspace_dir.join(".google_access_token").exists();
+    let bypass_sandbox = codex_bypass_sandbox() || is_google_docs || has_google_token;
+    let sandbox_mode = effective_codex_sandbox_mode(&codex_sandbox_mode(), bypass_sandbox);
 
-    // The workspace is at WORKSPACE_LOCAL_DIR inside the container
-    // warm_worker.sh sets this before running the command
+    let model_name_sh = shell_quote(model_name);
+    let sandbox_mode_sh = shell_quote(&sandbox_mode);
+    let web_search_cfg = shell_quote("web_search=\"live\"");
+    let ask_for_approval_cfg = shell_quote("ask_for_approval=\"never\"");
+    let sandbox_cfg = shell_quote(&format!("sandbox=\"{}\"", sandbox_mode));
+    let model_provider_cfg = shell_quote("model_provider=\"azure\"");
+    let azure_env_cfg =
+        shell_quote("model_providers.azure.env_key=\"AZURE_OPENAI_API_KEY_BACKUP\"");
+    let bypass_enabled = if bypass_sandbox { "1" } else { "0" };
+
+    // Build command similar to ACI flow with feature detection
     let command = format!(
-        r#"cd "$WORKSPACE_LOCAL_DIR" && \
-npx @openai/codex@latest \
-    --skip-git-repo-check \
-    -m {model} \
-    --sandbox-mode {sandbox} \
-    "$(cat .codex_remote_prompt.txt)" \
-    > codex_output.txt 2>&1; \
-echo $? > codex_exit_code.txt"#,
-        model = shell_quote(model_name),
-        sandbox = shell_quote(sandbox_mode),
+        r#"set -euo pipefail
+cd "$WORKSPACE_LOCAL_DIR"
+mkdir -p .config/gh .codex
+
+# GitHub CLI/Git env vars (same as ACI flow github_auth.env_overrides)
+export GH_PROMPT_DISABLED=1
+export GH_NO_UPDATE_NOTIFIER=1
+export GIT_EDITOR=true
+export VISUAL=true
+export EDITOR=true
+if [ -n "${{GITHUB_USERNAME:-}}" ]; then
+  export GIT_AUTHOR_NAME="${{GITHUB_USERNAME}}"
+  export GIT_COMMITTER_NAME="${{GITHUB_USERNAME}}"
+  export GIT_AUTHOR_EMAIL="${{GITHUB_USERNAME}}@users.noreply.github.com"
+  export GIT_COMMITTER_EMAIL="${{GITHUB_USERNAME}}@users.noreply.github.com"
+fi
+
+# Set GIT_ASKPASS to use the uploaded askpass script (same as ACI flow)
+askpass_script="$(find .codex -name 'dowhiz-git-askpass-*' -type f 2>/dev/null | head -n1)"
+if [ -n "$askpass_script" ] && [ -x "$askpass_script" ]; then
+  export GIT_ASKPASS="$PWD/$askpass_script"
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+# Set Google access token env vars from file (same as ACI flow)
+if [ -f .google_access_token ]; then
+  token="$(cat .google_access_token)"
+  export GOOGLE_ACCESS_TOKEN="$token"
+  export GOOGLE_WORKSPACE_CLI_TOKEN="$token"
+fi
+
+codex_help="$(codex exec --help 2>/dev/null || true)"
+codex_cmd=(codex exec --json)
+if printf '%s' "$codex_help" | grep -q -- '--search'; then
+  codex_cmd+=(--search)
+else
+  codex_cmd+=(-c {web_search_cfg})
+fi
+if printf '%s' "$codex_help" | grep -q -- '--ask-for-approval'; then
+  codex_cmd+=(--ask-for-approval never)
+else
+  codex_cmd+=(-c {ask_for_approval_cfg})
+fi
+if printf '%s' "$codex_help" | grep -q -- '--sandbox'; then
+  codex_cmd+=(--sandbox {sandbox_mode})
+else
+  codex_cmd+=(-c {sandbox_cfg})
+fi
+if [ "{bypass}" = "1" ]; then
+  if printf '%s' "$codex_help" | grep -q -- '--dangerously-bypass-approvals-and-sandbox'; then
+    codex_cmd+=(--dangerously-bypass-approvals-and-sandbox)
+  elif printf '%s' "$codex_help" | grep -q -- '--yolo'; then
+    codex_cmd+=(--yolo)
+  fi
+fi
+codex_cmd+=(--add-dir "$WORKSPACE_LOCAL_DIR/.config/gh" --skip-git-repo-check -m {model_name} -c {model_provider_cfg} -c {azure_env_cfg} "$(cat .codex_remote_prompt.txt)")
+set +e
+"${{codex_cmd[@]}}" > codex_output.txt 2>&1
+status=$?
+printf '%s' "$status" > codex_exit_code.txt"#,
+        web_search_cfg = web_search_cfg,
+        ask_for_approval_cfg = ask_for_approval_cfg,
+        sandbox_mode = sandbox_mode_sh,
+        sandbox_cfg = sandbox_cfg,
+        bypass = bypass_enabled,
+        model_name = model_name_sh,
+        model_provider_cfg = model_provider_cfg,
+        azure_env_cfg = azure_env_cfg,
     );
 
     Ok(command)
@@ -4724,24 +4912,8 @@ printf '%s\n' "$@" > "$capture_file"
         let reply = temp.path().join("reply_email_draft.html");
         fs::write(&reply, "<html><body>ready</body></html>").expect("write reply");
 
-        let request = RunTaskRequest {
-            workspace_dir: temp.path(),
-            input_email_dir: Path::new("incoming_email"),
-            input_attachments_dir: Path::new("incoming_attachments"),
-            memory_dir: Path::new("memory"),
-            reference_dir: Path::new("references"),
-            model_name: "gpt-5.4",
-            reply_to: &["user@example.com".to_string()],
-            channel: "email",
-            google_access_token: None,
-            has_unified_account: false,
-            user_identities: &super::super::types::UserIdentities::default(),
-            thread_epoch: None,
-            thread_state_path: None,
-        };
-
         let note = maybe_recover_from_ready_reply_artifact(
-            &request,
+            true,
             &reply,
             Some(23),
             "response.failed event received",
@@ -4749,6 +4921,58 @@ printf '%s\n' "$@" > "$capture_file"
         .expect("expected recovery note");
 
         assert!(note.contains("Recovered ready reply artifact"));
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_reports_nonzero_exit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+
+        let err = validate_warm_pool_codex_result(true, &reply, 1, "stream disconnected")
+            .expect_err("expected CodexFailed");
+
+        match err {
+            RunTaskError::CodexFailed { status, output } => {
+                assert_eq!(status, Some(1));
+                assert!(output.contains("stream disconnected"));
+            }
+            other => panic!("expected CodexFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_reports_output_missing_for_empty_reply() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "   \n\t").expect("write empty reply");
+
+        let err = validate_warm_pool_codex_result(
+            true,
+            &reply,
+            0,
+            r#"{"type":"event_msg","payload":{"type":"task_complete","status":"success","exit_code":0}}"#,
+        )
+        .expect_err("expected OutputMissing");
+
+        assert!(matches!(err, RunTaskError::OutputMissing { .. }));
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_recovers_ready_reply_after_refusal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "<html><body>ready</body></html>").expect("write reply");
+
+        let note = validate_warm_pool_codex_result(
+            true,
+            &reply,
+            1,
+            "I'm sorry, but I cannot assist with that request.",
+        )
+        .expect("expected recovery")
+        .expect("expected recovery note");
+
+        assert!(note.contains("late Codex refusal"));
     }
 
     #[test]

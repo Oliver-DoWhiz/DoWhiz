@@ -56,6 +56,10 @@ pub enum RunTaskError {
         action: &'static str,
         output: String,
     },
+    FallbackFailed {
+        primary: String,
+        fallback: String,
+    },
     OutputMissing {
         path: PathBuf,
         output: String,
@@ -135,6 +139,11 @@ impl fmt::Display for RunTaskError {
                 f,
                 "Browserbase {} failed. Output tail:\n{}",
                 action, output
+            ),
+            RunTaskError::FallbackFailed { primary, fallback } => write!(
+                f,
+                "Primary runner failed:\n{}\n\nClaude fallback failed:\n{}",
+                primary, fallback
             ),
             RunTaskError::OutputMissing { path, output } => {
                 write!(

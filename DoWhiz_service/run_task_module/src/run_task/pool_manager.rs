@@ -12,6 +12,7 @@
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 const DEFAULT_POOL_SIZE: usize = 5;
@@ -51,6 +52,8 @@ pub struct PoolManager {
     config: PoolConfig,
     active_count: AtomicUsize,
     target_size: usize,
+    /// Tokio runtime handle captured during initialization for use in sync contexts
+    runtime_handle: OnceLock<tokio::runtime::Handle>,
 }
 
 impl PoolManager {
@@ -60,23 +63,38 @@ impl PoolManager {
             config,
             active_count: AtomicUsize::new(0),
             target_size: target_size.unwrap_or(DEFAULT_POOL_SIZE),
+            runtime_handle: OnceLock::new(),
         }
     }
 
-    /// Initialize the pool by provisioning N warm containers.
-    /// Containers start polling the task queue immediately.
+    /// Initialize the pool by provisioning warm containers up to target size.
+    /// Checks for existing containers first to avoid creating duplicates.
     pub async fn initialize(&self) -> Result<(), String> {
-        eprintln!(
-            "[pool_manager] Initializing warm pool with {} containers",
-            self.target_size
-        );
+        // Capture the Tokio runtime handle for later use in sync contexts (replenish)
+        let _ = self.runtime_handle.set(tokio::runtime::Handle::current());
 
         // Ensure queues exist (idempotent)
         ensure_queue_exists(&self.config, &self.config.task_queue_name)?;
         ensure_queue_exists(&self.config, &self.config.completion_queue_name)?;
 
+        // Count existing warm containers
+        let existing_count = count_existing_containers(&self.config.resource_group)?;
+        self.active_count.store(existing_count, Ordering::SeqCst);
+
+        let containers_needed = self.target_size.saturating_sub(existing_count);
+
+        eprintln!(
+            "[pool_manager] Found {} existing containers, need {} total, provisioning {} new",
+            existing_count, self.target_size, containers_needed
+        );
+
+        if containers_needed == 0 {
+            eprintln!("[pool_manager] Pool already at target size, skipping provisioning");
+            return Ok(());
+        }
+
         let mut handles = Vec::new();
-        for _ in 0..self.target_size {
+        for _ in 0..containers_needed {
             let config = self.config.clone();
             handles.push(tokio::spawn(async move {
                 provision_warm_container(&config).await
@@ -94,9 +112,10 @@ impl PoolManager {
             }
         }
 
+        let final_count = self.active_count.load(Ordering::SeqCst);
         eprintln!(
-            "[pool_manager] Pool ready with {} containers",
-            self.active_count.load(Ordering::SeqCst)
+            "[pool_manager] Pool ready with {} containers (target: {})",
+            final_count, self.target_size
         );
         Ok(())
     }
@@ -117,10 +136,19 @@ impl PoolManager {
             return;
         }
 
+        // Use the runtime handle captured during initialize() to spawn from sync context
+        let handle = match self.runtime_handle.get() {
+            Some(h) => h,
+            None => {
+                eprintln!("[pool_manager] No runtime handle available, skipping replenish");
+                return;
+            }
+        };
+
         let config = self.config.clone();
         let active_count = &self.active_count as *const AtomicUsize as usize;
 
-        tokio::spawn(async move {
+        handle.spawn(async move {
             eprintln!("[pool_manager] Replenishing pool...");
             match provision_warm_container(&config).await {
                 Ok(name) => {
@@ -172,17 +200,155 @@ impl PoolManager {
 }
 
 /// Provision a single warm container that polls the task queue.
+/// Collect environment variables to pass to warm containers.
+/// These are needed for Codex and other tools to function.
+fn collect_warm_container_env_vars(config: &PoolConfig) -> Vec<String> {
+    // Workspace location in the container (must match warm_worker.sh)
+    let workspace_dir = "/app/.workspace/task";
+
+    let mut env_vars = vec![
+        format!("TASK_QUEUE_NAME={}", config.task_queue_name),
+        format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name),
+        format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account),
+        format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key),
+        // HOME and CODEX_HOME are required for Codex to find its config
+        format!("HOME={}", workspace_dir),
+        format!("CODEX_HOME={}/.codex", workspace_dir),
+        format!("WORKSPACE_LOCAL_DIR={}", workspace_dir),
+    ];
+
+    // API keys and endpoints needed for Codex/LLM calls
+    let passthrough_keys = [
+        "OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY_BACKUP",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT_BACKUP",
+        "ANTHROPIC_API_KEY",
+        // Payment (GOATX402, GOAT, X402)
+        "STRIPE_SECRET_KEY",
+        "GOATX402_API_URL",
+        "GOATX402_MERCHANT_ID",
+        "GOATX402_API_KEY",
+        "GOATX402_API_SECRET",
+        "GOATX402_WALLET_ADDRESS",
+        "GOATX402_AGENT_ID",
+        "GOATX402_CHAIN_ID",
+        "GOATX402_RPC_URL",
+        "GOATX402_EXPLORER_URL",
+        "GOATX402_USDC_ADDRESS",
+        "GOATX402_USDT_ADDRESS",
+        "GOAT_WALLET_ADDRESS",
+        "GOAT_AGENT_ID",
+        "GOAT_CHAIN_ID",
+        "GOAT_RPC_URL",
+        "GOAT_EXPLORER_URL",
+        "GOAT_USDC_ADDRESS",
+        "GOAT_USDT_ADDRESS",
+        "X402_API_URL",
+        "X402_MERCHANT_ID",
+        "X402_API_KEY",
+        "X402_API_SECRET",
+        // Bright Data
+        "BRIGHT_DATA_API_KEY",
+        "BRIGHTDATA_API_KEY",
+        "BRIGHT_DATA_XIAOHONGSHU_COLLECTOR",
+        "BRIGHT_DATA_XIAOHONGSHU_TRIGGER_URL",
+        // Google
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_PASSWORD",
+        // Browserbase
+        "BROWSERBASE_API_KEY",
+        "BROWSERBASE_PROJECT_ID",
+        "BROWSERBASE_STATE_DIR",
+        "BROWSERBASE_ACTIVE_SESSION_PATH",
+        // Browser handoff
+        "BROWSER_HANDOFF_BASE_URL",
+        "BROWSER_HANDOFF_SIGNING_SECRET",
+        // Human approval gate
+        "HUMAN_APPROVAL_GATE_URL",
+        "POSTMARK_SERVER_TOKEN",
+        "POSTMARK_API_BASE_URL",
+        "HUMAN_APPROVAL_FROM",
+        "HUMAN_APPROVAL_REPLY_TO",
+        // Lark
+        "LARK_APP_ID",
+        "LARK_APP_SECRET",
+        // Discord
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_BOT_USER_ID",
+        "DISCORD_CLIENT_ID",
+        "DISCORD_CLIENT_SECRET",
+        "DISCORD_REDIRECT_URI",
+        "DISCORD_API_BASE_URL",
+        // Slack
+        "SLACK_BOT_TOKEN",
+        "SLACK_BOT_USER_ID",
+        "SLACK_CLIENT_ID",
+        "SLACK_CLIENT_SECRET",
+        "SLACK_AUTH_REDIRECT_URI",
+        "SLACK_REDIRECT_URI",
+        "SLACK_SIGNING_SECRET",
+        "SLACK_APP_ID",
+        "SLACK_API_BASE_URL",
+        // WeChat
+        "WECHAT_TOKEN",
+        "WECHAT_ENCODING_AES_KEY",
+        "WECHAT_CORP_ID",
+        "WECHAT_AGENT_ID",
+        "WECHAT_SECRET",
+        // Twilio
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_API_BASE_URL",
+        "TWILIO_WEBHOOK_URL",
+        // Notion
+        "NOTION_WEBHOOK_SECRET",
+        "NOTION_INTEGRATION_ID",
+        "NOTION_CLIENT_ID",
+        "NOTION_CLIENT_SECRET",
+        "NOTION_REDIRECT_URI",
+        "NOTION_API_TOKEN",
+        // GitHub
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "GITHUB_USERNAME",
+        // Google Workspace CLI
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_CLIENT_ID",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_CLIENT_SECRET",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_REFRESH_TOKEN",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE_TYPE",
+        "GOOGLE_ACCESS_TOKEN",
+        // Deploy target
+        "DEPLOY_TARGET",
+        "EMPLOYEE_ID",
+    ];
+
+    for key in passthrough_keys {
+        if let Ok(value) = std::env::var(key) {
+            if !value.trim().is_empty() {
+                env_vars.push(format!("{}={}", key, value));
+            }
+        }
+    }
+
+    env_vars
+}
+
 async fn provision_warm_container(config: &PoolConfig) -> Result<String, String> {
     let container_name = format!("{}{}", CONTAINER_PREFIX, Uuid::new_v4().simple());
 
     eprintln!("[pool_manager] Provisioning container: {}", container_name);
 
+    let env_vars = collect_warm_container_env_vars(config);
+
     let output = tokio::task::spawn_blocking({
         let config = config.clone();
         let container_name = container_name.clone();
         move || {
-            Command::new("az")
-                .arg("container")
+            let mut cmd = Command::new("az");
+            cmd.arg("container")
                 .arg("create")
                 .arg("--resource-group")
                 .arg(&config.resource_group)
@@ -204,12 +370,13 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
                 .arg(&config.registry_username)
                 .arg("--registry-password")
                 .arg(&config.registry_password)
-                .arg("--environment-variables")
-                .arg(format!("TASK_QUEUE_NAME={}", config.task_queue_name))
-                .arg(format!("COMPLETION_QUEUE_NAME={}", config.completion_queue_name))
-                .arg(format!("QUEUE_STORAGE_ACCOUNT={}", config.queue_storage_account))
-                .arg(format!("QUEUE_STORAGE_KEY={}", config.queue_storage_key))
-                .arg("--command-line")
+                .arg("--environment-variables");
+
+            for env_var in &env_vars {
+                cmd.arg(env_var);
+            }
+
+            cmd.arg("--command-line")
                 .arg("/bin/bash -lc 'warm_worker.sh'")
                 .arg("--location")
                 .arg(&config.location)
@@ -229,6 +396,33 @@ async fn provision_warm_container(config: &PoolConfig) -> Result<String, String>
     }
 
     Ok(container_name)
+}
+
+/// Count existing warm containers in the resource group.
+fn count_existing_containers(resource_group: &str) -> Result<usize, String> {
+    let output = Command::new("az")
+        .arg("container")
+        .arg("list")
+        .arg("--resource-group")
+        .arg(resource_group)
+        .arg("--query")
+        .arg(format!("[?starts_with(name, '{}')].name", CONTAINER_PREFIX))
+        .arg("-o")
+        .arg("tsv")
+        .output()
+        .map_err(|e| format!("az command failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "az container list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+
+    Ok(count)
 }
 
 /// Ensure an Azure Storage Queue exists (idempotent).
@@ -331,5 +525,159 @@ mod tests {
 
         let manager = PoolManager::new(config, None);
         assert_eq!(manager.target_size(), 5); // DEFAULT_POOL_SIZE
+    }
+
+    fn test_config() -> PoolConfig {
+        PoolConfig {
+            resource_group: "test-rg".to_string(),
+            image: "test-image".to_string(),
+            cpu: "2.0".to_string(),
+            memory_gb: "4.0".to_string(),
+            queue_storage_account: "teststorage".to_string(),
+            queue_storage_key: "testkey".to_string(),
+            task_queue_name: "test-tasks".to_string(),
+            completion_queue_name: "test-completions".to_string(),
+            registry_server: "testregistry.azurecr.io".to_string(),
+            registry_username: "testuser".to_string(),
+            registry_password: "testpass".to_string(),
+            location: "westus2".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_includes_queue_config() {
+        let config = test_config();
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"TASK_QUEUE_NAME=test-tasks".to_string()));
+        assert!(env_vars.contains(&"COMPLETION_QUEUE_NAME=test-completions".to_string()));
+        assert!(env_vars.contains(&"QUEUE_STORAGE_ACCOUNT=teststorage".to_string()));
+        assert!(env_vars.contains(&"QUEUE_STORAGE_KEY=testkey".to_string()));
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_includes_home_and_codex_home() {
+        let config = test_config();
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"HOME=/app/.workspace/task".to_string()));
+        assert!(env_vars.contains(&"CODEX_HOME=/app/.workspace/task/.codex".to_string()));
+        assert!(env_vars.contains(&"WORKSPACE_LOCAL_DIR=/app/.workspace/task".to_string()));
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_passes_through_api_keys() {
+        let config = test_config();
+
+        // Set some env vars
+        std::env::set_var("OPENAI_API_KEY", "test-openai-key");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        assert!(env_vars.contains(&"OPENAI_API_KEY=test-openai-key".to_string()));
+        assert!(env_vars.contains(&"AZURE_OPENAI_ENDPOINT=https://test.openai.azure.com".to_string()));
+
+        // Cleanup
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_skips_empty_values() {
+        let config = test_config();
+
+        // Set an empty env var
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        // Should not include empty values
+        assert!(!env_vars.iter().any(|v| v.starts_with("ANTHROPIC_API_KEY=")));
+
+        // Cleanup
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn test_collect_warm_container_env_vars_skips_whitespace_only_values() {
+        let config = test_config();
+
+        // Set a whitespace-only env var
+        std::env::set_var("STRIPE_SECRET_KEY", "   ");
+
+        let env_vars = collect_warm_container_env_vars(&config);
+
+        // Should not include whitespace-only values
+        assert!(!env_vars.iter().any(|v| v.starts_with("STRIPE_SECRET_KEY=")));
+
+        // Cleanup
+        std::env::remove_var("STRIPE_SECRET_KEY");
+    }
+
+    #[test]
+    fn test_containers_needed_calculation() {
+        // Test the saturating_sub logic used in initialize()
+        let target_size: usize = 5;
+
+        // No existing containers -> need all 5
+        assert_eq!(target_size.saturating_sub(0), 5);
+
+        // 3 existing -> need 2 more
+        assert_eq!(target_size.saturating_sub(3), 2);
+
+        // Already at target -> need 0
+        assert_eq!(target_size.saturating_sub(5), 0);
+
+        // More than target (shouldn't happen, but handle gracefully) -> need 0
+        assert_eq!(target_size.saturating_sub(7), 0);
+    }
+
+    #[test]
+    fn test_container_prefix_constant() {
+        // Ensure prefix is what we expect for az queries
+        assert_eq!(CONTAINER_PREFIX, "dwz-warm-");
+    }
+
+    #[test]
+    fn test_pool_manager_active_count_starts_at_zero() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(5));
+
+        // Before initialize, active_count should be 0
+        assert_eq!(manager.active_count(), 0);
+    }
+
+    #[test]
+    fn test_pool_manager_replenish_decrements_count() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(5));
+
+        // Manually set active count to simulate initialized state
+        manager.active_count.store(5, Ordering::SeqCst);
+        assert_eq!(manager.active_count(), 5);
+
+        // replenish() decrements the count (note: won't spawn without runtime handle)
+        manager.replenish();
+        assert_eq!(manager.active_count(), 4);
+
+        manager.replenish();
+        assert_eq!(manager.active_count(), 3);
+    }
+
+    #[test]
+    fn test_pool_manager_replenish_skips_when_at_target() {
+        let config = test_config();
+        let manager = PoolManager::new(config, Some(3));
+
+        // Set active count above target
+        manager.active_count.store(5, Ordering::SeqCst);
+
+        // replenish decrements but logs "skipping" since still >= target
+        manager.replenish(); // 5 -> 4, still >= 3
+        assert_eq!(manager.active_count(), 4);
+
+        manager.replenish(); // 4 -> 3, still >= 3
+        assert_eq!(manager.active_count(), 3);
     }
 }

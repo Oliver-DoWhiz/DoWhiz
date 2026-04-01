@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Ensure standard paths are available (login shell may reset PATH)
+export PATH="/app/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+
 # Warm pool worker script.
 # Polls Azure Queue for tasks, processes them, and signals completion.
 #
@@ -22,19 +25,49 @@ POLL_INTERVAL="${POLL_INTERVAL:-2}"
 export WORKSPACE_LOCAL_DIR="${WORKSPACE_LOCAL_DIR:-/app/.workspace/task}"
 
 echo "[warm_worker] Starting, polling queue: $TASK_QUEUE"
+echo "[warm_worker] Storage account: $STORAGE_ACCOUNT"
+echo "[warm_worker] Poll interval: $POLL_INTERVAL seconds"
 
+POLL_COUNT=0
 while true; do
-    # Get message from queue
-    MSG=$(az storage message get \
+    POLL_COUNT=$((POLL_COUNT + 1))
+
+    # Peek at queue to see what's available
+    QUEUE_PEEK=$(az storage message peek \
         --queue-name "$TASK_QUEUE" \
         --account-name "$STORAGE_ACCOUNT" \
         --account-key "$STORAGE_KEY" \
-        --output json 2>/dev/null | jq -r '.[0] // empty')
+        --num-messages 10 \
+        --output json 2>/dev/null || echo "[]")
+    QUEUE_COUNT=$(echo "$QUEUE_PEEK" | jq 'length')
+    echo "[warm_worker] Poll #$POLL_COUNT - queue has $QUEUE_COUNT message(s)"
+    if [ "$QUEUE_COUNT" -gt 0 ]; then
+        echo "[warm_worker] Queue contents: $QUEUE_PEEK"
+    fi
+
+    # Get message from queue (capture stdout and stderr separately)
+    AZ_STDOUT=$(az storage message get \
+        --queue-name "$TASK_QUEUE" \
+        --account-name "$STORAGE_ACCOUNT" \
+        --account-key "$STORAGE_KEY" \
+        --output json 2>/dev/null)
+    AZ_EXIT_CODE=$?
+
+    if [ $AZ_EXIT_CODE -ne 0 ]; then
+        echo "[warm_worker] az command failed with exit code $AZ_EXIT_CODE" >&2
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+
+    # Parse the JSON response
+    MSG=$(echo "$AZ_STDOUT" | jq -r '.[0] // empty' 2>/dev/null || echo "")
 
     if [ -n "$MSG" ]; then
+        echo "[warm_worker] Poll #$POLL_COUNT - MESSAGE FOUND"
         MESSAGE_ID=$(echo "$MSG" | jq -r '.id')
         POP_RECEIPT=$(echo "$MSG" | jq -r '.popReceipt')
         CONTENT=$(echo "$MSG" | jq -r '.content' | base64 -d)
+        echo "[warm_worker] Message ID: $MESSAGE_ID"
 
         TASK_ID=$(echo "$CONTENT" | jq -r '.task_id')
         echo "[warm_worker] Received task: $TASK_ID"
@@ -80,6 +113,11 @@ while true; do
 
         echo "[warm_worker] Task $TASK_ID complete, exiting"
         exit "$AGENT_EXIT_CODE"
+    else
+        # No message - log occasionally to show we're alive
+        if [ $POLL_COUNT -le 3 ] || [ $((POLL_COUNT % 30)) -eq 0 ]; then
+            echo "[warm_worker] Poll #$POLL_COUNT - no messages, waiting..."
+        fi
     fi
 
     sleep "$POLL_INTERVAL"
