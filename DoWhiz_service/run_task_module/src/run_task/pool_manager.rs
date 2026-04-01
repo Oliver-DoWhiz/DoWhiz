@@ -12,7 +12,7 @@
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 const DEFAULT_POOL_SIZE: usize = 5;
@@ -54,6 +54,8 @@ pub struct PoolManager {
     target_size: usize,
     /// Tokio runtime handle captured during initialization for use in sync contexts
     runtime_handle: OnceLock<tokio::runtime::Handle>,
+    /// Mutex to serialize replenish checks and prevent over-provisioning
+    replenish_lock: Mutex<()>,
 }
 
 impl PoolManager {
@@ -64,6 +66,7 @@ impl PoolManager {
             active_count: AtomicUsize::new(0),
             target_size: target_size.unwrap_or(DEFAULT_POOL_SIZE),
             runtime_handle: OnceLock::new(),
+            replenish_lock: Mutex::new(()),
         }
     }
 
@@ -130,17 +133,30 @@ impl PoolManager {
             previous - 1
         );
 
+        // Lock to serialize check-and-reserve, preventing concurrent replenish
+        // calls from both seeing count < target and over-provisioning
+        let _guard = match self.replenish_lock.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                eprintln!("[pool_manager] Failed to acquire replenish lock: {}", e);
+                return;
+            }
+        };
+
         let current = self.active_count.load(Ordering::SeqCst);
         if current >= self.target_size {
             eprintln!("[pool_manager] Pool at target size, skipping replenish");
             return;
         }
 
-        // Use the runtime handle captured during initialize() to spawn from sync context
+        // Reserve slot before spawning
+        self.active_count.fetch_add(1, Ordering::SeqCst);
+
         let handle = match self.runtime_handle.get() {
             Some(h) => h,
             None => {
                 eprintln!("[pool_manager] No runtime handle available, skipping replenish");
+                self.active_count.fetch_sub(1, Ordering::SeqCst);
                 return;
             }
         };
@@ -148,17 +164,20 @@ impl PoolManager {
         let config = self.config.clone();
         let active_count = &self.active_count as *const AtomicUsize as usize;
 
+        drop(_guard); // Release lock before spawning async work
+
         handle.spawn(async move {
             eprintln!("[pool_manager] Replenishing pool...");
             match provision_warm_container(&config).await {
                 Ok(name) => {
-                    // Safe: we're just incrementing an atomic counter
-                    let counter =
-                        unsafe { &*(active_count as *const AtomicUsize) };
-                    counter.fetch_add(1, Ordering::SeqCst);
                     eprintln!("[pool_manager] Replenished with: {}", name);
                 }
-                Err(e) => eprintln!("[pool_manager] Replenish failed: {}", e),
+                Err(e) => {
+                    // Rollback reservation on failure
+                    let counter = unsafe { &*(active_count as *const AtomicUsize) };
+                    counter.fetch_sub(1, Ordering::SeqCst);
+                    eprintln!("[pool_manager] Replenish failed: {}", e);
+                }
             }
         });
     }
