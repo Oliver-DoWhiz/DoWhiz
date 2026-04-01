@@ -10,6 +10,10 @@
     "test:auth-onboarding": "node --test tests/connect-onboarding.test.mjs",
     "preview": "vite preview",
     "test:responsive": "node scripts/responsive-audit.mjs",
+    "seo:build": "node scripts/build-seo-artifacts.mjs",
+    "seo:report": "node scripts/seo-keyword-report.mjs",
+    "seo:new-blog": "node scripts/new-seo-blog-post.mjs",
+    "preseo:crawl": "npm run seo:build",
     "seo:crawl": "node scripts/seo-crawl-report.mjs"
   },
   "dependencies": {

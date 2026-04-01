@@ -122,7 +122,9 @@ impl Drop for EnvUnsetGuard {
 pub enum FakeCodexMode {
     Success,
     NoOutput,
+    EmptyReply,
     Fail,
+    ReplyThenFail,
     TurnAborted,
     GithubEnvCheck,
     X402EnvCheck,
@@ -155,10 +157,27 @@ set -e
 echo '{"type":"item.delta","item":{"type":"agent_message"},"delta":{"text":"ok"}}'
 "#
         }
+        FakeCodexMode::EmptyReply => {
+            r#"#!/bin/sh
+set -e
+printf '   \n\t' > reply_email_draft.html
+mkdir -p reply_email_attachments
+"#
+        }
         FakeCodexMode::Fail => {
             r#"#!/bin/sh
 echo "simulated failure" >&2
 exit 2
+"#
+        }
+        FakeCodexMode::ReplyThenFail => {
+            r#"#!/bin/sh
+set -e
+echo "<html><body>Recovered reply</body></html>" > reply_email_draft.html
+mkdir -p reply_email_attachments
+echo "attachment" > reply_email_attachments/attachment.txt
+echo "response.failed event received" >&2
+exit 23
 "#
         }
         FakeCodexMode::TurnAborted => {
@@ -366,6 +385,8 @@ exit 0
 #[derive(Clone, Copy)]
 pub enum FakeClaudeMode {
     Success,
+    EnsureModel,
+    Fail,
     Sleep,
 }
 
@@ -383,6 +404,35 @@ echo '{"type":"message_delta","delta":{"text":"ok"}}'
 echo "<html><body>Test reply</body></html>" > reply_email_draft.html
 mkdir -p reply_email_attachments
 echo "attachment" > reply_email_attachments/attachment.txt
+"#
+        }
+        FakeClaudeMode::EnsureModel => {
+            r#"#!/bin/sh
+set -e
+expected="${EXPECTED_CLAUDE_MODEL:-}"
+actual=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--model" ]; then
+    actual="$arg"
+    break
+  fi
+  prev="$arg"
+done
+if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+  echo "unexpected claude model: expected '$expected' got '$actual'" >&2
+  exit 3
+fi
+echo '{"type":"message_delta","delta":{"text":"ok"}}'
+echo "<html><body>Claude fallback reply</body></html>" > reply_email_draft.html
+mkdir -p reply_email_attachments
+echo "attachment" > reply_email_attachments/attachment.txt
+"#
+        }
+        FakeClaudeMode::Fail => {
+            r#"#!/bin/sh
+echo "simulated claude failure" >&2
+exit 7
 "#
         }
         FakeClaudeMode::Sleep => {

@@ -1,6 +1,6 @@
 (function () {
-  const EN_ORIGIN = 'https://www.dowhiz.com';
-  const EN_ORIGIN_ALT = 'https://dowhiz.com';
+  const EN_ORIGIN = 'https://dowhiz.com';
+  const EN_ORIGIN_ALT = 'https://www.dowhiz.com';
   const CN_PATH_PREFIX = '/cn';
   const CN_ORIGIN = EN_ORIGIN + CN_PATH_PREFIX;
   const CN_ORIGIN_ALT = EN_ORIGIN_ALT + CN_PATH_PREFIX;
@@ -419,13 +419,30 @@
     link.href = href;
   }
 
+  function removeAlternateLink(hreflang) {
+    const node = document.querySelector('link[rel="alternate"][hreflang="' + hreflang + '"]');
+    if (node) {
+      node.remove();
+    }
+  }
+
+  function ensureMetaByName(name) {
+    let node = document.querySelector('meta[name="' + name + '"]');
+    if (!node) {
+      node = document.createElement('meta');
+      node.setAttribute('name', name);
+      document.head.appendChild(node);
+    }
+    return node;
+  }
+
   function localizeHead(translations) {
     document.documentElement.lang = 'zh-CN';
     document.documentElement.setAttribute('data-locale', 'zh-CN');
 
     const pathname = getContentPathname(window.location.pathname);
     const search = window.location.search;
-    const canonicalHref = EN_ORIGIN + getLocalizedPath(pathname);
+    const canonicalHref = EN_ORIGIN + pathname;
 
     if (document.title) {
       const translatedTitle = translateString(document.title, translations);
@@ -471,7 +488,8 @@
       ogLocale.setAttribute('content', 'zh_CN');
     }
 
-    ensureAlternateLink('zh-CN', canonicalHref);
+    ensureMetaByName('robots').setAttribute('content', 'noindex, follow');
+    removeAlternateLink('zh-CN');
     ensureAlternateLink('en', EN_ORIGIN + pathname);
     ensureAlternateLink('x-default', EN_ORIGIN + pathname);
   }

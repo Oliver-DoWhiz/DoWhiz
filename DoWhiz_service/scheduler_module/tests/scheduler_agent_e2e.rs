@@ -33,6 +33,16 @@ impl Drop for EnvGuard {
     }
 }
 
+fn require_mongodb_uri(test_name: &str) -> bool {
+    match env::var("MONGODB_URI") {
+        Ok(value) if !value.trim().is_empty() => true,
+        _ => {
+            eprintln!("Skipping {test_name}; MONGODB_URI not set.");
+            false
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct RecordingExecutor {
     sent_subjects: Arc<Mutex<Vec<String>>>,
@@ -69,7 +79,7 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
                     superseded: false,
-                    terminal_note: None,
+                    terminal_note: output.recovery_note,
                 })
             }
             TaskKind::SendReply(send) => {
@@ -120,8 +130,34 @@ exit 0
     Ok(path)
 }
 
+fn write_fake_codex_late_failure(dir: &Path) -> io::Result<PathBuf> {
+    let script = r#"#!/bin/sh
+set -e
+cat > reply_email_draft.html <<'HTML'
+<html><body>Recovered reply</body></html>
+HTML
+mkdir -p reply_email_attachments
+echo "deck" > reply_email_attachments/deck.txt
+echo "response.failed event received" >&2
+exit 23
+"#;
+    let path = dir.join("codex");
+    fs::write(&path, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms)?;
+    }
+    Ok(path)
+}
+
 #[test]
 fn scheduler_actions_end_to_end() {
+    if !require_mongodb_uri("scheduler_actions_end_to_end") {
+        return;
+    }
     let temp = TempDir::new().expect("tempdir");
     let root = temp.path();
     let bin_root = root.join("bin");
@@ -259,4 +295,91 @@ fn scheduler_actions_end_to_end() {
     scheduler.tick().expect("tick send_email");
     let sent = sent_subjects.lock().expect("sent subjects lock");
     assert!(sent.iter().any(|subject| subject == "Follow up"));
+}
+
+#[test]
+fn scheduler_auto_reply_recovers_late_codex_failure_after_reply_written() {
+    if !require_mongodb_uri("scheduler_auto_reply_recovers_late_codex_failure_after_reply_written")
+    {
+        return;
+    }
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path();
+    let bin_root = root.join("bin");
+    let workspace = root.join("workspace");
+    let memory = workspace.join("memory");
+    let references = workspace.join("references");
+    let input_email = workspace.join("incoming_email");
+    let input_attachments = workspace.join("incoming_attachments");
+    fs::create_dir_all(&bin_root).expect("bin root");
+    fs::create_dir_all(&memory).expect("memory dir");
+    fs::create_dir_all(&references).expect("references dir");
+    fs::create_dir_all(&input_email).expect("input email dir");
+    fs::create_dir_all(&input_attachments).expect("input attachments dir");
+    fs::write(
+        input_email.join("postmark_payload.json"),
+        r#"{"Subject":"PPT update","MessageID":"<msg-123>"}"#,
+    )
+    .expect("write payload");
+
+    write_fake_codex_late_failure(&bin_root).expect("write fake codex");
+    let home_root = root.join("home");
+    fs::create_dir_all(&home_root).expect("home root");
+    let original_path = env::var("PATH").unwrap_or_default();
+    let path_value = format!("{}:{}", bin_root.display(), original_path);
+    let _path_guard = EnvGuard::set("PATH", &path_value);
+    let _home_guard = EnvGuard::set("HOME", home_root.to_str().expect("home root path"));
+    let _docker_guard = EnvGuard::set("RUN_TASK_DOCKER_IMAGE", "");
+    let _deploy_target_guard = EnvGuard::set("DEPLOY_TARGET", "local");
+    let _execution_backend_guard = EnvGuard::set("RUN_TASK_EXECUTION_BACKEND", "local");
+    let _api_guard = EnvGuard::set("AZURE_OPENAI_API_KEY_BACKUP", "test-key");
+    let _endpoint_guard = EnvGuard::set("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.test");
+    let _gh_guard = EnvGuard::set("GH_AUTH_DISABLED", "1");
+
+    let executor = RecordingExecutor::default();
+    let sent_subjects = executor.sent_subjects.clone();
+    let mut scheduler = Scheduler::load(root.join("tasks.db"), executor).expect("load scheduler");
+
+    let run_task = RunTaskTask {
+        workspace_dir: workspace.clone(),
+        input_email_dir: PathBuf::from("incoming_email"),
+        input_attachments_dir: PathBuf::from("incoming_attachments"),
+        memory_dir: PathBuf::from("memory"),
+        reference_dir: PathBuf::from("references"),
+        model_name: "gpt-5.4".to_string(),
+        runner: "codex".to_string(),
+        codex_disabled: false,
+        reply_to: vec!["user@example.com".to_string()],
+        reply_from: Some("service@example.com".to_string()),
+        archive_root: None,
+        thread_id: Some("thread-recovery".to_string()),
+        thread_epoch: Some(1),
+        thread_state_path: None,
+        channel: scheduler_module::channel::Channel::Email,
+        slack_team_id: None,
+        employee_id: None,
+        requester_identifier_type: None,
+        requester_identifier: None,
+        account_id: None,
+        channel_metadata: Default::default(),
+    };
+
+    scheduler
+        .add_one_shot_in(Duration::from_secs(0), TaskKind::RunTask(run_task))
+        .expect("add run_task");
+
+    scheduler.tick().expect("tick run_task");
+
+    let send_email_task = scheduler
+        .tasks()
+        .iter()
+        .find(|task| matches!(task.kind, TaskKind::SendReply(_)))
+        .expect("send_email task missing");
+    if let TaskKind::SendReply(send) = &send_email_task.kind {
+        assert_eq!(send.subject, "Re: PPT update");
+    }
+
+    scheduler.tick().expect("tick send_email");
+    let sent = sent_subjects.lock().expect("sent subjects lock");
+    assert!(sent.iter().any(|subject| subject == "Re: PPT update"));
 }

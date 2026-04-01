@@ -249,9 +249,42 @@ Rules:
 fn build_cross_channel_capabilities_section() -> &'static str {
     r#"Cross-channel Tools (if user's Google account is linked):
 - `gws` - Google Workspace CLI for Gmail/Drive/Docs operations
-- `google-docs` - Create/read/edit documents, share files
-- `google-slides` - Create/read/edit presentations, share files
-- `google-sheets` - Read/write spreadsheet data
+- `google-docs` - Create/read/edit documents, share files, manage folders
+- `google-slides` - Create/read/edit presentations, share files, manage folders
+- `google-sheets` - Create/read/edit spreadsheets, share files, manage folders
+
+Google Docs Content Formatting:
+When writing content to Google Docs, use simple HTML format (NOT Markdown):
+- Headings: `<h1>Title</h1>`, `<h2>Section</h2>`
+- Paragraphs: `<p>Text here</p>`
+- Bold: `<b>bold text</b>`
+- Lists: `<ul><li>item 1</li><li>item 2</li></ul>`
+- Links: `<a href="url">link text</a>`
+Example: `google-docs append <doc_id> "<h1>Project Plan</h1><p>Overview of the project...</p>"`
+
+Discord Bot Tools (for Discord messages):
+- `discord_cli send-message <channel_id> <message>` - Send message to a channel
+- `discord_cli send-reply <channel_id> <message_id> <message>` - Reply to a specific message
+- `discord_cli send-dm <user_id> <message>` - Send DM to a user
+- `discord_cli list-guild-members <guild_id>` - List all members in a Discord server
+- `discord_cli dm-all-guild <guild_id> <message>` - DM all members in a Discord server
+
+IMPORTANT: For Discord operations (DMs, channel messages), ALWAYS use `discord_cli`.
+Do NOT use browser automation for Discord - the bot token is already configured.
+
+GitHub CLI (`gh`) - for GitHub repository operations:
+- `gh repo create <name> --public/--private` - Create new repository
+- `gh repo create <org>/<name> --public` - Create repo in an organization
+- `gh issue create --title "..." --body "..."` - Create issue
+- `gh issue list` - List issues
+- `gh pr create --title "..." --body "..."` - Create pull request
+- `gh release create <tag> --notes "..."` - Create release
+
+IMPORTANT: For GitHub operations, ALWAYS use `gh` CLI (already authenticated).
+Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
+
+Identity Lookup - for inviting Discord guild members to shared resources:
+- When you need to share Google Docs/GitHub repos with Discord guild members, read `skills/identity-lookup/SKILL.md` for the `identity_lookup_cli` commands.
 
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
@@ -1136,6 +1169,8 @@ mod tests {
         assert!(prompt.contains("google-docs"));
         assert!(prompt.contains("google-slides"));
         assert!(prompt.contains("google-sheets"));
+        assert!(prompt.contains("Discord Bot Tools"));
+        assert!(prompt.contains("discord_cli"));
 
         // Verify security note and SKILL.md reference
         assert!(prompt.contains("CURRENT USER"));

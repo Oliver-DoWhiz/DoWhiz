@@ -132,7 +132,7 @@ impl TaskExecutor for RecordingExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
                     superseded: false,
-                    terminal_note: None,
+                    terminal_note: output.recovery_note,
                 })
             }
             TaskKind::SendReply(send) => {

@@ -1380,9 +1380,11 @@ impl TaskExecutor for ModuleExecutor {
                             std::env::var("RUN_TASK_TIMEOUT_SECS")
                                 .ok()
                                 .and_then(|v| v.parse().ok())
-                                .unwrap_or(3600)
+                                .unwrap_or(3600),
                         );
-                        let timing = run_task_module::TaskTimingBuilder::new(&task.workspace_dir.display().to_string());
+                        let timing = run_task_module::TaskTimingBuilder::new(
+                            &task.workspace_dir.display().to_string(),
+                        );
 
                         match run_task_module::run_codex_warm_pool(
                             &pool_manager,
@@ -1594,7 +1596,7 @@ impl TaskExecutor for ModuleExecutor {
                     scheduler_actions_error: output.scheduler_actions_error,
                     skip_auto_reply: false,
                     superseded: false,
-                    terminal_note: None,
+                    terminal_note: output.recovery_note,
                 })
             }
             TaskKind::Noop => Ok(TaskExecution::empty()),
