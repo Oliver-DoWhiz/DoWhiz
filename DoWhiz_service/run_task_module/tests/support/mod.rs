@@ -387,6 +387,7 @@ pub enum FakeClaudeMode {
     Success,
     EnsureModel,
     Fail,
+    ReplyThenSleep,
     Sleep,
 }
 
@@ -433,6 +434,16 @@ echo "attachment" > reply_email_attachments/attachment.txt
             r#"#!/bin/sh
 echo "simulated claude failure" >&2
 exit 7
+"#
+        }
+        FakeClaudeMode::ReplyThenSleep => {
+            r#"#!/bin/sh
+set -e
+echo '{"type":"message_delta","delta":{"text":"partial ok"}}'
+echo "<html><body>Claude timeout recovery reply</body></html>" > reply_email_draft.html
+mkdir -p reply_email_attachments
+echo "attachment" > reply_email_attachments/attachment.txt
+sleep "${SLEEP_SECS:-2}"
 "#
         }
         FakeClaudeMode::Sleep => {

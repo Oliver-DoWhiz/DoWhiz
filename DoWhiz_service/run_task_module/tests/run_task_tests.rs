@@ -223,6 +223,7 @@ fn run_task_reports_missing_output() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::create_dir_all(&bin_dir).unwrap();
     write_fake_codex(&bin_dir, FakeCodexMode::NoOutput).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
 
     let old_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
@@ -236,7 +237,14 @@ fn run_task_reports_missing_output() {
 
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
-    assert!(matches!(err, RunTaskError::OutputMissing { .. }));
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Expected output not found"));
+            assert!(primary.contains("reply_email_draft.html"));
+            assert!(fallback.contains("simulated claude failure"));
+        }
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
 }
 
 #[test]
@@ -251,6 +259,7 @@ fn run_task_reports_empty_reply_as_missing_output() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::create_dir_all(&bin_dir).unwrap();
     write_fake_codex(&bin_dir, FakeCodexMode::EmptyReply).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
 
     let old_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
@@ -264,7 +273,14 @@ fn run_task_reports_empty_reply_as_missing_output() {
 
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
-    assert!(matches!(err, RunTaskError::OutputMissing { .. }));
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Expected output not found"));
+            assert!(primary.contains("reply_email_draft.html"));
+            assert!(fallback.contains("simulated claude failure"));
+        }
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
 }
 
 #[test]
@@ -279,6 +295,7 @@ fn run_task_reports_codex_failure() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::create_dir_all(&bin_dir).unwrap();
     write_fake_codex(&bin_dir, FakeCodexMode::Fail).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
 
     let old_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
@@ -292,13 +309,16 @@ fn run_task_reports_codex_failure() {
 
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
-    assert!(matches!(
-        err,
-        RunTaskError::CodexFailed {
-            status: Some(2),
-            ..
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Codex failed"));
+            assert!(primary.contains("status: Some(2)"));
+            assert!(primary.contains("simulated failure"));
+            assert!(fallback.contains("Claude failed"));
+            assert!(fallback.contains("simulated claude failure"));
         }
-    ));
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
 }
 
 #[test]
@@ -322,8 +342,7 @@ fn run_task_falls_back_to_claude_after_codex_failure_by_default() {
         ("PATH", &new_path),
         ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
-        ("CLAUDE_MODEL", "claude-fallback-env-model"),
-        ("EXPECTED_CLAUDE_MODEL", "claude-fallback-env-model"),
+        ("EXPECTED_CLAUDE_MODEL", "claude-sonnet-4-5"),
         ("GH_AUTH_DISABLED", "1"),
     ]);
 
@@ -334,7 +353,7 @@ fn run_task_falls_back_to_claude_after_codex_failure_by_default() {
     assert_eq!(
         result.recovery_note.as_deref(),
         Some(
-            "Recovered via Claude fallback after primary Codex failure (Codex failed) using the configured default Claude model"
+            "Recovered via Claude fallback after primary Codex failure (Codex failed) using Claude model claude-sonnet-4-5"
         )
     );
     assert!(workspace
@@ -349,7 +368,7 @@ fn run_task_falls_back_to_claude_after_codex_failure_by_default() {
     )
     .unwrap();
     assert!(fallback_note.contains("status=success"));
-    assert!(fallback_note.contains("fallback_model=(default)"));
+    assert!(fallback_note.contains("fallback_model=claude-sonnet-4-5"));
 }
 
 #[test]
@@ -409,8 +428,7 @@ fn warm_pool_codex_failure_falls_back_to_claude_by_default() {
         ("PATH", &new_path),
         ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
-        ("CLAUDE_MODEL", "claude-fallback-env-model"),
-        ("EXPECTED_CLAUDE_MODEL", "claude-fallback-env-model"),
+        ("EXPECTED_CLAUDE_MODEL", "claude-sonnet-4-5"),
         ("GH_AUTH_DISABLED", "1"),
     ]);
 
@@ -449,6 +467,46 @@ fn warm_pool_codex_failure_falls_back_to_claude_by_default() {
     .unwrap();
     assert!(fallback_note.contains("status=success"));
     assert!(fallback_note.contains("warm pool simulated failure"));
+    assert!(fallback_note.contains("fallback_model=claude-sonnet-4-5"));
+}
+
+#[test]
+#[cfg(unix)]
+fn run_task_recovers_ready_reply_after_claude_fallback_timeout() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let temp = TempDir::new("codex_task_claude_timeout_recovery").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_codex(&bin_dir, FakeCodexMode::Fail).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::ReplyThenSleep).unwrap();
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    let _env = EnvGuard::set(&[
+        ("HOME", home_dir.to_str().unwrap()),
+        ("PATH", &new_path),
+        ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
+        ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
+        ("RUN_TASK_TIMEOUT_SECS", "1"),
+        ("SLEEP_SECS", "2"),
+        ("GH_AUTH_DISABLED", "1"),
+    ]);
+
+    let params = build_params(&workspace);
+    let result = run_task(&params).expect("run_task should recover reply after Claude timeout");
+    let html = fs::read_to_string(&result.reply_html_path).unwrap();
+    assert!(html.contains("Claude timeout recovery reply"));
+    let recovery_note = result.recovery_note.as_deref().unwrap_or("");
+    assert!(
+        recovery_note.contains("Recovered ready reply artifact after Claude timed out after 1s")
+    );
+    assert!(recovery_note.contains(
+        "Recovered via Claude fallback after primary Codex failure (Codex failed) using Claude model claude-sonnet-4-5"
+    ));
 }
 
 #[test]
@@ -496,6 +554,7 @@ fn run_task_reports_turn_aborted_as_codex_failure() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::create_dir_all(&bin_dir).unwrap();
     write_fake_codex(&bin_dir, FakeCodexMode::TurnAborted).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
 
     let old_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
@@ -510,11 +569,14 @@ fn run_task_reports_turn_aborted_as_codex_failure() {
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
     match err {
-        RunTaskError::CodexFailed { status, output } => {
-            assert!(status.is_none());
-            assert!(output.contains("turn aborted"));
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Codex failed"));
+            assert!(primary.contains("status: None"));
+            assert!(primary.contains("turn aborted"));
+            assert!(fallback.contains("Claude failed"));
+            assert!(fallback.contains("simulated claude failure"));
         }
-        other => panic!("expected CodexFailed, got {:?}", other),
+        other => panic!("expected FallbackFailed, got {:?}", other),
     }
 }
 
@@ -530,6 +592,7 @@ fn run_task_times_out_with_codex() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::create_dir_all(&bin_dir).unwrap();
     write_fake_codex(&bin_dir, FakeCodexMode::Sleep).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
 
     let old_path = env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), old_path);
@@ -545,14 +608,14 @@ fn run_task_times_out_with_codex() {
 
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
-    assert!(matches!(
-        err,
-        RunTaskError::CommandTimeout {
-            command: "codex",
-            timeout_secs: 1,
-            ..
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Command timed out (codex after 1s)"));
+            assert!(fallback.contains("Claude failed"));
+            assert!(fallback.contains("simulated claude failure"));
         }
-    ));
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
 }
 
 #[test]
@@ -599,10 +662,13 @@ fn run_task_reports_missing_codex_cli() {
     let workspace = create_workspace(&temp.path).unwrap();
 
     let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
     fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Fail).unwrap();
     let _env = EnvGuard::set(&[
         ("HOME", home_dir.to_str().unwrap()),
-        ("PATH", ""),
+        ("PATH", bin_dir.to_str().unwrap()),
         ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
         ("GH_AUTH_DISABLED", "1"),
@@ -610,7 +676,14 @@ fn run_task_reports_missing_codex_cli() {
 
     let params = build_params(&workspace);
     let err = run_task(&params).unwrap_err();
-    assert!(matches!(err, RunTaskError::CodexNotFound));
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("Codex CLI not found on PATH."));
+            assert!(fallback.contains("Claude failed"));
+            assert!(fallback.contains("simulated claude failure"));
+        }
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
 }
 
 #[test]

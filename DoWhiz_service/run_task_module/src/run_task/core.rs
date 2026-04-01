@@ -38,6 +38,7 @@ pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
             &runner,
             reply_html_path.clone(),
             reply_attachments_dir.clone(),
+            false,
         ),
         _ => run_codex_task(
             build_request(&workspace_dir, params, params.model_name.as_str()),
@@ -73,6 +74,7 @@ pub fn run_claude_fallback_after_codex_failure(
         "claude",
         reply_html_path,
         reply_attachments_dir,
+        true,
     );
 
     match fallback_result {
@@ -171,7 +173,8 @@ fn resolve_claude_fallback_model(primary_model_name: &str) -> String {
     if trimmed.to_ascii_lowercase().contains("claude") {
         trimmed.to_string()
     } else {
-        String::new()
+        read_env_trimmed("ANTHROPIC_DEFAULT_SONNET_MODEL")
+            .unwrap_or_else(|| "claude-sonnet-4-5".to_string())
     }
 }
 
