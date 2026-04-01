@@ -33,6 +33,66 @@ pub(super) fn build_prompt(
     has_unified_account: bool,
     user_identities: &UserIdentities,
 ) -> String {
+    build_prompt_internal(
+        input_email_dir,
+        input_attachments_dir,
+        memory_dir,
+        reference_dir,
+        workspace_dir,
+        runner,
+        memory_context,
+        reply_required,
+        channel,
+        has_unified_account,
+        user_identities,
+        false,
+    )
+}
+
+pub(super) fn build_prompt_with_fast_completion(
+    input_email_dir: &Path,
+    input_attachments_dir: &Path,
+    memory_dir: &Path,
+    reference_dir: &Path,
+    workspace_dir: &Path,
+    runner: &str,
+    memory_context: &str,
+    reply_required: bool,
+    channel: &str,
+    has_unified_account: bool,
+    user_identities: &UserIdentities,
+    prefer_fast_completion: bool,
+) -> String {
+    build_prompt_internal(
+        input_email_dir,
+        input_attachments_dir,
+        memory_dir,
+        reference_dir,
+        workspace_dir,
+        runner,
+        memory_context,
+        reply_required,
+        channel,
+        has_unified_account,
+        user_identities,
+        prefer_fast_completion,
+    )
+}
+
+fn build_prompt_internal(
+    input_email_dir: &Path,
+    input_attachments_dir: &Path,
+    memory_dir: &Path,
+    reference_dir: &Path,
+    workspace_dir: &Path,
+    runner: &str,
+    memory_context: &str,
+    reply_required: bool,
+    channel: &str,
+    has_unified_account: bool,
+    user_identities: &UserIdentities,
+    prefer_fast_completion: bool,
+) -> String {
     let memory_section = if memory_context.trim().is_empty() {
         "Memory context (from memory/*.md):\n- (no memory files found)\n\n".to_string()
     } else {
@@ -149,6 +209,17 @@ Keep your reply concise. Use the API only - no browser automation."#
     let human_approval_gate_section = build_human_approval_gate_section();
     let chat_history_capabilities_section =
         build_chat_history_capabilities_section(workspace_dir, channel);
+    let fast_completion_section = if prefer_fast_completion {
+        r#"Claude fallback execution guidance:
+- This run is a recovery path after the primary runner failed, so prioritize delivering a useful reply over exhaustive research.
+- For long research or writing tasks, begin updating the final reply artifact early and keep it current as sections become ready.
+- If you are still gathering evidence, clearly mark the draft as a working draft near the top, and remove or replace that note before you finish if the reply becomes complete.
+- Keep web research focused. Reuse evidence already gathered, avoid repeating similar searches, and stop searching once you have enough support to answer the user's questions coherently.
+
+"#
+    } else {
+        ""
+    };
 
     // Build registration prompt section if user doesn't have a unified account
     // and we haven't prompted them yet in this thread.
@@ -217,6 +288,7 @@ Scheduling:
 {web_auth_capabilities_section}
 {human_approval_gate_section}
 {user_identities_section}
+{fast_completion_section}
 Rules:
 - Each workspace includes a `.env` file at the workspace root. You may edit it to manage per-user secrets; updates are synced back after the task completes.
 - Do not modify input directories. Any file editing requests should be done on the copied version of attachments and save into reply_email_attachments/ to be sent back to the user. Mark version updates as "_v2", "_v3", etc. in the filename.
@@ -239,6 +311,7 @@ Rules:
         web_auth_capabilities_section = web_auth_capabilities_section,
         human_approval_gate_section = human_approval_gate_section,
         user_identities_section = user_identities_section,
+        fast_completion_section = fast_completion_section,
         filesystem_security_section = filesystem_security_section,
         registration_section = registration_section,
     )
@@ -285,6 +358,9 @@ Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
 
 Identity Lookup - for inviting Discord guild members to shared resources:
 - When you need to share Google Docs/GitHub repos with Discord guild members, read `skills/identity-lookup/SKILL.md` for the `identity_lookup_cli` commands.
+
+Group Project Coordination:
+- When coordinating team workspaces or shared resources for multiple people, read `skills/group-project-coordination/SKILL.md` for the workflow.
 
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.

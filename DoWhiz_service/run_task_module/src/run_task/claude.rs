@@ -49,7 +49,7 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
 use super::env::{load_env_sources, remove_restricted_agent_env};
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
-use super::prompt::{build_prompt, load_memory_context};
+use super::prompt::{build_prompt_with_fast_completion, load_memory_context};
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::trace::RunTaskTraceRecorder;
 use super::types::{RunTaskOutput, RunTaskRequest};
@@ -57,11 +57,14 @@ use super::utils::{
     run_command_with_timeout_and_cancel, run_task_timeout, tail_string, ThreadSupersedeMonitor,
 };
 
+const DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS: u64 = 480;
+
 pub(super) fn run_claude_task(
     request: RunTaskRequest<'_>,
     runner: &str,
     reply_html_path: std::path::PathBuf,
     reply_attachments_dir: std::path::PathBuf,
+    is_codex_fallback: bool,
 ) -> Result<RunTaskOutput, RunTaskError> {
     load_env_sources(request.workspace_dir)?;
     let github_auth = resolve_github_auth(None)?;
@@ -87,7 +90,7 @@ pub(super) fn run_claude_task(
     };
 
     let memory_context = load_memory_context(request.workspace_dir, request.memory_dir)?;
-    let prompt = build_prompt(
+    let prompt = build_prompt_with_fast_completion(
         request.input_email_dir,
         request.input_attachments_dir,
         request.memory_dir,
@@ -99,6 +102,7 @@ pub(super) fn run_claude_task(
         request.channel,
         request.has_unified_account,
         request.user_identities,
+        is_codex_fallback,
     );
 
     ensure_github_cli_auth(&github_auth)?;
@@ -111,7 +115,7 @@ pub(super) fn run_claude_task(
         ));
         env_overrides.push(("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()));
     }
-    let timeout = run_task_timeout();
+    let timeout = claude_task_timeout(is_codex_fallback);
     let mut trace = RunTaskTraceRecorder::new(
         request.workspace_dir,
         runner,
@@ -132,9 +136,31 @@ pub(super) fn run_claude_task(
         &model_name,
         &env_overrides,
         cancel_monitor.as_ref(),
+        timeout,
     ) {
         Ok(output) => output,
         Err(err) => {
+            let expected_reply_path =
+                resolve_expected_reply_path(request.workspace_dir, reply_html_path.clone());
+            if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+                !request.reply_to.is_empty(),
+                &expected_reply_path,
+                &err,
+            ) {
+                let _ = trace.record_text("logs/recovery_note.txt", &recovery_note);
+                let _ = trace.finish(None, true, None, None);
+                return Ok(RunTaskOutput {
+                    reply_html_path: expected_reply_path,
+                    reply_attachments_dir,
+                    codex_output: recovery_note.clone(),
+                    scheduled_tasks: Vec::new(),
+                    scheduled_tasks_error: None,
+                    scheduler_actions: Vec::new(),
+                    scheduler_actions_error: None,
+                    token_usage: None,
+                    recovery_note: Some(recovery_note),
+                });
+            }
             let _ = trace.finish(None, false, Some(&err.to_string()), None);
             return Err(err);
         }
@@ -196,6 +222,17 @@ pub(super) fn run_claude_task(
         token_usage: None, // TODO: Extract from Claude API response
         recovery_note: None,
     })
+}
+
+fn claude_task_timeout(is_codex_fallback: bool) -> std::time::Duration {
+    let default_timeout = run_task_timeout();
+    if !is_codex_fallback {
+        return default_timeout;
+    }
+
+    default_timeout.min(std::time::Duration::from_secs(
+        DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS,
+    ))
 }
 
 fn prepare_claude_env(
@@ -311,8 +348,8 @@ fn run_claude_command(
     model_name: &str,
     env_overrides: &[(String, String)],
     cancel_monitor: Option<&ThreadSupersedeMonitor>,
+    timeout: std::time::Duration,
 ) -> Result<std::process::Output, RunTaskError> {
-    let timeout = run_task_timeout();
     match run_command_with_timeout_and_cancel(
         build_claude_command(workspace_dir, prompt, model_name, env_overrides),
         timeout,
@@ -337,6 +374,54 @@ fn run_claude_command(
         }
         Err(err) => Err(err),
     }
+}
+
+fn reply_artifact_ready(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if path.file_name().and_then(|value| value.to_str()) == Some(".notion_api_replied") {
+        return true;
+    }
+    match fs::read_to_string(path) {
+        Ok(contents) => !contents.trim().is_empty(),
+        Err(_) => fs::metadata(path)
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false),
+    }
+}
+
+fn maybe_recover_from_ready_reply_artifact(
+    reply_expected: bool,
+    expected_reply_path: &Path,
+    err: &RunTaskError,
+) -> Option<String> {
+    if !reply_expected || !reply_artifact_ready(expected_reply_path) {
+        return None;
+    }
+
+    let reason = match err {
+        RunTaskError::CommandTimeout {
+            command: "claude",
+            timeout_secs,
+            ..
+        } => format!(
+            "Recovered ready reply artifact after Claude timed out after {}s",
+            timeout_secs
+        ),
+        RunTaskError::ClaudeFailed {
+            status: Some(code), ..
+        } => format!(
+            "Recovered ready reply artifact after Claude exited with status {code} after writing output"
+        ),
+        RunTaskError::OutputMissing { .. } => {
+            "Recovered ready reply artifact after Claude reported a late output validation failure"
+                .to_string()
+        }
+        _ => "Recovered ready reply artifact after a late Claude failure".to_string(),
+    };
+
+    Some(reason)
 }
 
 fn build_claude_command(
