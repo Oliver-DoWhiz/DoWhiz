@@ -17,13 +17,13 @@ mod utils;
 mod workspace;
 
 pub use codex::{cleanup_all_aci_containers, run_codex_warm_pool};
+pub use core::{run_claude_fallback_after_codex_failure, run_task};
+pub use errors::RunTaskError;
 pub use pool_manager::{PoolConfig, PoolManager};
 pub use timing::{
     clear_timing_log, get_timing_log_path, QueueLatencyCollector, StageStats, TaskTiming,
     TaskTimingBuilder, TimingStats, QUEUE_LATENCY_COLLECTOR, TIMING_COLLECTOR,
 };
-pub use core::run_task;
-pub use errors::RunTaskError;
 pub use trace::RUN_TASK_TRACE_DIRNAME;
 pub use types::{
     RunTaskOutput, RunTaskParams, ScheduleRequest, ScheduledSendEmailTask, ScheduledTaskRequest,

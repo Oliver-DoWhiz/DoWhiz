@@ -1,6 +1,8 @@
 mod support;
 
-use run_task_module::{run_task, RunTaskError, RunTaskParams};
+use run_task_module::{
+    run_claude_fallback_after_codex_failure, run_task, RunTaskError, RunTaskParams,
+};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -387,6 +389,69 @@ fn run_task_reports_both_errors_when_claude_fallback_fails() {
         }
         other => panic!("expected FallbackFailed, got {:?}", other),
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn warm_pool_codex_failure_falls_back_to_claude_when_enabled() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let temp = TempDir::new("warm_pool_codex_fallback_to_claude").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::EnsureModel).unwrap();
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    let _env = EnvGuard::set(&[
+        ("HOME", home_dir.to_str().unwrap()),
+        ("PATH", &new_path),
+        ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
+        ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
+        ("CLAUDE_MODEL", "claude-fallback-env-model"),
+        ("EXPECTED_CLAUDE_MODEL", "claude-fallback-env-model"),
+        ("RUN_TASK_CODEX_FALLBACK_TO_CLAUDE", "1"),
+        ("GH_AUTH_DISABLED", "1"),
+    ]);
+
+    let trace_dir = workspace.join(".run_task_trace");
+    fs::create_dir_all(&trace_dir).unwrap();
+    fs::write(trace_dir.join("metadata.json"), "{}").unwrap();
+    let reply_html_path = workspace.join("reply_email_draft.html");
+    fs::write(&reply_html_path, "stale reply").unwrap();
+    let attachments_dir = workspace.join("reply_email_attachments");
+    fs::create_dir_all(&attachments_dir).unwrap();
+    fs::write(attachments_dir.join("stale.txt"), "stale attachment").unwrap();
+
+    let params = build_params(&workspace);
+    let result = run_claude_fallback_after_codex_failure(
+        &params,
+        RunTaskError::CodexFailed {
+            status: Some(1),
+            output: "warm pool simulated failure".to_string(),
+        },
+    )
+    .expect("warm-pool fallback should recover with Claude");
+
+    let html = fs::read_to_string(&result.reply_html_path).unwrap();
+    assert!(html.contains("Claude fallback reply"));
+    assert!(!attachments_dir.join("stale.txt").exists());
+    assert!(workspace
+        .join(".run_task_trace_codex_primary")
+        .join("metadata.json")
+        .exists());
+    let fallback_note = fs::read_to_string(
+        workspace
+            .join(".run_task_trace")
+            .join("recovery")
+            .join("codex_to_claude_fallback.txt"),
+    )
+    .unwrap();
+    assert!(fallback_note.contains("status=success"));
+    assert!(fallback_note.contains("warm pool simulated failure"));
 }
 
 #[test]

@@ -1393,21 +1393,45 @@ impl TaskExecutor for ModuleExecutor {
                             timing,
                         ) {
                             Ok(output) => output,
+                            Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
+                                return Ok(superseded_task_execution(reason));
+                            }
                             Err(err) => {
-                                if let Some(account_id) = account_id {
-                                    track_scheduler_event(
-                                        "task_failed",
-                                        account_id,
-                                        Some(format!("task_failed:{}:warm_pool", task_dedupe_key)),
-                                        task,
-                                        json!({
-                                            "error_reason": "warm_pool_failed",
-                                            "error": err.to_string(),
-                                            "channel": task.channel.to_string(),
-                                        }),
-                                    );
+                                match run_task_module::run_claude_fallback_after_codex_failure(
+                                    &params, err,
+                                ) {
+                                    Ok(output) => {
+                                        info!(
+                                            "Warm-pool Codex run recovered via Claude fallback for {}",
+                                            task_dedupe_key
+                                        );
+                                        output
+                                    }
+                                    Err(run_task_module::RunTaskError::Canceled {
+                                        reason, ..
+                                    }) => {
+                                        return Ok(superseded_task_execution(reason));
+                                    }
+                                    Err(err) => {
+                                        if let Some(account_id) = account_id {
+                                            track_scheduler_event(
+                                                "task_failed",
+                                                account_id,
+                                                Some(format!(
+                                                    "task_failed:{}:warm_pool",
+                                                    task_dedupe_key
+                                                )),
+                                                task,
+                                                json!({
+                                                    "error_reason": "warm_pool_failed",
+                                                    "error": err.to_string(),
+                                                    "channel": task.channel.to_string(),
+                                                }),
+                                            );
+                                        }
+                                        return Err(SchedulerError::TaskFailed(err.to_string()));
+                                    }
                                 }
-                                return Err(SchedulerError::TaskFailed(err.to_string()));
                             }
                         }
                     } else {

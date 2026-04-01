@@ -49,49 +49,61 @@ pub fn run_task(params: &RunTaskParams) -> Result<RunTaskOutput, RunTaskError> {
 
     match primary_result {
         Ok(output) => Ok(output),
-        Err(primary_err) if should_fallback_to_claude(&runner, &primary_err) => {
-            let fallback_model = resolve_claude_fallback_model(params.model_name.as_str());
-            archive_primary_codex_trace(&workspace_dir)?;
-            reset_reply_artifacts(&reply_html_path, &reply_attachments_dir)?;
-            let fallback_result = run_claude_task(
-                build_request(&workspace_dir, params, fallback_model.as_str()),
-                "claude",
-                reply_html_path,
-                reply_attachments_dir,
-            );
+        Err(primary_err) => run_claude_fallback_after_codex_failure(params, primary_err),
+    }
+}
 
-            match fallback_result {
-                Ok(mut output) => {
-                    let note = build_claude_fallback_note(&primary_err, fallback_model.as_str());
-                    write_fallback_note(
-                        &workspace_dir,
-                        "success",
-                        fallback_model.as_str(),
-                        &primary_err,
-                        None,
-                    )?;
-                    output.recovery_note = Some(match output.recovery_note.take() {
-                        Some(existing) => format!("{}\n{}", existing, note),
-                        None => note,
-                    });
-                    Ok(output)
-                }
-                Err(fallback_err) => {
-                    write_fallback_note(
-                        &workspace_dir,
-                        "failed",
-                        fallback_model.as_str(),
-                        &primary_err,
-                        Some(&fallback_err),
-                    )?;
-                    Err(RunTaskError::FallbackFailed {
-                        primary: primary_err.to_string(),
-                        fallback: fallback_err.to_string(),
-                    })
-                }
-            }
+pub fn run_claude_fallback_after_codex_failure(
+    params: &RunTaskParams,
+    primary_err: RunTaskError,
+) -> Result<RunTaskOutput, RunTaskError> {
+    let runner = normalize_runner(&params.runner);
+    if !should_fallback_to_claude(&runner, &primary_err) {
+        return Err(primary_err);
+    }
+
+    let workspace_dir = remap_workspace_dir(&params.workspace_dir)?;
+    let request = build_request(&workspace_dir, params, params.model_name.as_str());
+    let (reply_html_path, reply_attachments_dir) = prepare_workspace(&request)?;
+    let fallback_model = resolve_claude_fallback_model(params.model_name.as_str());
+    archive_primary_codex_trace(&workspace_dir)?;
+    reset_reply_artifacts(&reply_html_path, &reply_attachments_dir)?;
+    let fallback_result = run_claude_task(
+        build_request(&workspace_dir, params, fallback_model.as_str()),
+        "claude",
+        reply_html_path,
+        reply_attachments_dir,
+    );
+
+    match fallback_result {
+        Ok(mut output) => {
+            let note = build_claude_fallback_note(&primary_err, fallback_model.as_str());
+            write_fallback_note(
+                &workspace_dir,
+                "success",
+                fallback_model.as_str(),
+                &primary_err,
+                None,
+            )?;
+            output.recovery_note = Some(match output.recovery_note.take() {
+                Some(existing) => format!("{}\n{}", existing, note),
+                None => note,
+            });
+            Ok(output)
         }
-        Err(err) => Err(err),
+        Err(fallback_err) => {
+            write_fallback_note(
+                &workspace_dir,
+                "failed",
+                fallback_model.as_str(),
+                &primary_err,
+                Some(&fallback_err),
+            )?;
+            Err(RunTaskError::FallbackFailed {
+                primary: primary_err.to_string(),
+                fallback: fallback_err.to_string(),
+            })
+        }
     }
 }
 
