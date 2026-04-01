@@ -130,7 +130,7 @@ RUN curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
 
 **Symptom:** Agent couldn't authenticate or find workspace files.
 
-**Fix:** Updated `pool_manager.rs` to pass all required env vars during container creation, matching the original ACI flow.
+**Fix:** Updated `pool_manager.rs` to pass the required env vars during container creation, matching the original ACI flow. Due to sheer complexity of initial ACI provisioning, not all env vars that existed in original provisioning logic were passed
 
 ### 5. Debug logging for queue polling
 **Commit:** `64a3110` - Debug logging for warm_worker.sh
@@ -150,12 +150,22 @@ RUN curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
 
 **Fix:** Implemented "true dequeue" - delete message immediately after receiving, before processing. Scheduler handles retry logic based on completion message.
 
-### 7. Async container provisioning
+### 7. Async pool replenishment
 **Commit:** `8566f25` - Pass runtime handler into replenish for async processing
 
-**Problem:** Pool replenishment blocked the scheduler while waiting for containers to provision.
+**Problem:** 
 
-**Fix:** Made container provisioning async - replenishment runs in background without blocking task execution.
+```
+Main Tokio runtime  ←── Handle points here
+       ↑
+       │ handle.spawn() sends work here
+       │
+Scheduler worker thread (not tokio thread, synchronous std::thread) 
+replenish() called async function provision_warm_container() from this blocking worker thread, 
+and thus needs to get a tokio thread from tokio pool for async processing
+```
+
+**Fix:** Store the Tokio runtime handle in `initialize()`, then use `handle.spawn()` to dispatch async work from the synchronous worker thread.
 
 ### 8. Timing instrumentation for warm pool
 **Commit:** `4de2d89` - Initialize timing collector for warm setup
