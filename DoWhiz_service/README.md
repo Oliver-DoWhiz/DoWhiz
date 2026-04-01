@@ -214,8 +214,12 @@ Docker execution path (local worker):
 - Codex-specific failures automatically retry with the Claude runner, including warm-pool
   executions
 - optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
+- optional `RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS=<seconds>` to cap Claude fallback runtime; the
+  default fallback cap is 900 seconds and it is still bounded by the overall watchdog budget
 - Codex success still requires the expected reply artifact to be present and non-empty; warm-pool
   completion queue exit codes are validated before the scheduler records success
+- when scheduler warm-pool mode is enabled, a warm-pool failure automatically retries through the
+  normal direct `run_task` path; that retry can then use the Codex -> Claude fallback above
 
 Azure ACI execution path (required vars):
 - `RUN_TASK_AZURE_ACI_RESOURCE_GROUP`
@@ -446,6 +450,11 @@ Manual live run example:
 RUN_CODEX_E2E=1 POSTMARK_LIVE_TEST=1 \
   cargo test -p scheduler_module --test service_real_email -- --nocapture
 ```
+
+Optional live-email overrides:
+- `RUST_SERVICE_LIVE_EMAIL_BODY_FILE=/abs/path/prompt.txt` or `RUST_SERVICE_LIVE_EMAIL_BODY_TEXT=...`
+  to send a specific inbound email body through the live harness instead of the default short test
+  message
 
 Canonical test checklist:
 - `reference_documentation/test_plans/DoWhiz_service_tests.md`

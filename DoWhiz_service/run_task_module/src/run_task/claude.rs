@@ -46,7 +46,7 @@ fn resolve_expected_reply_path(workspace_dir: &Path, default_path: PathBuf) -> P
         _ => default_path,
     }
 }
-use super::env::{load_env_sources, remove_restricted_agent_env};
+use super::env::{load_env_sources, read_env_trimmed, remove_restricted_agent_env};
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt_with_fast_completion, load_memory_context};
@@ -57,7 +57,7 @@ use super::utils::{
     run_command_with_timeout_and_cancel, run_task_timeout, tail_string, ThreadSupersedeMonitor,
 };
 
-const DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS: u64 = 480;
+const DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS: u64 = 900;
 
 pub(super) fn run_claude_task(
     request: RunTaskRequest<'_>,
@@ -230,9 +230,12 @@ fn claude_task_timeout(is_codex_fallback: bool) -> std::time::Duration {
         return default_timeout;
     }
 
-    default_timeout.min(std::time::Duration::from_secs(
-        DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS,
-    ))
+    let fallback_timeout_secs = read_env_trimmed("RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS);
+
+    default_timeout.min(std::time::Duration::from_secs(fallback_timeout_secs))
 }
 
 fn prepare_claude_env(

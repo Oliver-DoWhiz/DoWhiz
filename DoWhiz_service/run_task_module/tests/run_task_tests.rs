@@ -656,6 +656,44 @@ fn run_task_times_out_with_claude() {
 
 #[test]
 #[cfg(unix)]
+fn run_task_codex_fallback_uses_configured_claude_timeout() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let temp = TempDir::new("codex_fallback_claude_timeout_override").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_codex(&bin_dir, FakeCodexMode::Fail).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::Sleep).unwrap();
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    let _env = EnvGuard::set(&[
+        ("HOME", home_dir.to_str().unwrap()),
+        ("PATH", &new_path),
+        ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
+        ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
+        ("GH_AUTH_DISABLED", "1"),
+        ("RUN_TASK_TIMEOUT_SECS", "10"),
+        ("RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS", "1"),
+        ("SLEEP_SECS", "2"),
+    ]);
+
+    let params = build_params(&workspace);
+    let err = run_task(&params).unwrap_err();
+    match err {
+        RunTaskError::FallbackFailed { primary, fallback } => {
+            assert!(primary.contains("simulated failure"));
+            assert!(fallback.contains("Command timed out (claude after 1s)"));
+        }
+        other => panic!("expected FallbackFailed, got {:?}", other),
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn run_task_reports_missing_codex_cli() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("codex_task_missing_cli").unwrap();
