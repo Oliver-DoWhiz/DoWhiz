@@ -1382,13 +1382,13 @@ impl TaskExecutor for ModuleExecutor {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(3600)
                         );
-                        let mut timing = run_task_module::TaskTimingBuilder::new(&task.workspace_dir.display().to_string());
+                        let timing = run_task_module::TaskTimingBuilder::new(&task.workspace_dir.display().to_string());
 
                         match run_task_module::run_codex_warm_pool(
                             &pool_manager,
                             &params,
                             timeout,
-                            &mut timing,
+                            timing,
                         ) {
                             Ok(output) => output,
                             Err(err) => {

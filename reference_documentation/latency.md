@@ -114,7 +114,7 @@ export PATH="/app/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sb
 ### 3. Missing jq and Azure CLI in base Docker image
 **Commit:** `4c9fb02` - Added jq, azure cli for dockerfile image creation
 
-**Problem:** Base Docker image didn't include `jq` (for JSON parsing) or Azure CLI (for queue operations).
+**Problem:** Base Docker image didn't include `jq` (for JSON parsing) or Azure CLI (for queue operations). `jq` is needed for parsing the dequeued task fileshare access credentials from Azure Queue.
 
 **Fix:** Added to `Dockerfile.base`:
 ```dockerfile
