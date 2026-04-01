@@ -118,6 +118,13 @@ fn normalize_runner(raw: &str) -> String {
     }
 }
 
+fn is_codex_timeout_eligible_for_fallback(command: &str) -> bool {
+    matches!(
+        command,
+        "codex" | "docker" | "docker run" | "az container create" | "az container show"
+    )
+}
+
 fn build_request<'a>(
     workspace_dir: &'a Path,
     params: &'a RunTaskParams,
@@ -145,23 +152,18 @@ fn should_fallback_to_claude(primary_runner: &str, err: &RunTaskError) -> bool {
         return false;
     }
 
-    matches!(
-        err,
+    match err {
         RunTaskError::CodexNotFound
-            | RunTaskError::CodexFailed { .. }
-            | RunTaskError::DockerNotFound
-            | RunTaskError::DockerFailed { .. }
-            | RunTaskError::AzureCliNotFound
-            | RunTaskError::OutputMissing { .. }
-            | RunTaskError::CommandTimeout {
-                command: "codex",
-                ..
-            }
-            | RunTaskError::CommandTimeout {
-                command: "docker",
-                ..
-            }
-    )
+        | RunTaskError::CodexFailed { .. }
+        | RunTaskError::DockerNotFound
+        | RunTaskError::DockerFailed { .. }
+        | RunTaskError::AzureCliNotFound
+        | RunTaskError::OutputMissing { .. } => true,
+        RunTaskError::CommandTimeout { command, .. } => {
+            is_codex_timeout_eligible_for_fallback(command)
+        }
+        _ => false,
+    }
 }
 
 fn resolve_claude_fallback_model(primary_model_name: &str) -> String {
@@ -233,12 +235,17 @@ fn primary_error_summary(err: &RunTaskError) -> &'static str {
         RunTaskError::DockerNotFound => "Docker not found for Codex execution",
         RunTaskError::DockerFailed { .. } => "Docker-wrapped Codex execution failed",
         RunTaskError::AzureCliNotFound => "Azure CLI unavailable for Codex execution",
-        RunTaskError::CommandTimeout {
-            command: "codex", ..
-        } => "Codex timed out",
-        RunTaskError::CommandTimeout {
-            command: "docker", ..
-        } => "Docker-wrapped Codex timed out",
+        RunTaskError::CommandTimeout { command, .. } if *command == "codex" => "Codex timed out",
+        RunTaskError::CommandTimeout { command, .. }
+            if *command == "docker" || *command == "docker run" =>
+        {
+            "Docker-wrapped Codex timed out"
+        }
+        RunTaskError::CommandTimeout { command, .. }
+            if *command == "az container create" || *command == "az container show" =>
+        {
+            "Azure ACI Codex timed out"
+        }
         RunTaskError::OutputMissing { .. } => {
             "Codex finished without writing the expected reply artifact"
         }
@@ -275,4 +282,20 @@ fn write_fallback_note(
     }
     fs::write(recovery_dir.join("codex_to_claude_fallback.txt"), body)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_codex_timeout_eligible_for_fallback;
+
+    #[test]
+    fn codex_timeout_fallback_covers_remote_and_docker_commands() {
+        assert!(is_codex_timeout_eligible_for_fallback("codex"));
+        assert!(is_codex_timeout_eligible_for_fallback("docker run"));
+        assert!(is_codex_timeout_eligible_for_fallback(
+            "az container create"
+        ));
+        assert!(is_codex_timeout_eligible_for_fallback("az container show"));
+        assert!(!is_codex_timeout_eligible_for_fallback("az container logs"));
+    }
 }
