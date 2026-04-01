@@ -303,7 +303,7 @@ fn run_task_reports_codex_failure() {
 
 #[test]
 #[cfg(unix)]
-fn run_task_falls_back_to_claude_after_codex_failure_when_enabled() {
+fn run_task_falls_back_to_claude_after_codex_failure_by_default() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("codex_task_fallback_to_claude").unwrap();
     let workspace = create_workspace(&temp.path).unwrap();
@@ -324,7 +324,6 @@ fn run_task_falls_back_to_claude_after_codex_failure_when_enabled() {
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
         ("CLAUDE_MODEL", "claude-fallback-env-model"),
         ("EXPECTED_CLAUDE_MODEL", "claude-fallback-env-model"),
-        ("RUN_TASK_CODEX_FALLBACK_TO_CLAUDE", "1"),
         ("GH_AUTH_DISABLED", "1"),
     ]);
 
@@ -355,7 +354,7 @@ fn run_task_falls_back_to_claude_after_codex_failure_when_enabled() {
 
 #[test]
 #[cfg(unix)]
-fn run_task_reports_both_errors_when_claude_fallback_fails() {
+fn run_task_reports_both_errors_when_default_claude_fallback_fails() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("codex_task_fallback_failure").unwrap();
     let workspace = create_workspace(&temp.path).unwrap();
@@ -374,7 +373,6 @@ fn run_task_reports_both_errors_when_claude_fallback_fails() {
         ("PATH", &new_path),
         ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
-        ("RUN_TASK_CODEX_FALLBACK_TO_CLAUDE", "1"),
         ("GH_AUTH_DISABLED", "1"),
     ]);
 
@@ -393,7 +391,7 @@ fn run_task_reports_both_errors_when_claude_fallback_fails() {
 
 #[test]
 #[cfg(unix)]
-fn warm_pool_codex_failure_falls_back_to_claude_when_enabled() {
+fn warm_pool_codex_failure_falls_back_to_claude_by_default() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("warm_pool_codex_fallback_to_claude").unwrap();
     let workspace = create_workspace(&temp.path).unwrap();
@@ -413,7 +411,6 @@ fn warm_pool_codex_failure_falls_back_to_claude_when_enabled() {
         ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
         ("CLAUDE_MODEL", "claude-fallback-env-model"),
         ("EXPECTED_CLAUDE_MODEL", "claude-fallback-env-model"),
-        ("RUN_TASK_CODEX_FALLBACK_TO_CLAUDE", "1"),
         ("GH_AUTH_DISABLED", "1"),
     ]);
 

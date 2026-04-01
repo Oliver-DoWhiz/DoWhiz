@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::claude::run_claude_task;
 use super::codex::run_codex_task;
-use super::env::{env_enabled, read_env_trimmed};
+use super::env::read_env_trimmed;
 use super::errors::RunTaskError;
 use super::trace::RUN_TASK_TRACE_DIRNAME;
 use super::types::{RunTaskOutput, RunTaskParams, RunTaskRequest};
@@ -139,9 +139,7 @@ fn build_request<'a>(
 }
 
 fn should_fallback_to_claude(primary_runner: &str, err: &RunTaskError) -> bool {
-    if !primary_runner.eq_ignore_ascii_case("codex")
-        || !env_enabled("RUN_TASK_CODEX_FALLBACK_TO_CLAUDE")
-    {
+    if !primary_runner.eq_ignore_ascii_case("codex") {
         return false;
     }
 
