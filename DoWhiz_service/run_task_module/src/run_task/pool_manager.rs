@@ -12,7 +12,7 @@
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use uuid::Uuid;
 
 const DEFAULT_POOL_SIZE: usize = 5;
@@ -50,7 +50,7 @@ pub struct PoolConfig {
 /// Manages a pool of warm ACI containers.
 pub struct PoolManager {
     config: PoolConfig,
-    active_count: AtomicUsize,
+    active_count: Arc<AtomicUsize>,
     target_size: usize,
     /// Tokio runtime handle captured during initialization for use in sync contexts
     runtime_handle: OnceLock<tokio::runtime::Handle>,
@@ -63,7 +63,7 @@ impl PoolManager {
     pub fn new(config: PoolConfig, target_size: Option<usize>) -> Self {
         Self {
             config,
-            active_count: AtomicUsize::new(0),
+            active_count: Arc::new(AtomicUsize::new(0)),
             target_size: target_size.unwrap_or(DEFAULT_POOL_SIZE),
             runtime_handle: OnceLock::new(),
             replenish_lock: Mutex::new(()),
@@ -162,7 +162,7 @@ impl PoolManager {
         };
 
         let config = self.config.clone();
-        let active_count = &self.active_count as *const AtomicUsize as usize;
+        let active_count = Arc::clone(&self.active_count);
 
         drop(_guard); // Release lock before spawning async work
 
@@ -174,8 +174,7 @@ impl PoolManager {
                 }
                 Err(e) => {
                     // Rollback reservation on failure
-                    let counter = unsafe { &*(active_count as *const AtomicUsize) };
-                    counter.fetch_sub(1, Ordering::SeqCst);
+                    active_count.fetch_sub(1, Ordering::SeqCst);
                     eprintln!("[pool_manager] Replenish failed: {}", e);
                 }
             }
