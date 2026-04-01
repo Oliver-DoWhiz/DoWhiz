@@ -28,6 +28,9 @@ Late-finalization recovery:
 - when Codex has already written the expected reply artifact, `run_task` now treats that artifact as
   a recoverable completion signal even if the CLI later disconnects, refuses, or exits non-zero
   during finalization
+- warm-pool executions also validate the completion exit code and require the expected reply
+  artifact to be non-empty before reporting success, so Codex failures can fall through to the
+  normal error/fallback path instead of being recorded as successful no-reply runs
 - recovered runs surface a `recovery_note` in `RunTaskOutput` and write
   `.run_task_trace/logs/recovery_note.txt` for debugging
 

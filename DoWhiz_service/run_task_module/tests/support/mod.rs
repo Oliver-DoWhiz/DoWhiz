@@ -122,6 +122,7 @@ impl Drop for EnvUnsetGuard {
 pub enum FakeCodexMode {
     Success,
     NoOutput,
+    EmptyReply,
     Fail,
     ReplyThenFail,
     TurnAborted,
@@ -154,6 +155,13 @@ echo "attachment" > reply_email_attachments/attachment.txt
             r#"#!/bin/sh
 set -e
 echo '{"type":"item.delta","item":{"type":"agent_message"},"delta":{"text":"ok"}}'
+"#
+        }
+        FakeCodexMode::EmptyReply => {
+            r#"#!/bin/sh
+set -e
+printf '   \n\t' > reply_email_draft.html
+mkdir -p reply_email_attachments
 "#
         }
         FakeCodexMode::Fail => {

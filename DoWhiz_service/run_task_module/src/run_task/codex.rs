@@ -28,10 +28,10 @@ use super::env::{
 use super::errors::RunTaskError;
 use super::github_auth::{ensure_github_cli_auth, resolve_github_auth};
 use super::prompt::{build_prompt, load_memory_context};
-use super::types::RunTaskParams;
 use super::scheduled::{extract_scheduled_tasks, extract_scheduler_actions};
 use super::timing::{TaskTimingBuilder, TIMING_COLLECTOR};
 use super::trace::RunTaskTraceRecorder;
+use super::types::RunTaskParams;
 use super::types::{RunTaskOutput, RunTaskRequest, TokenUsage};
 use super::utils::{
     run_command_with_timeout, run_command_with_timeout_and_cancel, run_task_timeout, tail_string,
@@ -282,12 +282,12 @@ fn reply_artifact_ready(path: &Path) -> bool {
 }
 
 fn maybe_recover_from_ready_reply_artifact(
-    request: &RunTaskRequest<'_>,
+    reply_expected: bool,
     expected_reply_path: &Path,
     exit_status: Option<i32>,
     failure_output: &str,
 ) -> Option<String> {
-    if request.reply_to.is_empty() || !reply_artifact_ready(expected_reply_path) {
+    if !reply_expected || !reply_artifact_ready(expected_reply_path) {
         return None;
     }
 
@@ -323,6 +323,63 @@ fn record_codex_success(
         let _ = trace.record_text("logs/recovery_note.txt", note);
     }
     let _ = trace.finish(exit_status, true, None, token_usage);
+}
+
+fn validate_warm_pool_codex_result(
+    reply_expected: bool,
+    expected_reply_path: &Path,
+    exit_status: i32,
+    codex_output: &str,
+) -> Result<Option<String>, RunTaskError> {
+    let output_tail = tail_string(codex_output, 4000);
+    if exit_status != 0 {
+        let err = RunTaskError::CodexFailed {
+            status: Some(exit_status),
+            output: output_tail.clone(),
+        };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            reply_expected,
+            expected_reply_path,
+            Some(exit_status),
+            &err.to_string(),
+        ) {
+            return Ok(Some(recovery_note));
+        }
+        return Err(err);
+    }
+
+    if let Some(runtime_failure) = detect_codex_runtime_failure(codex_output) {
+        let status = runtime_failure
+            .status_code
+            .or(Some(exit_status).filter(|code| *code != 0));
+        let mut failure_output = runtime_failure.message;
+        if !output_tail.is_empty() {
+            failure_output.push('\n');
+            failure_output.push_str(&output_tail);
+        }
+        let err = RunTaskError::CodexFailed {
+            status,
+            output: failure_output,
+        };
+        if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
+            reply_expected,
+            expected_reply_path,
+            status,
+            &err.to_string(),
+        ) {
+            return Ok(Some(recovery_note));
+        }
+        return Err(err);
+    }
+
+    if reply_expected && !reply_artifact_ready(expected_reply_path) {
+        return Err(RunTaskError::OutputMissing {
+            path: expected_reply_path.to_path_buf(),
+            output: output_tail,
+        });
+    }
+
+    Ok(None)
 }
 
 pub(super) fn run_codex_task(
@@ -820,7 +877,7 @@ pub(super) fn run_codex_task(
             }
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             output.status.code(),
             &err.to_string(),
@@ -876,7 +933,7 @@ pub(super) fn run_codex_task(
             }
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             status,
             &err.to_string(),
@@ -906,7 +963,7 @@ pub(super) fn run_codex_task(
 
     // Only check for reply file if a reply was expected
     // Use cross-channel routing to determine actual expected path
-    if !request.reply_to.is_empty() && !expected_reply_path.exists() {
+    if !request.reply_to.is_empty() && !reply_artifact_ready(&expected_reply_path) {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail.clone(),
@@ -1353,7 +1410,7 @@ fn run_codex_task_azure_aci(
             ),
         };
         if let Some(recovery_note) = maybe_recover_from_ready_reply_artifact(
-            &request,
+            !request.reply_to.is_empty(),
             &expected_reply_path,
             exit_status,
             &err.to_string(),
@@ -1388,7 +1445,7 @@ fn run_codex_task_azure_aci(
     }
 
     // Use cross-channel routing to determine actual expected path
-    if !request.reply_to.is_empty() && !expected_reply_path.exists() {
+    if !request.reply_to.is_empty() && !reply_artifact_ready(&expected_reply_path) {
         let err = RunTaskError::OutputMissing {
             path: expected_reply_path,
             output: output_tail,
@@ -3425,7 +3482,8 @@ pub fn run_codex_warm_pool(
     );
 
     // 3. Build agent command (reuse existing logic)
-    let agent_command = build_warm_pool_agent_command(workspace_dir, &request.model_name, &request.channel)?;
+    let agent_command =
+        build_warm_pool_agent_command(workspace_dir, &request.model_name, &request.channel)?;
 
     // 4. Push task to queue
     let task_msg = serde_json::json!({
@@ -3489,6 +3547,13 @@ pub fn run_codex_warm_pool(
 
     let codex_output_path = workspace_dir.join("codex_output.txt");
     let codex_output = fs::read_to_string(&codex_output_path).unwrap_or_default();
+    let token_usage = extract_token_usage(&codex_output);
+    let recovery_note = validate_warm_pool_codex_result(
+        !request.reply_to.is_empty(),
+        &reply_html_path,
+        completion.exit_code,
+        &codex_output,
+    )?;
 
     // Extract scheduled tasks and actions from codex output
     let (scheduled_tasks, scheduled_tasks_error) = extract_scheduled_tasks(&codex_output);
@@ -3502,8 +3567,8 @@ pub fn run_codex_warm_pool(
         scheduled_tasks_error,
         scheduler_actions,
         scheduler_actions_error,
-        token_usage: None,
-        recovery_note: None,
+        token_usage,
+        recovery_note,
     })
 }
 
@@ -4844,24 +4909,8 @@ printf '%s\n' "$@" > "$capture_file"
         let reply = temp.path().join("reply_email_draft.html");
         fs::write(&reply, "<html><body>ready</body></html>").expect("write reply");
 
-        let request = RunTaskRequest {
-            workspace_dir: temp.path(),
-            input_email_dir: Path::new("incoming_email"),
-            input_attachments_dir: Path::new("incoming_attachments"),
-            memory_dir: Path::new("memory"),
-            reference_dir: Path::new("references"),
-            model_name: "gpt-5.4",
-            reply_to: &["user@example.com".to_string()],
-            channel: "email",
-            google_access_token: None,
-            has_unified_account: false,
-            user_identities: &super::super::types::UserIdentities::default(),
-            thread_epoch: None,
-            thread_state_path: None,
-        };
-
         let note = maybe_recover_from_ready_reply_artifact(
-            &request,
+            true,
             &reply,
             Some(23),
             "response.failed event received",
@@ -4869,6 +4918,58 @@ printf '%s\n' "$@" > "$capture_file"
         .expect("expected recovery note");
 
         assert!(note.contains("Recovered ready reply artifact"));
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_reports_nonzero_exit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+
+        let err = validate_warm_pool_codex_result(true, &reply, 1, "stream disconnected")
+            .expect_err("expected CodexFailed");
+
+        match err {
+            RunTaskError::CodexFailed { status, output } => {
+                assert_eq!(status, Some(1));
+                assert!(output.contains("stream disconnected"));
+            }
+            other => panic!("expected CodexFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_reports_output_missing_for_empty_reply() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "   \n\t").expect("write empty reply");
+
+        let err = validate_warm_pool_codex_result(
+            true,
+            &reply,
+            0,
+            r#"{"type":"event_msg","payload":{"type":"task_complete","status":"success","exit_code":0}}"#,
+        )
+        .expect_err("expected OutputMissing");
+
+        assert!(matches!(err, RunTaskError::OutputMissing { .. }));
+    }
+
+    #[test]
+    fn test_validate_warm_pool_codex_result_recovers_ready_reply_after_refusal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = temp.path().join("reply_email_draft.html");
+        fs::write(&reply, "<html><body>ready</body></html>").expect("write reply");
+
+        let note = validate_warm_pool_codex_result(
+            true,
+            &reply,
+            1,
+            "I'm sorry, but I cannot assist with that request.",
+        )
+        .expect("expected recovery")
+        .expect("expected recovery note");
+
+        assert!(note.contains("late Codex refusal"));
     }
 
     #[test]

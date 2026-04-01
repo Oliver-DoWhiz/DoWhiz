@@ -213,6 +213,8 @@ Docker execution path (local worker):
 - optional `RUN_TASK_DOCKER_REQUIRED=1`
 - optional `RUN_TASK_CODEX_FALLBACK_TO_CLAUDE=1` to retry Codex-specific failures with the Claude runner
 - optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
+- Codex success still requires the expected reply artifact to be present and non-empty; warm-pool
+  completion queue exit codes are validated before the scheduler records success
 
 Azure ACI execution path (required vars):
 - `RUN_TASK_AZURE_ACI_RESOURCE_GROUP`

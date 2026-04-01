@@ -239,6 +239,34 @@ fn run_task_reports_missing_output() {
 
 #[test]
 #[cfg(unix)]
+fn run_task_reports_empty_reply_as_missing_output() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let temp = TempDir::new("codex_task_empty_reply").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_codex(&bin_dir, FakeCodexMode::EmptyReply).unwrap();
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    let _env = EnvGuard::set(&[
+        ("HOME", home_dir.to_str().unwrap()),
+        ("PATH", &new_path),
+        ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
+        ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
+        ("GH_AUTH_DISABLED", "1"),
+    ]);
+
+    let params = build_params(&workspace);
+    let err = run_task(&params).unwrap_err();
+    assert!(matches!(err, RunTaskError::OutputMissing { .. }));
+}
+
+#[test]
+#[cfg(unix)]
 fn run_task_reports_codex_failure() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("codex_task_failure").unwrap();
