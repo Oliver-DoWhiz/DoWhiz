@@ -3408,7 +3408,7 @@ pub fn run_codex_warm_pool(
     pool_manager: &PoolManager,
     request: &RunTaskParams,
     timeout: Duration,
-    timing: &mut TaskTimingBuilder,
+    mut timing: TaskTimingBuilder,
 ) -> Result<RunTaskOutput, RunTaskError> {
     let config = load_azure_aci_config()?;
     let task_id = uuid::Uuid::new_v4().to_string();
