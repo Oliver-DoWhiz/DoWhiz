@@ -31,6 +31,11 @@ Late-finalization recovery:
 - warm-pool executions also validate the completion exit code and require the expected reply
   artifact to be non-empty before reporting success, so Codex failures can fall through to the
   normal error/fallback path instead of being recorded as successful no-reply runs
+- when scheduler warm-pool mode is enabled and a warm-pool run still fails, the scheduler now
+  retries once through the normal direct `run_task` path so the Codex -> Claude fallback remains
+  available for those jobs too
+- optional `RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS=<seconds>` caps Claude fallback runtime; by
+  default the fallback is bounded to 900 seconds and never exceeds the overall run_task timeout
 - recovered runs surface a `recovery_note` in `RunTaskOutput` and write
   `.run_task_trace/logs/recovery_note.txt` for debugging
 

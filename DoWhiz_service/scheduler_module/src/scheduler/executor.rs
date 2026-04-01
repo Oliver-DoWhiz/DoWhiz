@@ -186,6 +186,56 @@ fn superseded_task_execution(reason: impl Into<String>) -> TaskExecution {
     execution
 }
 
+fn summarize_run_task_error_inline(err: &run_task_module::RunTaskError) -> String {
+    err.to_string()
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .unwrap_or("unknown run_task error")
+        .to_string()
+}
+
+fn append_recovery_note(existing: Option<String>, note: String) -> Option<String> {
+    Some(match existing {
+        Some(existing) if !existing.trim().is_empty() => format!("{note}\n{existing}"),
+        _ => note,
+    })
+}
+
+fn append_warm_pool_recovery_note(
+    output: &mut run_task_module::RunTaskOutput,
+    warm_pool_err: &run_task_module::RunTaskError,
+) {
+    let note = format!(
+        "Recovered after warm-pool execution failed by retrying direct run_task ({})",
+        summarize_run_task_error_inline(warm_pool_err)
+    );
+    output.recovery_note = append_recovery_note(output.recovery_note.take(), note);
+}
+
+fn run_direct_after_warm_pool_failure<F>(
+    warm_pool_err: &run_task_module::RunTaskError,
+    direct_attempt: F,
+) -> Result<run_task_module::RunTaskOutput, run_task_module::RunTaskError>
+where
+    F: FnOnce() -> Result<run_task_module::RunTaskOutput, run_task_module::RunTaskError>,
+{
+    let mut output = direct_attempt()?;
+    append_warm_pool_recovery_note(&mut output, warm_pool_err);
+    Ok(output)
+}
+
+fn combined_warm_pool_failure_message(
+    warm_pool_err: &run_task_module::RunTaskError,
+    direct_err: &run_task_module::RunTaskError,
+) -> String {
+    format!(
+        "Warm-pool execution failed:\n{}\n\nDirect run_task fallback failed:\n{}",
+        warm_pool_err, direct_err
+    )
+}
+
 fn track_scheduler_event(
     event_name: &str,
     account_id: Uuid,
@@ -1393,43 +1443,44 @@ impl TaskExecutor for ModuleExecutor {
                             timing,
                         ) {
                             Ok(output) => output,
-                            Err(run_task_module::RunTaskError::Canceled { reason, .. }) => {
-                                return Ok(superseded_task_execution(reason));
-                            }
-                            Err(err) => {
-                                match run_task_module::run_claude_fallback_after_codex_failure(
-                                    &params, err,
-                                ) {
-                                    Ok(output) => {
-                                        info!(
-                                            "Warm-pool Codex run recovered via Claude fallback for {}",
-                                            task_dedupe_key
-                                        );
-                                        output
-                                    }
+                            Err(warm_pool_err) => {
+                                warn!(
+                                    "warm-pool run_task failed in {}: {}; retrying direct run_task",
+                                    task.workspace_dir.display(),
+                                    warm_pool_err
+                                );
+                                match run_direct_after_warm_pool_failure(&warm_pool_err, || {
+                                    run_task_module::run_task(&params)
+                                }) {
+                                    Ok(output) => output,
                                     Err(run_task_module::RunTaskError::Canceled {
                                         reason, ..
                                     }) => {
                                         return Ok(superseded_task_execution(reason));
                                     }
-                                    Err(err) => {
+                                    Err(direct_err) => {
+                                        let combined_error = combined_warm_pool_failure_message(
+                                            &warm_pool_err,
+                                            &direct_err,
+                                        );
                                         if let Some(account_id) = account_id {
                                             track_scheduler_event(
                                                 "task_failed",
                                                 account_id,
                                                 Some(format!(
-                                                    "task_failed:{}:warm_pool",
+                                                    "task_failed:{}:warm_pool_direct_fallback",
                                                     task_dedupe_key
                                                 )),
                                                 task,
                                                 json!({
-                                                    "error_reason": "warm_pool_failed",
-                                                    "error": err.to_string(),
+                                                    "error_reason": "warm_pool_and_direct_run_failed",
+                                                    "warm_pool_error": warm_pool_err.to_string(),
+                                                    "direct_fallback_error": direct_err.to_string(),
                                                     "channel": task.channel.to_string(),
                                                 }),
                                             );
                                         }
-                                        return Err(SchedulerError::TaskFailed(err.to_string()));
+                                        return Err(SchedulerError::TaskFailed(combined_error));
                                     }
                                 }
                             }
@@ -1633,6 +1684,7 @@ mod tests {
     use super::super::types::RunTaskTask;
     use super::*;
     use crate::channel::Channel;
+    use run_task_module::{RunTaskError, RunTaskOutput};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -1687,6 +1739,60 @@ mod tests {
             account_id: None,
             channel_metadata: Default::default(),
         }
+    }
+
+    fn sample_run_task_output(recovery_note: Option<&str>) -> RunTaskOutput {
+        RunTaskOutput {
+            reply_html_path: PathBuf::from("reply_email_draft.html"),
+            reply_attachments_dir: PathBuf::from("reply_email_attachments"),
+            codex_output: "ok".to_string(),
+            scheduled_tasks: vec![],
+            scheduled_tasks_error: None,
+            scheduler_actions: vec![],
+            scheduler_actions_error: None,
+            token_usage: None,
+            recovery_note: recovery_note.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn run_direct_after_warm_pool_failure_prepends_recovery_note() {
+        let warm_pool_err = RunTaskError::CodexFailed {
+            status: Some(1),
+            output: "warm-pool failure".to_string(),
+        };
+
+        let output = run_direct_after_warm_pool_failure(&warm_pool_err, || {
+            Ok(sample_run_task_output(Some(
+                "Recovered via Claude fallback after primary Codex failure",
+            )))
+        })
+        .expect("direct fallback should succeed");
+
+        let note = output.recovery_note.expect("recovery note");
+        assert!(note.starts_with(
+            "Recovered after warm-pool execution failed by retrying direct run_task (Codex failed (status: Some(1)). Output tail:)"
+        ));
+        assert!(note.contains("Recovered via Claude fallback after primary Codex failure"));
+    }
+
+    #[test]
+    fn combined_warm_pool_failure_message_includes_both_failures() {
+        let warm_pool_err = RunTaskError::CodexFailed {
+            status: Some(1),
+            output: "warm-pool failure".to_string(),
+        };
+        let direct_err = RunTaskError::ClaudeFailed {
+            status: Some(2),
+            output: "direct fallback failure".to_string(),
+        };
+
+        let message = combined_warm_pool_failure_message(&warm_pool_err, &direct_err);
+
+        assert!(message.contains("Warm-pool execution failed:"));
+        assert!(message.contains("warm-pool failure"));
+        assert!(message.contains("Direct run_task fallback failed:"));
+        assert!(message.contains("direct fallback failure"));
     }
 
     #[test]

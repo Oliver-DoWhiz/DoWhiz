@@ -177,11 +177,20 @@ fn env_with_scale_oliver(key: &str) -> Option<String> {
 fn create_live_test_tempdir() -> Result<TempDir, BoxError> {
     if let Some(host_root) = env_with_scale_oliver("RUN_TASK_AZURE_ACI_HOST_SHARE_ROOT") {
         let base = PathBuf::from(host_root).join("service_real_email_e2e");
-        fs::create_dir_all(&base)?;
-        let temp = tempfile::Builder::new()
-            .prefix("live_e2e_")
-            .tempdir_in(base)?;
-        return Ok(temp);
+        match fs::create_dir_all(&base).and_then(|_| {
+            tempfile::Builder::new()
+                .prefix("live_e2e_")
+                .tempdir_in(&base)
+        }) {
+            Ok(temp) => return Ok(temp),
+            Err(err) => {
+                eprintln!(
+                    "live-email: unable to create temp dir in {} ({}); falling back to default temp dir",
+                    base.display(),
+                    err
+                );
+            }
+        }
     }
     Ok(TempDir::new()?)
 }
@@ -405,11 +414,48 @@ fn env_enabled(key: &str) -> bool {
     matches!(env::var(key).as_deref(), Ok("1"))
 }
 
+fn keep_live_test_temp_on_failure() -> bool {
+    !matches!(
+        env::var("RUST_SERVICE_LIVE_KEEP_TEMP_ON_FAILURE").as_deref(),
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("False")
+    )
+}
+
+fn load_live_test_body() -> Result<String, BoxError> {
+    if let Ok(path) = env::var("RUST_SERVICE_LIVE_EMAIL_BODY_FILE") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Ok(fs::read_to_string(trimmed)?);
+        }
+    }
+    if let Ok(body) = env::var("RUST_SERVICE_LIVE_EMAIL_BODY_TEXT") {
+        if !body.trim().is_empty() {
+            return Ok(body);
+        }
+    }
+    Ok("Rust service live email test.".to_string())
+}
+
 fn timestamp_suffix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn live_timeout_from_env(key: &str, default_secs: u64) -> Duration {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(default_secs))
+}
+
+fn set_env_default(key: &str, value: &str) {
+    if env::var_os(key).is_none() {
+        env::set_var(key, value);
+    }
 }
 
 fn postmark_request(
@@ -526,6 +572,7 @@ fn send_smtp_inbound(
     to_addr: &str,
     subject: &str,
     original_to: Option<&str>,
+    body: &str,
 ) -> Result<(), BoxError> {
     let mut builder = lettre::Message::builder()
         .from(from_addr.parse()?)
@@ -539,9 +586,7 @@ fn send_smtp_inbound(
     }
     let message = builder.multipart(
         MultiPart::mixed()
-            .singlepart(SinglePart::plain(
-                "Rust service live email test.".to_string(),
-            ))
+            .singlepart(SinglePart::plain(body.to_string()))
             .singlepart(LettreAttachment::new(E2E_ATTACHMENT_NAME.to_string()).body(
                 E2E_ATTACHMENT_CONTENT.to_vec(),
                 ContentType::parse("text/plain; charset=utf-8")?,
@@ -560,24 +605,6 @@ fn send_smtp_inbound(
         .build();
     mailer.send(&message)?;
     Ok(())
-}
-
-fn wait_for_workspace(root: &Path, timeout: Duration) -> Option<PathBuf> {
-    let start = SystemTime::now();
-    loop {
-        if let Ok(entries) = fs::read_dir(root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() && path.join("reply_email_draft.html").exists() {
-                    return Some(path);
-                }
-            }
-        }
-        if start.elapsed().unwrap_or_default() >= timeout {
-            return None;
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
 }
 
 fn wait_for_tasks_complete(
@@ -602,26 +629,76 @@ fn wait_for_tasks_complete(
     }
 }
 
-fn wait_for_user_id(
-    _users_db_path: &Path,
+fn workspace_matches_subject(workspace: &Path, subject: &str) -> bool {
+    let payload_path = workspace.join("incoming_email").join("postmark_payload.json");
+    let payload_bytes = match fs::read(payload_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    payload_json
+        .get("Subject")
+        .and_then(Value::as_str)
+        .map(|value| value == subject)
+        .unwrap_or(false)
+}
+
+fn find_workspace_by_subject(root: &Path, subject: &str) -> Option<PathBuf> {
+    let users = fs::read_dir(root).ok()?;
+    for user_entry in users.flatten() {
+        let workspaces_root = user_entry.path().join("workspaces");
+        let workspaces = match fs::read_dir(&workspaces_root) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for workspace_entry in workspaces.flatten() {
+            let workspace = workspace_entry.path();
+            if workspace.is_dir() && workspace_matches_subject(&workspace, subject) {
+                return Some(workspace);
+            }
+        }
+    }
+    None
+}
+
+fn wait_for_workspace_by_subject(
     users_root: &Path,
-    _email: &str,
+    subject: &str,
     timeout: Duration,
-) -> Option<String> {
+) -> Option<PathBuf> {
     let start = SystemTime::now();
     loop {
-        if let Ok(entries) = fs::read_dir(users_root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-                        return Some(name.to_string());
-                    }
-                }
-            }
+        if let Some(workspace) = find_workspace_by_subject(users_root, subject) {
+            return Some(workspace);
         }
         if start.elapsed().unwrap_or_default() >= timeout {
             return None;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn workspace_user_id(workspace: &Path) -> Option<String> {
+    workspace
+        .parent()?
+        .parent()?
+        .file_name()?
+        .to_str()
+        .map(|value| value.to_string())
+}
+
+fn wait_for_reply_artifact(workspace: &Path, timeout: Duration) -> bool {
+    let reply_path = workspace.join("reply_email_draft.html");
+    let start = SystemTime::now();
+    loop {
+        if reply_path.exists() {
+            return true;
+        }
+        if start.elapsed().unwrap_or_default() >= timeout {
+            return false;
         }
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -643,7 +720,9 @@ fn rust_service_real_email_end_to_end() -> Result<(), BoxError> {
         .with_writer(log_capture)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("set tracing subscriber");
+    let keep_temp_on_failure = keep_live_test_temp_on_failure();
 
+    eprintln!("live-email: loading required environment");
     let token = env::var("POSTMARK_SERVER_TOKEN")
         .map_err(|_| "POSTMARK_SERVER_TOKEN must be set for live tests")?;
     let public_url = resolve_postmark_hook_url();
@@ -662,7 +741,12 @@ fn rust_service_real_email_end_to_end() -> Result<(), BoxError> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(9100);
 
-    let server_info = postmark_request("GET", "https://api.postmarkapp.com/server", &token, None)?;
+    eprintln!(
+        "live-email: fetching Postmark server info for service address {}",
+        service_address
+    );
+    let server_info = postmark_request("GET", "https://api.postmarkapp.com/server", &token, None)
+        .map_err(|err| format!("failed to fetch Postmark server info: {err}"))?;
     let inbound_address = server_info
         .get("InboundAddress")
         .and_then(|value| value.as_str())
@@ -671,8 +755,13 @@ fn rust_service_real_email_end_to_end() -> Result<(), BoxError> {
     if inbound_address.is_empty() {
         return Err("Postmark server does not have an inbound address configured".into());
     }
+    eprintln!(
+        "live-email: loading employee config for inbound address {}",
+        inbound_address
+    );
     let (mut employee_profile, mut employee_directory, employee_config_path) =
-        load_employee_for_address(&service_address)?;
+        load_employee_for_address(&service_address)
+            .map_err(|err| format!("failed to load employee for address {service_address}: {err}"))?;
     attach_inbound_alias(
         &mut employee_profile,
         &mut employee_directory,
@@ -688,6 +777,7 @@ fn rust_service_real_email_end_to_end() -> Result<(), BoxError> {
         previous_hook: previous_hook.clone(),
     };
 
+    eprintln!("live-email: validating service bus and blob prerequisites");
     dotenvy::dotenv().ok();
     let _service_bus_connection = match env_with_scale_oliver("SERVICE_BUS_CONNECTION_STRING") {
         Some(value) => value,
@@ -719,239 +809,277 @@ fn rust_service_real_email_end_to_end() -> Result<(), BoxError> {
     }
     env::set_var("SCALE_OLIVER_INGESTION_QUEUE_BACKEND", "servicebus");
     env::set_var("SCALE_OLIVER_RAW_PAYLOAD_STORAGE_BACKEND", "azure");
-    let temp = create_live_test_tempdir()?;
-    let workspace_root = temp.path().join("workspaces");
-    let state_dir = temp.path().join("state");
-    let users_root = temp.path().join("users");
-    fs::create_dir_all(&workspace_root)?;
-    fs::create_dir_all(&state_dir)?;
-    fs::create_dir_all(&users_root)?;
+    set_env_default("GOOGLE_SHEETS_ENABLED", "false");
+    set_env_default("GOOGLE_SLIDES_ENABLED", "false");
+    eprintln!("live-email: creating temp workspace");
+    let temp =
+        create_live_test_tempdir().map_err(|err| format!("failed to create temp dir: {err}"))?;
+    let temp_path = temp.path().to_path_buf();
+    println!("Live test temp dir: {}", temp_path.display());
 
-    let test_host = env::var("RUST_SERVICE_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("RUST_SERVICE_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(9001);
+    let result: Result<(), BoxError> = (|| {
+        let workspace_root = temp.path().join("workspaces");
+        let state_dir = temp.path().join("state");
+        let users_root = temp.path().join("users");
+        fs::create_dir_all(&workspace_root)?;
+        fs::create_dir_all(&state_dir)?;
+        fs::create_dir_all(&users_root)?;
+        println!("Workspace root: {}", workspace_root.display());
+        println!("Users root: {}", users_root.display());
+        println!("State dir: {}", state_dir.display());
 
-    let codex_disabled = !env_enabled("RUN_CODEX_E2E");
-    let employee_id = employee_profile.id.clone();
-    let effective_employee_config_path = state_dir.join("employee.live.toml");
-    write_employee_config_with_inbound_alias(
-        &employee_config_path,
-        &effective_employee_config_path,
-        &employee_id,
-        &inbound_address,
-    )?;
-    let config = ServiceConfig {
-        host: test_host.clone(),
-        port,
-        employee_id: employee_id.clone(),
-        employee_config_path: effective_employee_config_path.clone(),
-        employee_profile,
-        employee_directory,
-        workspace_root: workspace_root.clone(),
-        scheduler_state_path: state_dir.join("tasks.db"),
-        processed_ids_path: state_dir.join("postmark_processed_ids.txt"),
-        ingestion_db_url: String::new(),
-        ingestion_poll_interval: Duration::from_millis(50),
-        users_root: users_root.clone(),
-        users_db_path: state_dir.join("users.db"),
-        task_index_path: state_dir.join("task_index.db"),
-        codex_model: env::var("CODEX_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string()),
-        codex_disabled,
-        scheduler_poll_interval: Duration::from_secs(1),
-        scheduler_max_concurrency: 10,
-        scheduler_user_max_concurrency: 3,
-        inbound_body_max_bytes: DEFAULT_INBOUND_BODY_MAX_BYTES,
-        skills_source_dir: None,
-        slack_bot_token: None,
-        slack_bot_user_id: None,
-        slack_store_path: state_dir.join("slack.db"),
-        slack_client_id: None,
-        slack_client_secret: None,
-        slack_redirect_uri: None,
-        discord_bot_token: None,
-        discord_bot_user_id: None,
-        google_docs_enabled: false,
-        bluebubbles_url: None,
-        bluebubbles_password: None,
-        telegram_bot_token: None,
-        whatsapp_access_token: None,
-        whatsapp_phone_number_id: None,
-        whatsapp_verify_token: None,
-    };
+        let test_host =
+            env::var("RUST_SERVICE_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = env::var("RUST_SERVICE_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(9001);
 
-    let gateway_config_path = state_dir.join("gateway.toml");
-    write_gateway_config(
-        &gateway_config_path,
-        &gateway_bind_host,
-        gateway_port,
-        &inbound_address,
-        &employee_id,
-    )?;
-    let _gateway = spawn_gateway(
-        &gateway_config_path,
-        &effective_employee_config_path,
-        &gateway_bind_host,
-        gateway_port,
-    )?;
-    wait_for_local_health(&gateway_health_host, gateway_port, Duration::from_secs(15))?;
+        let codex_disabled = !env_enabled("RUN_CODEX_E2E");
+        let employee_id = employee_profile.id.clone();
+        let effective_employee_config_path = state_dir.join("employee.live.toml");
+        write_employee_config_with_inbound_alias(
+            &employee_config_path,
+            &effective_employee_config_path,
+            &employee_id,
+            &inbound_address,
+        )?;
+        let config = ServiceConfig {
+            host: test_host.clone(),
+            port,
+            employee_id: employee_id.clone(),
+            employee_config_path: effective_employee_config_path.clone(),
+            employee_profile,
+            employee_directory,
+            workspace_root: workspace_root.clone(),
+            scheduler_state_path: state_dir.join("tasks.db"),
+            processed_ids_path: state_dir.join("postmark_processed_ids.txt"),
+            ingestion_db_url: String::new(),
+            ingestion_poll_interval: Duration::from_millis(50),
+            users_root: users_root.clone(),
+            users_db_path: state_dir.join("users.db"),
+            task_index_path: state_dir.join("task_index.db"),
+            codex_model: env::var("CODEX_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string()),
+            codex_disabled,
+            scheduler_poll_interval: Duration::from_secs(1),
+            scheduler_max_concurrency: 10,
+            scheduler_user_max_concurrency: 3,
+            inbound_body_max_bytes: DEFAULT_INBOUND_BODY_MAX_BYTES,
+            skills_source_dir: None,
+            slack_bot_token: None,
+            slack_bot_user_id: None,
+            slack_store_path: state_dir.join("slack.db"),
+            slack_client_id: None,
+            slack_client_secret: None,
+            slack_redirect_uri: None,
+            discord_bot_token: None,
+            discord_bot_user_id: None,
+            google_docs_enabled: false,
+            bluebubbles_url: None,
+            bluebubbles_password: None,
+            telegram_bot_token: None,
+            whatsapp_access_token: None,
+            whatsapp_phone_number_id: None,
+            whatsapp_verify_token: None,
+        };
 
-    let rt = Runtime::new()?;
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let server_handle = rt.spawn(async move {
-        run_server(config, async {
-            let _ = shutdown_rx.await;
-        })
-        .await
-    });
+        let gateway_config_path = state_dir.join("gateway.toml");
+        write_gateway_config(
+            &gateway_config_path,
+            &gateway_bind_host,
+            gateway_port,
+            &inbound_address,
+            &employee_id,
+        )?;
+        let _gateway = spawn_gateway(
+            &gateway_config_path,
+            &effective_employee_config_path,
+            &gateway_bind_host,
+            gateway_port,
+        )?;
+        wait_for_local_health(&gateway_health_host, gateway_port, Duration::from_secs(15))?;
 
-    rt.block_on(async {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    });
+        let rt = Runtime::new()?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_handle = rt.spawn(async move {
+            run_server(config, async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        });
 
-    let base_url = public_url.trim_end_matches('/');
-    let base_url = base_url
-        .strip_suffix("/postmark/inbound")
-        .unwrap_or(base_url);
-    check_public_health(base_url, &gateway_health_host, gateway_port)?;
-    let hook_url = format!("{}/postmark/inbound", base_url);
-    println!("Setting Postmark inbound hook to {}", hook_url);
-    postmark_request(
-        "PUT",
-        "https://api.postmarkapp.com/server",
-        &token,
-        Some(json!({ "InboundHookUrl": hook_url })),
-    )?;
+        rt.block_on(async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
 
-    let subject = format!("Rust service live test {}", timestamp_suffix());
-    println!("Sending inbound SMTP message with subject: {}", subject);
-    send_smtp_inbound(
-        &from_addr,
-        &inbound_address,
-        &subject,
-        Some(&service_address),
-    )?;
-    println!("Inbound message sent; waiting for workspace output...");
+        let base_url = public_url.trim_end_matches('/');
+        let base_url = base_url
+            .strip_suffix("/postmark/inbound")
+            .unwrap_or(base_url);
+        check_public_health(base_url, &gateway_health_host, gateway_port)?;
+        let hook_url = format!("{}/postmark/inbound", base_url);
+        println!("Setting Postmark inbound hook to {}", hook_url);
+        postmark_request(
+            "PUT",
+            "https://api.postmarkapp.com/server",
+            &token,
+            Some(json!({ "InboundHookUrl": hook_url })),
+        )?;
 
-    let workspace_timeout = if env_enabled("RUN_CODEX_E2E") {
-        Duration::from_secs(600)
-    } else {
-        Duration::from_secs(120)
-    };
+        let subject = format!("Rust service live test {}", timestamp_suffix());
+        let live_test_body = load_live_test_body()?;
+        println!("Sending inbound SMTP message with subject: {}", subject);
+        send_smtp_inbound(
+            &from_addr,
+            &inbound_address,
+            &subject,
+            Some(&service_address),
+            &live_test_body,
+        )?;
+        println!("Inbound message sent; waiting for workspace output...");
 
-    println!("Waiting for user record...");
-    let user_id = wait_for_user_id(
-        &state_dir.join("users.db"),
-        &users_root,
-        &from_addr,
-        workspace_timeout,
-    )
-    .ok_or("timed out waiting for user record")?;
-    println!("User id resolved: {}", user_id);
-    let workspace_root = users_root.join(&user_id).join("workspaces");
-    println!("Waiting for workspace output...");
-    let workspace = wait_for_workspace(&workspace_root, workspace_timeout)
-        .ok_or("timed out waiting for workspace output")?;
-    let reply_path = workspace.join("reply_email_draft.html");
-    if !reply_path.exists() {
-        return Err("reply_email_draft.html not written by run_task".into());
-    }
-    let inbound_attachment_path = workspace
-        .join("incoming_attachments")
-        .join(E2E_ATTACHMENT_NAME);
-    if !inbound_attachment_path.exists() {
-        return Err(format!(
-            "expected inbound attachment at {}",
-            inbound_attachment_path.display()
+        let workspace_discovery_timeout = live_timeout_from_env(
+            "RUST_SERVICE_LIVE_DISCOVERY_TIMEOUT_SECS",
+            if env_enabled("RUN_CODEX_E2E") { 180 } else { 60 },
+        );
+        let reply_timeout = live_timeout_from_env(
+            "RUST_SERVICE_LIVE_REPLY_TIMEOUT_SECS",
+            if env_enabled("RUN_CODEX_E2E") { 600 } else { 120 },
+        );
+
+        println!("Waiting for workspace for subject: {}", subject);
+        let workspace = wait_for_workspace_by_subject(
+            &users_root,
+            &subject,
+            workspace_discovery_timeout,
         )
-        .into());
-    }
-    let inbound_attachment_bytes = fs::read(&inbound_attachment_path)?;
-    if inbound_attachment_bytes != E2E_ATTACHMENT_CONTENT {
-        return Err("workspace attachment bytes mismatch".into());
-    }
+        .ok_or("timed out waiting for workspace discovery")?;
+        let user_id = workspace_user_id(&workspace).ok_or("failed to resolve workspace user id")?;
+        println!("Workspace resolved at {}", workspace.display());
+        println!("User id resolved: {}", user_id);
+        println!("Waiting for reply artifact in workspace...");
+        if !wait_for_reply_artifact(&workspace, reply_timeout) {
+            return Err("timed out waiting for reply_email_draft.html".into());
+        }
+        let reply_path = workspace.join("reply_email_draft.html");
+        if !reply_path.exists() {
+            return Err("reply_email_draft.html not written by run_task".into());
+        }
+        let inbound_attachment_path = workspace
+            .join("incoming_attachments")
+            .join(E2E_ATTACHMENT_NAME);
+        if !inbound_attachment_path.exists() {
+            return Err(format!(
+                "expected inbound attachment at {}",
+                inbound_attachment_path.display()
+            )
+            .into());
+        }
+        let inbound_attachment_bytes = fs::read(&inbound_attachment_path)?;
+        if inbound_attachment_bytes != E2E_ATTACHMENT_CONTENT {
+            return Err("workspace attachment bytes mismatch".into());
+        }
 
-    let payload_path = workspace
-        .join("incoming_email")
-        .join("postmark_payload.json");
-    let payload_bytes = fs::read(&payload_path)?;
-    let payload_json: Value = serde_json::from_slice(&payload_bytes)?;
-    let attachments = payload_json
-        .get("Attachments")
-        .and_then(Value::as_array)
-        .ok_or("postmark payload missing Attachments array")?;
-    let attachment = attachments
-        .iter()
-        .find(|value| {
-            value
-                .get("Name")
-                .and_then(Value::as_str)
-                .map(|name| name == E2E_ATTACHMENT_NAME)
-                .unwrap_or(false)
-        })
-        .ok_or("postmark payload missing expected attachment entry")?;
-    let storage_ref = attachment
-        .get("StorageRef")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("attachment missing StorageRef")?;
-    if !storage_ref.starts_with("azure://") {
-        return Err(format!("unexpected StorageRef format: {}", storage_ref).into());
-    }
-    let content = attachment
-        .get("Content")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if !content.is_empty() {
-        return Err("attachment Content should be empty after blob offload".into());
-    }
-    let blob_bytes = scheduler_module::raw_payload_store::download_raw_payload(storage_ref)?;
-    if blob_bytes != E2E_ATTACHMENT_CONTENT {
-        return Err("blob attachment bytes mismatch".into());
-    }
+        let payload_path = workspace
+            .join("incoming_email")
+            .join("postmark_payload.json");
+        let payload_bytes = fs::read(&payload_path)?;
+        let payload_json: Value = serde_json::from_slice(&payload_bytes)?;
+        let attachments = payload_json
+            .get("Attachments")
+            .and_then(Value::as_array)
+            .ok_or("postmark payload missing Attachments array")?;
+        let attachment = attachments
+            .iter()
+            .find(|value| {
+                value
+                    .get("Name")
+                    .and_then(Value::as_str)
+                    .map(|name| name == E2E_ATTACHMENT_NAME)
+                    .unwrap_or(false)
+            })
+            .ok_or("postmark payload missing expected attachment entry")?;
+        let storage_ref = attachment
+            .get("StorageRef")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("attachment missing StorageRef")?;
+        if !storage_ref.starts_with("azure://") {
+            return Err(format!("unexpected StorageRef format: {}", storage_ref).into());
+        }
+        let content = attachment
+            .get("Content")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !content.is_empty() {
+            return Err("attachment Content should be empty after blob offload".into());
+        }
+        let blob_bytes = scheduler_module::raw_payload_store::download_raw_payload(storage_ref)?;
+        if blob_bytes != E2E_ATTACHMENT_CONTENT {
+            return Err("blob attachment bytes mismatch".into());
+        }
 
-    let reply_subject = format!("Re: {}", subject);
-    let outbound_timeout = if env_enabled("RUN_CODEX_E2E") {
-        Duration::from_secs(300)
-    } else {
-        Duration::from_secs(120)
-    };
-    println!("Polling outbound for subject hint: {}", reply_subject);
-    let outbound = poll_outbound(&token, &from_addr, &reply_subject, outbound_timeout)?
-        .ok_or("timed out waiting for outbound reply")?;
-    let status = outbound
-        .get("Status")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if !matches!(status, "Delivered" | "Sent") {
-        return Err(format!("unexpected outbound status: {}", status).into());
-    }
+        let reply_subject = format!("Re: {}", subject);
+        let outbound_timeout = live_timeout_from_env(
+            "RUST_SERVICE_LIVE_OUTBOUND_TIMEOUT_SECS",
+            if env_enabled("RUN_CODEX_E2E") { 300 } else { 120 },
+        );
+        println!("Polling outbound for subject hint: {}", reply_subject);
+        let outbound = poll_outbound(&token, &from_addr, &reply_subject, outbound_timeout)?
+            .ok_or("timed out waiting for outbound reply")?;
+        let status = outbound
+            .get("Status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !matches!(status, "Delivered" | "Sent") {
+            return Err(format!("unexpected outbound status: {}", status).into());
+        }
 
-    let tasks_path = users_root.join(&user_id).join("state").join("tasks.db");
-    let tasks_timeout = if env_enabled("RUN_CODEX_E2E") {
-        Duration::from_secs(480)
-    } else {
-        Duration::from_secs(120)
-    };
-    println!("Waiting for tasks to complete...");
-    let tasks = wait_for_tasks_complete(&tasks_path, tasks_timeout)?;
-    if tasks.len() < 2 {
-        return Err("expected at least two scheduled tasks".into());
-    }
+        let tasks_path = users_root.join(&user_id).join("state").join("tasks.db");
+        let tasks_timeout = live_timeout_from_env(
+            "RUST_SERVICE_LIVE_TASKS_TIMEOUT_SECS",
+            if env_enabled("RUN_CODEX_E2E") { 480 } else { 120 },
+        );
+        println!("Waiting for tasks to complete...");
+        let tasks = wait_for_tasks_complete(&tasks_path, tasks_timeout)?;
+        if tasks.len() < 2 {
+            return Err("expected at least two scheduled tasks".into());
+        }
 
-    let _ = shutdown_tx.send(());
-    let _ = rt.block_on(async { server_handle.await })?;
-    drop(_gateway);
-    temp.close()?;
-    std::thread::sleep(Duration::from_millis(200));
+        let _ = shutdown_tx.send(());
+        let _ = rt.block_on(async { server_handle.await })?;
+        drop(_gateway);
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    })();
+
     let log_guard = log_buffer
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let logs = String::from_utf8_lossy(&log_guard);
-    if logs.contains("unable to open database file") {
-        return Err("database warning detected after cleanup".into());
-    }
+    let logs = String::from_utf8_lossy(&log_guard).into_owned();
+    drop(log_guard);
 
-    Ok(())
+    match result {
+        Ok(()) => {
+            temp.close()?;
+            if logs.contains("unable to open database file") {
+                return Err("database warning detected after cleanup".into());
+            }
+            Ok(())
+        }
+        Err(err) => {
+            eprintln!("Rust service live email test failed: {}", err);
+            if keep_temp_on_failure {
+                let preserved_path = temp.keep();
+                eprintln!(
+                    "Preserved live test temp dir at {}",
+                    preserved_path.display()
+                );
+            }
+            if !logs.trim().is_empty() {
+                eprintln!("Captured tracing logs:\n{}", logs);
+            }
+            Err(err)
+        }
+    }
 }
