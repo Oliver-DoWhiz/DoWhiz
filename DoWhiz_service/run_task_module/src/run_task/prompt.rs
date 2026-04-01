@@ -359,6 +359,9 @@ Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
 Identity Lookup - for inviting Discord guild members to shared resources:
 - When you need to share Google Docs/GitHub repos with Discord guild members, read `skills/identity-lookup/SKILL.md` for the `identity_lookup_cli` commands.
 
+Group Project Coordination:
+- When coordinating team workspaces or shared resources for multiple people, read `skills/group-project-coordination/SKILL.md` for the workflow.
+
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
 
