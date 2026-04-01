@@ -34,6 +34,9 @@ Late-finalization recovery:
 - when scheduler warm-pool mode is enabled and a warm-pool run still fails, the scheduler now
   retries once through the normal direct `run_task` path so the Codex -> Claude fallback remains
   available for those jobs too
+- optional `RUN_TASK_CODEX_TIMEOUT_SECS=<seconds>` caps the primary Codex runtime; by default
+  Azure ACI Codex runs are time-boxed to 900 seconds so Claude fallback can still fire within a
+  much larger overall `RUN_TASK_TIMEOUT_SECS` window
 - optional `RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS=<seconds>` caps Claude fallback runtime; by
   default the fallback is bounded to 900 seconds and never exceeds the overall run_task timeout
 - recovered runs surface a `recovery_note` in `RunTaskOutput` and write
@@ -64,6 +67,7 @@ Minimum practical requirement:
 Common optional controls:
 - `CODEX_MODEL`, `CLAUDE_MODEL`
 - `RUN_TASK_TIMEOUT_SECS`
+- optional `RUN_TASK_CODEX_TIMEOUT_SECS=<seconds>` to cap the primary Codex runtime
 - `CODEX_SANDBOX_MODE`, `CODEX_BYPASS_SANDBOX`
 - Codex-specific failures automatically retry with the Claude runner, including warm-pool
   executions
