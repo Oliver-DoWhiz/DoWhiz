@@ -472,6 +472,51 @@ fn warm_pool_codex_failure_falls_back_to_claude_by_default() {
 
 #[test]
 #[cfg(unix)]
+fn azure_aci_timeout_error_falls_back_to_claude() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let temp = TempDir::new("azure_aci_timeout_fallback_to_claude").unwrap();
+    let workspace = create_workspace(&temp.path).unwrap();
+
+    let home_dir = temp.path.join("home");
+    let bin_dir = temp.path.join("bin");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_fake_claude(&bin_dir, FakeClaudeMode::EnsureModel).unwrap();
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", bin_dir.display(), old_path);
+    let _env = EnvGuard::set(&[
+        ("HOME", home_dir.to_str().unwrap()),
+        ("PATH", &new_path),
+        ("AZURE_OPENAI_API_KEY_BACKUP", "test-key"),
+        ("AZURE_OPENAI_ENDPOINT_BACKUP", "https://example.azure.com/"),
+        ("EXPECTED_CLAUDE_MODEL", "claude-sonnet-4-5"),
+        ("GH_AUTH_DISABLED", "1"),
+    ]);
+
+    let params = build_params(&workspace);
+    let result = run_claude_fallback_after_codex_failure(
+        &params,
+        RunTaskError::CommandTimeout {
+            command: "az container show",
+            timeout_secs: 900,
+            output: "container did not reach terminal state before timeout".to_string(),
+        },
+    )
+    .expect("azure aci timeout should fall back to Claude");
+
+    let html = fs::read_to_string(&result.reply_html_path).unwrap();
+    assert!(html.contains("Claude fallback reply"));
+    assert_eq!(
+        result.recovery_note.as_deref(),
+        Some(
+            "Recovered via Claude fallback after primary Codex failure (Azure ACI Codex timed out) using Claude model claude-sonnet-4-5"
+        )
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_task_recovers_ready_reply_after_claude_fallback_timeout() {
     let _lock = ENV_MUTEX.lock().unwrap();
     let temp = TempDir::new("codex_task_claude_timeout_recovery").unwrap();
