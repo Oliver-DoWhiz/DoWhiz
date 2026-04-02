@@ -39,6 +39,9 @@ Late-finalization recovery:
   much larger overall `RUN_TASK_TIMEOUT_SECS` window
 - optional `RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS=<seconds>` caps Claude fallback runtime; by
   default the fallback is bounded to 900 seconds and never exceeds the overall run_task timeout
+- Claude fallback recovery mode now prioritizes a useful in-channel reply over rebuilding large
+  multi-file deliverables from scratch, and it reuses `.codex_remote_output.log` plus
+  `.run_task_trace_codex_primary/` when the primary run already gathered evidence
 - recovered runs surface a `recovery_note` in `RunTaskOutput` and write
   `.run_task_trace/logs/recovery_note.txt` for debugging
 
@@ -72,6 +75,8 @@ Common optional controls:
 - Codex-specific failures automatically retry with the Claude runner, including warm-pool
   executions
 - optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
+- Claude fallback runs allow the built-in `WebSearch`, `WebFetch`, and `TodoWrite` tools in
+  addition to the existing file-editing / shell toolset
 - Bright Data social scraping:
   - `BRIGHT_DATA_API_KEY`
   - optional `BRIGHT_DATA_XIAOHONGSHU_COLLECTOR`

@@ -58,6 +58,7 @@ use super::utils::{
 };
 
 const DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS: u64 = 900;
+const CLAUDE_ALLOWED_TOOLS: &str = "Read,Glob,Grep,Bash,Write,Edit,WebSearch,WebFetch,TodoWrite";
 
 pub(super) fn run_claude_task(
     request: RunTaskRequest<'_>,
@@ -443,7 +444,7 @@ fn build_claude_command(
         .arg("--model")
         .arg(model_name)
         .arg("--allowedTools")
-        .arg("Read,Glob,Grep,Bash,Write,Edit")
+        .arg(CLAUDE_ALLOWED_TOOLS)
         .arg("--max-turns")
         .arg(max_turns.to_string())
         .arg("--dangerously-skip-permissions")
@@ -576,4 +577,24 @@ fn extract_claude_fragment(event: &serde_json::Value) -> Option<String> {
         return Some(text.to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_claude_command_includes_web_and_todo_tools() {
+        let cmd = build_claude_command(Path::new("."), "hello", "claude-sonnet-4-5", &[]);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let allowed_tools_idx = args
+            .iter()
+            .position(|arg| arg == "--allowedTools")
+            .expect("allowedTools flag should be present");
+
+        assert_eq!(args[allowed_tools_idx + 1], CLAUDE_ALLOWED_TOOLS);
+    }
 }

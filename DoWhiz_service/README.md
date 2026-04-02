@@ -222,6 +222,9 @@ Docker execution path (local worker):
 - optional `RUN_TASK_CODEX_FALLBACK_CLAUDE_MODEL=<model>` to force the Claude model used by that fallback
 - optional `RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS=<seconds>` to cap Claude fallback runtime; the
   default fallback cap is 900 seconds and it is still bounded by the overall watchdog budget
+- Claude fallback recovery mode now prioritizes writing a useful in-channel reply before starting
+  new PDFs or other large deliverables, and it reuses `.codex_remote_output.log` plus
+  `.run_task_trace_codex_primary/` when the primary Codex attempt already gathered evidence
 - Codex success still requires the expected reply artifact to be present and non-empty; warm-pool
   completion queue exit codes are validated before the scheduler records success
 - when scheduler warm-pool mode is enabled, a warm-pool failure automatically retries through the
