@@ -57,6 +57,8 @@ use super::utils::{
     run_command_with_timeout_and_cancel, run_task_timeout, tail_string, ThreadSupersedeMonitor,
 };
 
+const DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS: u64 = 900;
+const CLAUDE_ALLOWED_TOOLS: &str = "Read,Glob,Grep,Bash,Write,Edit,WebSearch,WebFetch,TodoWrite";
 pub(super) fn run_claude_task(
     request: RunTaskRequest<'_>,
     runner: &str,
@@ -228,12 +230,12 @@ fn claude_task_timeout(is_codex_fallback: bool) -> std::time::Duration {
         return default_timeout;
     }
 
-    read_env_trimmed("RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS")
+    let fallback_timeout_secs = read_env_trimmed("RUN_TASK_CODEX_FALLBACK_TIMEOUT_SECS")
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
-        .map(std::time::Duration::from_secs)
-        .map(|timeout| default_timeout.min(timeout))
-        .unwrap_or(default_timeout)
+        .unwrap_or(DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS);
+
+    default_timeout.min(std::time::Duration::from_secs(fallback_timeout_secs))
 }
 
 fn prepare_claude_env(
@@ -441,7 +443,7 @@ fn build_claude_command(
         .arg("--model")
         .arg(model_name)
         .arg("--allowedTools")
-        .arg("Read,Glob,Grep,Bash,Write,Edit")
+        .arg(CLAUDE_ALLOWED_TOOLS)
         .arg("--max-turns")
         .arg(max_turns.to_string())
         .arg("--dangerously-skip-permissions")
@@ -578,8 +580,12 @@ fn extract_claude_fragment(event: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::claude_task_timeout;
+    use super::{
+        build_claude_command, claude_task_timeout, CLAUDE_ALLOWED_TOOLS,
+        DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS,
+    };
     use std::env;
+    use std::path::Path;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
@@ -617,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_fallback_timeout_defaults_to_run_task_timeout() {
+    fn claude_fallback_timeout_defaults_to_recovery_cap() {
         let _lock = env_lock();
         let _guards = vec![
             EnvVarGuard::set("RUN_TASK_TIMEOUT_SECS", "1200"),
@@ -625,7 +631,10 @@ mod tests {
             EnvVarGuard::unset("TASK_TIMEOUT_SECS"),
         ];
 
-        assert_eq!(claude_task_timeout(true), Duration::from_secs(1200));
+        assert_eq!(
+            claude_task_timeout(true),
+            Duration::from_secs(DEFAULT_CLAUDE_FALLBACK_TIMEOUT_SECS)
+        );
     }
 
     #[test]
@@ -638,5 +647,20 @@ mod tests {
         ];
 
         assert_eq!(claude_task_timeout(true), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn build_claude_command_includes_web_and_todo_tools() {
+        let cmd = build_claude_command(Path::new("."), "hello", "claude-sonnet-4-5", &[]);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let allowed_tools_idx = args
+            .iter()
+            .position(|arg| arg == "--allowedTools")
+            .expect("allowedTools flag should be present");
+
+        assert_eq!(args[allowed_tools_idx + 1], CLAUDE_ALLOWED_TOOLS);
     }
 }
