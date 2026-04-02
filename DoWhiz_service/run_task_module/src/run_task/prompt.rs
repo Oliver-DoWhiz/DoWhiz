@@ -191,7 +191,11 @@ Keep your reply concise. Use the API only - no browser automation."#
             }
             _ => {
                 // Default to email (HTML)
-                "2. After finishing the task (step one), make sure you write a proper HTML email draft in reply_email_draft.html in the workspace root. If there are files to attach, put them in reply_email_attachments/ and reference them in the email draft. Do not pretend the job has been done without actually doing it, and do not write the email draft until the task is done. If you are not sure about the task, send another email to ask for clarification (and if any, attach information about why did you fail to get the task done, what is the exact error you encountered)."
+                if prefer_fast_completion {
+                    "2. Recovery-mode override for email replies: write a useful HTML email draft in reply_email_draft.html as soon as you have enough information to help the user. In this recovery run, a concise but honest email reply is preferable to timing out while trying to rebuild the entire original project. Do NOT start new PDFs, slide decks, LaTeX reports, or other large attachments unless the user explicitly required that format and it is already nearly complete. If the original task is blocked or cannot be fully completed within this run, explain what you were able to verify, what remains uncertain, and what next step or source would be needed."
+                } else {
+                    "2. After finishing the task (step one), make sure you write a proper HTML email draft in reply_email_draft.html in the workspace root. If there are files to attach, put them in reply_email_attachments/ and reference them in the email draft. Do not pretend the job has been done without actually doing it, and do not write the email draft until the task is done. If you are not sure about the task, send another email to ask for clarification (and if any, attach information about why did you fail to get the task done, what is the exact error you encountered)."
+                }
             }
         }
     };
@@ -211,10 +215,15 @@ Keep your reply concise. Use the API only - no browser automation."#
         build_chat_history_capabilities_section(workspace_dir, channel);
     let fast_completion_section = if prefer_fast_completion {
         r#"Claude fallback execution guidance:
-- This run is a recovery path after the primary runner failed, so prioritize delivering a useful reply over exhaustive research.
+- This run is a recovery path after the primary runner failed. These recovery instructions take precedence over conflicting planning or artifact-building advice elsewhere in this prompt.
+- Prioritize delivering a useful reply within the recovery budget over rebuilding the entire original project from scratch.
+- Before starting new research, inspect any existing artifacts from the primary runner, especially `.codex_remote_output.log` and `.run_task_trace_codex_primary/`, and reuse any facts, sources, filenames, or failure context already gathered there.
 - For long research or writing tasks, begin updating the final reply artifact early and keep it current as sections become ready.
 - If you are still gathering evidence, clearly mark the draft as a working draft near the top, and remove or replace that note before you finish if the reply becomes complete.
-- Keep web research focused. Reuse evidence already gathered, avoid repeating similar searches, and stop searching once you have enough support to answer the user's questions coherently.
+- Prefer a concise in-email deliverable over new PDFs, slide decks, LaTeX reports, or other multi-file attachments unless the user explicitly required that format and it is already almost complete.
+- Keep any new web research focused. Reuse evidence already gathered, avoid repeating similar searches, and stop searching once you have enough support to answer the user's questions coherently.
+- If authoritative evidence is missing or the research path is blocked, send an honest limitation / next-steps reply instead of timing out with no reply.
+- If you can finish only part of the task, state what is completed, what remains uncertain, and what sources or follow-up would be needed to finish the rest.
 
 "#
     } else {
@@ -1255,6 +1264,32 @@ mod tests {
         assert!(prompt.contains("Never include raw credentials"));
         assert!(prompt.contains("persistent remote browser context"));
         assert!(prompt.contains("single browser tab"));
+    }
+
+    #[test]
+    fn build_prompt_with_fast_completion_prioritizes_recovery_reply() {
+        let temp = TempDir::new().expect("tempdir");
+
+        let prompt = build_prompt_with_fast_completion(
+            Path::new("incoming_email"),
+            Path::new("incoming_attachments"),
+            Path::new("memory"),
+            Path::new("references"),
+            temp.path(),
+            "claude",
+            "",
+            true,
+            "email",
+            true,
+            &UserIdentities::default(),
+            true,
+        );
+
+        assert!(prompt.contains("Recovery-mode override for email replies"));
+        assert!(prompt.contains(".codex_remote_output.log"));
+        assert!(prompt.contains(".run_task_trace_codex_primary/"));
+        assert!(prompt.contains("Do NOT start new PDFs"));
+        assert!(prompt.contains("send an honest limitation / next-steps reply"));
     }
 
     #[test]
