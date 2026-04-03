@@ -299,6 +299,12 @@ jobs:
           chmod 600 "$APP_DIR/.env"
           EOF
 
+          # Append Kroger API credentials
+          ssh -F ~/.ssh/config azureproduction << EOF
+          echo "KROGER_CLIENT_ID=${{ secrets.KROGER_CLIENT_ID }}" >> /home/${{ secrets.STAGING_AZURE_VM_USER }}/server/DoWhiz/DoWhiz_service/.env
+          echo "KROGER_CLIENT_SECRET=${{ secrets.KROGER_CLIENT_SECRET }}" >> /home/${{ secrets.STAGING_AZURE_VM_USER }}/server/DoWhiz/DoWhiz_service/.env
+          EOF
+
       - name: Restart DoWhiz services before ACI build
         run: |
           ssh -F ~/.ssh/config azureproduction << 'EOF'
