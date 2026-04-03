@@ -478,7 +478,8 @@ fn build_user_identities_section(identities: &UserIdentities) -> String {
         || !identities.phone_numbers.is_empty()
         || !identities.telegram_user_ids.is_empty()
         || !identities.lark_user_ids.is_empty()
-        || !identities.wechat_user_ids.is_empty();
+        || !identities.wechat_user_ids.is_empty()
+        || !identities.github_usernames.is_empty();
 
     if !has_any {
         return "User Context: Not available (user has no linked DoWhiz account). \
@@ -528,6 +529,12 @@ politely explain they need to link their accounts at dowhiz.com first.\n"
         channels.push(format!(
             "- WeChat User IDs: {}",
             identities.wechat_user_ids.join(", ")
+        ));
+    }
+    if !identities.github_usernames.is_empty() {
+        channels.push(format!(
+            "- GitHub: {}",
+            identities.github_usernames.join(", ")
         ));
     }
 
@@ -1183,6 +1190,7 @@ mod tests {
             telegram_user_ids: vec!["12345678".to_string()],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec![],
         };
         let section = build_user_identities_section(&identities);
@@ -1433,6 +1441,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec![],
         };
 
@@ -1471,6 +1480,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec![user_uuid.to_string()],
         };
 
@@ -1514,6 +1524,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec![
                 email_uuid.to_string(),
                 slack_uuid.to_string(),
@@ -1557,6 +1568,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec![], // Empty even though account exists
         };
 
@@ -1691,6 +1703,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec!["uuid-email-alice".to_string()],
         };
 
@@ -1732,6 +1745,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             // Each channel has its own filesystem user directory
             allowed_user_ids: vec![
                 "uuid-email-bob".to_string(),
@@ -1787,6 +1801,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             // In production, identifiers_to_user_identities deduplicates
             // So if email and slack both map to same user_id, only one entry
             allowed_user_ids: vec!["uuid-charlie-shared".to_string()],
@@ -1828,6 +1843,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            github_usernames: vec![],
             allowed_user_ids: vec!["uuid-email-dave".to_string(), "uuid-slack-dave".to_string()],
         };
 
