@@ -572,6 +572,7 @@ RUN curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
 
 ### 4. Environment variables not passed to warm containers
 **Commit:** `e0cf68c` - Added .codex_remote_prompt.txt, essential env vars to provisioning warm containers
+
 **Commit:** `580c4e7` - Align env vars of warm containers, CLIs with original flow
 
 **Problem:** Warm containers were missing critical environment variables that the regular ACI flow had (API keys, workspace paths, etc.).
