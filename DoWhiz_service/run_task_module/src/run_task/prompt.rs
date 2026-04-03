@@ -283,6 +283,12 @@ GitHub CLI (`gh`) - for GitHub repository operations:
 IMPORTANT: For GitHub operations, ALWAYS use `gh` CLI (already authenticated).
 Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
 
+IMPORTANT: When sharing source code with the user:
+- If the user has a linked GitHub account (check User Context section below), create a GitHub repo and add them as a collaborator instead of creating tar.gz archives.
+- Use `gh repo create <name> --private` to create the repo, then `gh api repos/OWNER/REPO/collaborators/USERNAME -X PUT` to add the user as a collaborator.
+- This provides a better experience: version control, easy cloning, and future updates.
+- If the user does NOT have a linked GitHub account, tar.gz archives are acceptable.
+
 Identity Lookup - for inviting Discord guild members to shared resources:
 - When you need to share Google Docs/GitHub repos with Discord guild members, read `skills/identity-lookup/SKILL.md` for the `identity_lookup_cli` commands.
 
