@@ -506,6 +506,29 @@ Before marking a task complete, verify:
 - [ ] No regressions in existing functionality
 - [ ] Code follows project conventions (rustfmt, clippy)
 
+### Pre-Push Code Review Workflow
+
+**Before pushing any significant code changes**, run these review steps:
+
+1. **Run `/simplify`** - Automated code review for:
+   - Code reuse opportunities (duplicate code, missing utilities)
+   - Code quality (copy-paste patterns, unnecessary nesting, stringly-typed code)
+   - Efficiency (N+1 queries, missed concurrency, unnecessary work)
+
+2. **Run `/codex`** (optional) - Get independent AI review:
+   - Use for complex features or architectural changes
+   - Useful for catching edge cases and design issues
+
+**Workflow:**
+```
+# After implementing a feature:
+/simplify                    # Fix any issues found
+git add -A && git commit     # Commit clean code
+git push origin <branch>     # Push to remote
+```
+
+This ensures code quality is verified before merge, reducing review burden on human reviewers.
+
 ### Complex Task Decomposition
 
 For tasks requiring multiple steps, use TodoWrite to create a structured checklist:

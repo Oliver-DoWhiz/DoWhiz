@@ -65,6 +65,21 @@ import GroceryPreferencesQuestionnaire from './components/intake/GroceryPreferen
 
 ---
 
+## Quick Start: Check User Preferences First
+
+**ALWAYS check user preferences before giving grocery recommendations:**
+
+```bash
+# Get user's saved preferences (zip code, stores, dietary restrictions, etc.)
+grocery_cli preferences get <user_id>
+```
+
+If no preferences found, direct user to the onboarding questionnaire:
+- Web UI: `/grocery/onboarding?user_id=<user_id>`
+- Or run the conversational onboarding below
+
+---
+
 ## User Onboarding Questionnaire
 
 When a user first asks for grocery help and has no preference data in memory, run through this onboarding flow. This can be done conversationally (via email/chat) or through a UI questionnaire.
@@ -325,18 +340,35 @@ Last updated: 2026-04-01
 
 ### Tier 1: API/Automated (Most Reliable)
 
-#### Kroger API (Official)
-```bash
-# Kroger has an official developer API
-# Endpoint: https://api.kroger.com/v1/products
-# Requires: API key from developer.kroger.com
+#### Kroger API (via grocery_cli)
 
-curl -X GET "https://api.kroger.com/v1/products?filter.term=pork+belly&filter.locationId=01400376" \
-  -H "Authorization: Bearer $KROGER_ACCESS_TOKEN" \
-  -H "Accept: application/json"
+**IMPORTANT**: Use `grocery_cli` for Kroger queries - it handles OAuth automatically.
+
+```bash
+# Search for products (with prices at nearest store)
+grocery_cli kroger search "pork belly" --location 48109 --limit 5
+
+# Find nearby Kroger stores
+grocery_cli kroger stores 48109 --radius 15 --limit 5
+
+# Get user's saved preferences
+grocery_cli preferences get <user_id>
 ```
 
-**Available data**: Product name, price, unit, UPC, stock status, store location
+**Example output:**
+```
+Kroger Products for "pork belly":
+
+1. Kroger® Fresh Natural Pork Belly Boneless
+   Brand: Kroger
+   Size: 1.5 lb   Price: $12.99
+
+2. Smithfield Fresh Pork Belly
+   Brand: Smithfield
+   Size: 2 lb   Price: $15.49 (Sale: $12.99)
+```
+
+**Available data**: Product name, brand, price, sale price, size, store location
 
 #### Weee (via browser-use)
 ```bash
