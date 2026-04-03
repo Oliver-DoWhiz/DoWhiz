@@ -401,6 +401,9 @@ fn identifiers_to_user_identities(
             "wechat" | "wechat_user_id" => {
                 result.wechat_user_ids.push(identifier.identifier.clone())
             }
+            "github" => {
+                result.github_usernames.push(identifier.identifier.clone())
+            }
             _ => {
                 // Unknown identifier type, skip
             }

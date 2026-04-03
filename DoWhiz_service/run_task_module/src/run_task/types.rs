@@ -37,6 +37,9 @@ pub struct UserIdentities {
     /// WeChat Work user IDs
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wechat_user_ids: Vec<String>,
+    /// GitHub usernames
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub github_usernames: Vec<String>,
     /// Filesystem user IDs (UUIDs) that this account can access
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_user_ids: Vec<String>,
