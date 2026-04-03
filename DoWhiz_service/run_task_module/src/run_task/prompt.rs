@@ -285,8 +285,9 @@ Do NOT use browser automation for GitHub - the CLI is faster and more reliable.
 
 IMPORTANT: When sharing source code with the user:
 - If the user has a linked GitHub account (check User Context section below), create a GitHub repo and add them as a collaborator instead of creating tar.gz archives.
-- Use `gh repo create <name> --private` to create the repo, then `gh api repos/OWNER/REPO/collaborators/USERNAME -X PUT` to add the user as a collaborator.
+- Use `gh repo create <name> --private` to create the repo, then `gh api repos/OWNER/REPO/collaborators/GITHUB_USERNAME -X PUT` to add the user as a collaborator.
 - This provides a better experience: version control, easy cloning, and future updates.
+- If the user explicitly requests ownership transfer, use `gh api repos/OWNER/REPO/transfer -X POST -f new_owner=GITHUB_USERNAME` to transfer the repo to them. Note: they must accept the transfer, and you will lose access until they re-add you as collaborator.
 - If the user does NOT have a linked GitHub account, tar.gz archives are acceptable.
 
 Identity Lookup - for inviting Discord guild members to shared resources:
