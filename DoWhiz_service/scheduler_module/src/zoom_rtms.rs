@@ -238,6 +238,7 @@ async fn media_stream_loop(
     let check_interval = Duration::from_secs(5);
     let mut last_check = Instant::now();
     let mut handshake_complete = false;
+    let mut last_speaker_id: Option<String> = None;
 
     while let Some(msg) = read.next().await {
         match msg? {
@@ -258,6 +259,10 @@ async fn media_stream_loop(
                 // Parse audio data
                 if let Ok(audio_msg) = serde_json::from_str::<MediaDataAudio>(&text) {
                     if audio_msg.msg_type == "MEDIA_DATA_AUDIO" {
+                        // Track speaker
+                        if let Some(ref uid) = audio_msg.user_id {
+                            last_speaker_id = Some(uid.clone());
+                        }
                         // Decode base64 audio
                         if let Ok(audio_bytes) = BASE64.decode(&audio_msg.data) {
                             audio_buffer.extend_from_slice(&audio_bytes);
@@ -301,7 +306,7 @@ async fn media_stream_loop(
                     }
 
                     // Queue task
-                    if let Err(e) = enqueue_zoom_task(&handler, meeting_uuid, &task_text).await {
+                    if let Err(e) = enqueue_zoom_task(&handler, meeting_uuid, &task_text, last_speaker_id.as_deref()).await {
                         error!("Failed to enqueue Zoom task: {}", e);
                     }
 
@@ -380,9 +385,18 @@ async fn enqueue_zoom_task(
     handler: &ZoomRtmsHandler,
     meeting_uuid: &str,
     task_text: &str,
+    speaker_zoom_id: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::channel::ChannelMetadata;
     use crate::ingestion::{IngestionEnvelope, IngestionPayload};
+
+    let mut metadata = ChannelMetadata::default();
+    metadata.zoom_meeting_uuid = Some(meeting_uuid.to_string());
+    metadata.zoom_user_id = speaker_zoom_id.map(|s| s.to_string());
+
+    let sender = speaker_zoom_id
+        .map(|id| format!("zoom_user:{}", id))
+        .unwrap_or_else(|| format!("zoom_meeting:{}", meeting_uuid));
 
     let envelope = IngestionEnvelope {
         envelope_id: uuid::Uuid::new_v4(),
@@ -393,7 +407,7 @@ async fn enqueue_zoom_task(
         external_message_id: Some(format!("zoom_{}", chrono::Utc::now().timestamp_millis())),
         dedupe_key: format!("zoom:{}:{}", meeting_uuid, chrono::Utc::now().timestamp()),
         payload: IngestionPayload {
-            sender: format!("zoom_meeting:{}", meeting_uuid),
+            sender,
             sender_name: Some("Zoom Meeting".to_string()),
             recipient: "proto".to_string(),
             subject: None,
@@ -403,7 +417,7 @@ async fn enqueue_zoom_task(
             message_id: Some(format!("zoom_{}", chrono::Utc::now().timestamp_millis())),
             attachments: vec![],
             reply_to: vec![],
-            metadata: ChannelMetadata::default(),
+            metadata,
         },
         raw_payload_ref: None,
         account_id: None,

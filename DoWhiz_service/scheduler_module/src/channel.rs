@@ -225,6 +225,12 @@ pub struct ChannelMetadata {
     pub lark_chat_id: Option<String>,
     /// Lark-specific: Message ID
     pub lark_message_id: Option<String>,
+    /// Zoom-specific: Meeting UUID
+    pub zoom_meeting_uuid: Option<String>,
+    /// Zoom-specific: User ID of the speaker
+    pub zoom_user_id: Option<String>,
+    /// Zoom-specific: User email (for reply routing)
+    pub zoom_user_email: Option<String>,
 
     // =========================================================================
     // Multi-channel collaboration support
