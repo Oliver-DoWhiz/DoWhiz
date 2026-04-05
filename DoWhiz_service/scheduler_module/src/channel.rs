@@ -36,6 +36,8 @@ pub enum Channel {
     WeChat,
     /// Lark (飞书) via Open Platform API
     Lark,
+    /// Zoom RTMS audio stream
+    Zoom,
 }
 
 impl Default for Channel {
@@ -60,6 +62,7 @@ impl std::fmt::Display for Channel {
             Channel::Notion => write!(f, "notion"),
             Channel::WeChat => write!(f, "wechat"),
             Channel::Lark => write!(f, "lark"),
+            Channel::Zoom => write!(f, "zoom"),
         }
     }
 }
@@ -82,6 +85,7 @@ impl std::str::FromStr for Channel {
             "notion" => Ok(Channel::Notion),
             "wechat" | "weixin" => Ok(Channel::WeChat),
             "lark" | "feishu" => Ok(Channel::Lark),
+            "zoom" => Ok(Channel::Zoom),
             _ => Err(format!("unknown channel: {}", s)),
         }
     }

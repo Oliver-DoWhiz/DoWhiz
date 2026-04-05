@@ -592,6 +592,10 @@ fn dispatch_send_reply_task(task: &SendReplyTask) -> Result<(), SchedulerError> 
         Channel::Notion => {
             execute_notion_send(task)?;
         }
+        Channel::Zoom => {
+            // TODO: Implement Zoom chat reply
+            warn!("Zoom reply not yet implemented, skipping");
+        }
     }
     Ok(())
 }
