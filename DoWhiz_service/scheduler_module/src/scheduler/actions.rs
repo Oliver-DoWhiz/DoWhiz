@@ -151,6 +151,7 @@ fn parse_channel(channel_str: &str) -> Option<Channel> {
         "whatsapp" => Some(Channel::WhatsApp),
         "bluebubbles" => Some(Channel::BlueBubbles),
         "wechat" => Some(Channel::WeChat),
+        "zoom" => Some(Channel::Zoom),
         _ => {
             warn!("Unknown channel in reply_routing.json: {}", channel_str);
             None
@@ -1428,6 +1429,7 @@ mod tests {
         assert_eq!(parse_channel("whatsapp"), Some(Channel::WhatsApp));
         assert_eq!(parse_channel("bluebubbles"), Some(Channel::BlueBubbles));
         assert_eq!(parse_channel("wechat"), Some(Channel::WeChat));
+        assert_eq!(parse_channel("zoom"), Some(Channel::Zoom));
     }
 
     #[test]
@@ -1435,6 +1437,8 @@ mod tests {
         assert_eq!(parse_channel("EMAIL"), Some(Channel::Email));
         assert_eq!(parse_channel("Slack"), Some(Channel::Slack));
         assert_eq!(parse_channel("DISCORD"), Some(Channel::Discord));
+        assert_eq!(parse_channel("ZOOM"), Some(Channel::Zoom));
+        assert_eq!(parse_channel("Zoom"), Some(Channel::Zoom));
     }
 
     #[test]
