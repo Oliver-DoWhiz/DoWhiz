@@ -646,8 +646,13 @@ fn dispatch_send_reply_task(task: &SendReplyTask) -> Result<(), SchedulerError> 
             execute_notion_send(task)?;
         }
         Channel::Zoom => {
-            // TODO: Implement Zoom chat reply
-            warn!("Zoom reply not yet implemented, skipping");
+            // Zoom has no direct reply API. Replies should use cross-channel routing
+            // via reply_routing.json. If we get here, no routing was specified.
+            warn!(
+                "Zoom reply cannot be delivered directly - no reply_routing.json was written. \
+                Reply at {} will not be sent.",
+                task.html_path.display()
+            );
         }
     }
     Ok(())
