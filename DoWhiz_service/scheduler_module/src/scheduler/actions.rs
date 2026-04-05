@@ -613,7 +613,7 @@ fn is_internal_sender(task: &RunTaskTask) -> bool {
             let allowlist = load_internal_sender_id_whitelist(task.channel);
             !allowlist.is_empty() && allowlist.contains(&sender)
         }
-        Channel::GoogleDocs | Channel::GoogleSheets | Channel::GoogleSlides | Channel::Notion => {
+        Channel::GoogleDocs | Channel::GoogleSheets | Channel::GoogleSlides | Channel::Notion | Channel::Zoom => {
             false
         }
     }
@@ -918,7 +918,8 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
         | Channel::Sms
         | Channel::Notion
         | Channel::WeChat
-        | Channel::Lark => ("reply_message.txt", "reply_attachments"),
+        | Channel::Lark
+        | Channel::Zoom => ("reply_message.txt", "reply_attachments"),
         Channel::Email | Channel::GoogleDocs | Channel::GoogleSheets | Channel::GoogleSlides => {
             ("reply_email_draft.html", "reply_email_attachments")
         }
@@ -988,7 +989,8 @@ pub(crate) fn schedule_auto_reply<E: TaskExecutor>(
             | Channel::Sms
             | Channel::Notion
             | Channel::WeChat
-            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::Lark
+            | Channel::Zoom => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1084,6 +1086,7 @@ fn format_channel_name(channel: &Channel) -> &'static str {
         Channel::GoogleSheets => "Google Sheets",
         Channel::GoogleSlides => "Google Slides",
         Channel::Notion => "Notion",
+        Channel::Zoom => "Zoom",
     }
 }
 
@@ -1674,7 +1677,8 @@ mod tests {
             | Channel::Sms
             | Channel::Notion
             | Channel::WeChat
-            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::Lark
+            | Channel::Zoom => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -1696,7 +1700,8 @@ mod tests {
             | Channel::Sms
             | Channel::Notion
             | Channel::WeChat
-            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::Lark
+            | Channel::Zoom => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -2136,7 +2141,8 @@ addresses = ["proto@dowhiz.com", "boiled-egg@dowhiz.com"]
             | Channel::WhatsApp
             | Channel::Sms
             | Channel::WeChat
-            | Channel::Lark => ("cross_channel_ack.txt", "reply_attachments"),
+            | Channel::Lark
+            | Channel::Zoom => ("cross_channel_ack.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets
@@ -2198,7 +2204,8 @@ addresses = ["proto@dowhiz.com", "boiled-egg@dowhiz.com"]
             | Channel::WhatsApp
             | Channel::Sms
             | Channel::WeChat
-            | Channel::Lark => ("reply_message.txt", "reply_attachments"),
+            | Channel::Lark
+            | Channel::Zoom => ("reply_message.txt", "reply_attachments"),
             Channel::Email
             | Channel::GoogleDocs
             | Channel::GoogleSheets

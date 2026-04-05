@@ -311,6 +311,11 @@ fn process_ingestion_envelope(
             let raw_payload = envelope.raw_payload_bytes();
             process_lark_event(config, user_store, index_store, account_store, &message, &raw_payload)
         }
+        Channel::Zoom => {
+            // TODO: Implement Zoom message processing
+            info!("Zoom message received, skipping for now: {:?}", envelope.payload.text_body);
+            Ok(())
+        }
     }
 }
 

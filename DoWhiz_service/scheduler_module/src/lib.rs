@@ -24,6 +24,7 @@ pub mod raw_payload_store;
 pub mod service_bus_queue;
 pub mod slack_store;
 pub mod storage_backend;
+pub mod zoom_rtms;
 pub(crate) mod thread_state;
 
 pub mod account_store;
