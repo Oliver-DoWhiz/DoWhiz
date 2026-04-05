@@ -129,6 +129,26 @@ The marker file `.notion_api_replied` is REQUIRED. Without it, the task retries 
 
 Keep your reply concise. Use the API only - no browser automation."#
             }
+            "zoom" => {
+                r#"2. After finishing the task (step one), you MUST route your reply to a linked channel since Zoom has no API for in-meeting replies.
+
+REQUIRED STEPS:
+1. Check the "User Context" section below for the user's linked channels
+2. Route to the FIRST available channel in this precedence order:
+   - Email (preferred): {"channel": "email", "identifier": "<email>"}
+   - Lark: {"channel": "lark", "identifier": "<open_id>"}
+   - Slack: {"channel": "slack", "identifier": "<user_id>"}
+   - WeChat: {"channel": "wechat", "identifier": "<user_id>"}
+   - Discord: {"channel": "discord", "identifier": "<user_id>"}
+3. Write reply_routing.json with the chosen channel
+4. Write your reply in the TARGET channel's format:
+   - email: reply_email_draft.html (HTML), attachments in reply_email_attachments/
+   - all others: reply_message.txt (plain text or channel-appropriate markdown)
+
+If no channels are linked, complete the task but note in your logs that the reply cannot be delivered.
+
+Do not pretend the job has been done without actually doing it."#
+            }
             _ => {
                 // Default to email (HTML)
                 "2. After finishing the task (step one), make sure you write a proper HTML email draft in reply_email_draft.html in the workspace root. If there are files to attach, put them in reply_email_attachments/ and reference them in the email draft. Do not pretend the job has been done without actually doing it, and do not write the email draft until the task is done. If you are not sure about the task, send another email to ask for clarification (and if any, attach information about why did you fail to get the task done, what is the exact error you encountered)."
@@ -1104,6 +1124,7 @@ mod tests {
             telegram_user_ids: vec!["12345678".to_string()],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec![],
         };
@@ -1329,6 +1350,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec![],
         };
@@ -1368,6 +1390,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec![user_uuid.to_string()],
         };
@@ -1412,6 +1435,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec![
                 email_uuid.to_string(),
@@ -1456,6 +1480,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec![], // Empty even though account exists
         };
@@ -1591,6 +1616,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec!["uuid-email-alice".to_string()],
         };
@@ -1633,6 +1659,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             // Each channel has its own filesystem user directory
             allowed_user_ids: vec![
@@ -1689,6 +1716,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             // In production, identifiers_to_user_identities deduplicates
             // So if email and slack both map to same user_id, only one entry
@@ -1731,6 +1759,7 @@ mod tests {
             telegram_user_ids: vec![],
             lark_user_ids: vec![],
             wechat_user_ids: vec![],
+            zoom_user_ids: vec![],
             github_usernames: vec![],
             allowed_user_ids: vec!["uuid-email-dave".to_string(), "uuid-slack-dave".to_string()],
         };
