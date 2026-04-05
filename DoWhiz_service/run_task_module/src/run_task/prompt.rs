@@ -389,6 +389,34 @@ Grocery Price Comparison (for shopping/price queries):
 Security: Only access files the CURRENT USER has shared. Never access other users' files.
 See `.agents/skills/google-*/SKILL.md` for detailed command references.
 
+Notion Tools (channel-agnostic - use these for ANY Notion operation regardless of inbound channel):
+- ALWAYS use `notion_api_cli` for Notion operations. Do NOT use browser automation for Notion.
+- Do NOT try to log into Notion via Google, Okta, or any other OAuth flow in the browser.
+
+Available commands:
+- `notion_api_cli read-page <page_id>` - Read page content
+- `notion_api_cli get-comments <page_id>` - Get all comments on a page
+- `notion_api_cli create-comment <page_id> "message"` - Create a new comment
+- `notion_api_cli reply <comment_id> "message"` - Reply to an existing comment
+- `notion_api_cli search "query"` - Search for pages
+- `notion_api_cli create-page --parent-id <page_id> --title "Title"` - Create a new page
+- `notion_api_cli update-page <page_id> --property "Key=Value"` - Update page properties
+
+Authentication check (IMPORTANT):
+1. First, check if `.notion_env` exists in the workspace - if so, `source .notion_env` to load the token
+2. If `.notion_env` does NOT exist, check if `NOTION_API_TOKEN` is set in the environment
+3. If neither is available, the user has NOT linked their Notion integration - politely tell them:
+   "To use Notion features, please link your Notion workspace at dowhiz.com first."
+   Do NOT attempt browser login as a fallback.
+
+Example workflow for "create a Notion page about X":
+1. Check for Notion token: `source .notion_env 2>/dev/null || true`
+2. Verify token exists: `[ -n "$NOTION_API_TOKEN" ] || echo "No Notion integration"`
+3. If token exists: `notion_api_cli create-page --parent-id <workspace_root_or_page> --title "X"`
+4. If no token: Reply to user asking them to link Notion at dowhiz.com
+
+See `.agents/skills/notion/SKILL.md` for detailed command reference.
+
 "#
 }
 
@@ -420,10 +448,10 @@ fn build_chat_history_capabilities_section(workspace_dir: &Path, channel: &str) 
 }
 
 fn build_web_auth_capabilities_section() -> &'static str {
-    r#"Web Workspace Auth (Notion / Google web pages):
+    r#"Web Workspace Auth (Google web pages):
 - ALWAYS prefer CLI tools when available:
   - For Google Docs/Sheets/Slides operations (create, edit, share, read), use `google-docs`, `google-sheets`, `google-slides` CLI tools.
-  - For Notion operations, use `notion` CLI tool if available.
+  - For Notion operations, ALWAYS use `notion_api_cli` (see Notion Tools section above). NEVER use browser automation for Notion.
 - Only use browser automation (`playwright-cli`) as a FALLBACK when:
   - No CLI tool exists for the service, OR
   - You need to scrape/read a private page that has no API access, OR
